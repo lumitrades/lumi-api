@@ -124,6 +124,20 @@ max_batch_timeout = 5
 max_retries = 3
 max_concurrency = 3   # D1 handles one write at a time; keeps upstream request rates polite
 
+# Scanner Kit contributor submissions (branch scanner-kit-v0, not deployed). Writes are batched so a burst of
+# submissions becomes a few D1 batches; contributions have their own daily row budget (contrib_writes:YYYY-MM-DD)
+# and never spend the catalog's `writes:` budget. Create first: wrangler queues create lumi-contrib-writes
+[[queues.producers]]
+binding = "CONTRIB_QUEUE"
+queue = "lumi-contrib-writes"
+
+[[queues.consumers]]
+queue = "lumi-contrib-writes"
+max_batch_size = 25
+max_batch_timeout = 10
+max_retries = 3
+max_concurrency = 1
+
 [env.testnet]
 name = "lumi-api-testnet"
 workers_dev = true

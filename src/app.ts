@@ -33,6 +33,7 @@ import { D1CatalogStore, MemoryCatalogStore, type CatalogStore } from "./trust/c
 import { createCatalog, buyCandidate, type Catalog, type CatalogJob, type QueueLike } from "./trust/catalog_service";
 import { D1EvidenceStore, MemoryEvidenceStore, type EvidenceStore } from "./trust/evidence";
 import { D1ReceiptStore, MemoryReceiptStore, type ReceiptStore } from "./trust/receipts";
+import { createContributors, D1ContributorStore, MemoryContributorStore, type ContributorStore, type Contributors, type ContribQueue } from "./trust/contributors";
 import { productSample, sampleEntry, SAMPLE_ARGS, SAMPLE_LABEL } from "./samples";
 import { applyRate, createXrpPricer, type XrpPricer } from "./pricing";
 import { D1TrafficStore, MemoryTrafficStore, TRAFFIC_RETENTION_DAYS, TrafficBuffer, trafficRow, trafficSummary, type TrafficStore } from "./traffic";
@@ -75,6 +76,10 @@ export interface AppOptions {
   commerceStore?: CommerceStore;
   /** Idempotent-retry cache override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   idempotencyStore?: IdempotencyStore;
+  /** Scanner-kit contributor store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
+  contributorStore?: ContributorStore;
+  /** Contributions write queue override (tests). Default: env.CONTRIB_QUEUE; absent = writes inline. */
+  contribQueue?: ContribQueue | null;
 }
 
 /** Lumi's own Base wallets (receiving + test-buyer). Addresses only. */
@@ -116,6 +121,10 @@ export interface App {
   logTraffic(request: Request, response: Response, ctx?: WaitUntil): void;
   /** Write this isolate's buffered traffic counts now. */
   flushTraffic(): Promise<void>;
+  /** Scanner-kit contributions (keys, submissions, credits). */
+  contributors: Contributors;
+  /** Queue consumer for lumi-contrib-writes: batched contribution writes. */
+  contribQueue(bodies: unknown[]): Promise<number>;
   /** Free public "Tested by Lumi" badge + result page (read-only, no D1 writes). Null for other paths. */
   badge(request: Request): Promise<Response | null>;
 }
@@ -287,6 +296,29 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const m = (request.headers.get("Authorization") ?? "").match(/^Bearer\s+(\S+)$/i);
       return isOwnerKey(m?.[1], env.OWNER_MCP_KEY);
     },
+  });
+  const contributors = createContributors({
+    store: opts.contributorStore ?? (env.TRUST_DB ? new D1ContributorStore(env.TRUST_DB) : new MemoryContributorStore()),
+    fetch: doFetch,
+    now,
+    ownerKey: env.OWNER_MCP_KEY,
+    // Contributed receipts are mainnet-only (xrpl:0), whatever network this deployment sells on.
+    xrplRpc: split(env.XRPL_RPC_URLS).length && config.network === "xrpl:0" ? split(env.XRPL_RPC_URLS) : DEFAULT_XRPL_RPC["xrpl:0"],
+    baseRpc,
+    stellarHorizon,
+    catalogStore,
+    receipts: receiptStore,
+    self: {
+      domains: ["lumitrades.io", "api.lumitrades.io"],
+      pay_to: [config.payTo, ...xrplBuyers, ...(config.evm ? [config.evm.payTo] : []), ...(config.stellar ? [config.stellar.payTo] : []), ...evmBuyers, ...stellarBuyers],
+    },
+    ignoreFunders: split(env.CONTRIB_FUNDER_IGNORE),
+    queue: opts.contribQueue === null ? undefined : opts.contribQueue ?? (env.CONTRIB_QUEUE ? { send: (b: unknown) => env.CONTRIB_QUEUE!.send(b) } : undefined),
+    log: (e) => deps.log?.(e),
+    credits: env.CONTRIB_CREDITS,
+    caps: env.CONTRIB_CAPS,
+    minKit: env.CONTRIB_KIT_MIN_VERSION,
+    retiredKits: env.CONTRIB_KIT_RETIRED,
   });
   const trust = createTrust({
     store: trustStore,
@@ -649,6 +681,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const r = await trust.handle(request, path, base);
       if (r) return r;
     }
+    // Scanner kit v0 (DRAFT, branch scanner-kit-v0): contributor-signed receipts + owner key management.
+    if (path.startsWith("/v1/contrib/") || path === "/v1/owner/contributors" || path.startsWith("/v1/owner/contributors/")) {
+      const r = await contributors.handle(request, path);
+      if (r) return r;
+    }
     if (request.method !== "GET" && request.method !== "HEAD") {
       return json(405, { error: "method_not_allowed" }, { Allow: "GET, OPTIONS" });
     }
@@ -984,6 +1021,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     config,
     pricer,
     trust,
+    contributors,
+    contribQueue: (bodies: unknown[]) => contributors.consume(bodies),
     sales,
     catalog,
     commerce,

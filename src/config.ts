@@ -113,6 +113,16 @@ export interface Env {
   TRUST_BUYER_STELLAR?: string;
   /** Cloudflare Queue producer for catalog ingest / quote-check jobs (Workers Free: fan-out keeps each invocation small). */
   TRUST_QUEUE?: { sendBatch(messages: { body: unknown }[]): Promise<unknown> };
+  /** Scanner-kit contributions write queue (lumi-contrib-writes). Absent = writes inline. */
+  CONTRIB_QUEUE?: { send(body: unknown): Promise<unknown> };
+  /** JSON overrides for contributor credit weights / caps (see src/trust/contributors.ts DEFAULT_CREDITS / DEFAULT_CAPS). */
+  CONTRIB_CREDITS?: string;
+  CONTRIB_CAPS?: string;
+  /** Oldest accepted scanner-kit version (semver), and comma-separated retired versions. */
+  CONTRIB_KIT_MIN_VERSION?: string;
+  CONTRIB_KIT_RETIRED?: string;
+  /** Comma-separated funder addresses ignored when grouping contributor wallets by funding source (exchange hot wallets). */
+  CONTRIB_FUNDER_IGNORE?: string;
   /** Sales alert (optional, off unless set): incoming-webhook URL (Slack/Discord/generic JSON POST). */
   SALES_WEBHOOK_URL?: string;
   /** Sales alert by email (optional): recipient; needs the SALES_EMAIL send_email binding and SALES_ALERT_FROM. */
