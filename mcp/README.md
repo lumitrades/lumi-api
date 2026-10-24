@@ -97,9 +97,11 @@ Defaults (pending owner approval): **fail-open** (a timeout or an unverifiable a
 **2.5 s timeout**. Set `failMode: "closed"` to block instead. Paying Lumi never changes any seller's score, tier, ranking or badge.
 The adapters come from `lumi-scanner-kit` (Apache-2.0); scoring and verification stay on Lumi's servers.
 
-What the kit shares: **tier 1** (on by default, `LUMI_CHECK_TELEMETRY=off` or `lumi-scan telemetry off` to stop) is only an
-anonymous delivery outcome after a paid call: seller host, delivered yes/no, a coarse status class and a random one-time token.
-No wallet, amount, tx hash, query string or stable ID. **Tier 2** (off by default) sends full signed receipts and is the only thing
+What the kit shares: **nothing until the user says yes.** The `lumi-scan` CLI asks once, after the first check ("Share your
+results to help improve Lumi's public trust list? [Y/n]"). The MCP server cannot ask, so here sharing stays off and one hint is
+written to stderr; turn it on with `LUMI_CHECK_TELEMETRY=on` or `lumi-scan telemetry on`. **Tier 1** is only an anonymous delivery
+outcome after a paid call: seller host, delivered yes/no, a coarse status class and a random one-time token. No wallet, amount,
+tx hash, query string or stable ID. Sharing never changes any score. **Tier 2** (off by default) sends full signed receipts and is the only thing
 that earns credits. See the kit README.
 
 ## Configuration (environment)
@@ -116,8 +118,8 @@ that earns credits. See the kit README.
 | `LUMI_API_URL` | `https://api.lumitrades.io` | API base URL |
 | `LUMI_EXPECTED_PAY_TO` | Lumi's wallets on the official API: `rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM` (XRPL mainnet), `0x5E617bac19912e6d212CB303ae84655E9E203532` (Base) | Refuse to pay any other address |
 | `LUMI_CHECK_API` | `LUMI_API_URL` | Base URL for `lumi_check` |
-| `LUMI_KIT_HOME` / `LUMI_KIT_CONFIG` | `~/.lumi-scanner-kit/config.json` | Kit config (telemetry and sharing switches) |
-| `LUMI_CHECK_TELEMETRY` | on | `off` disables tier 1 outcome reports |
+| `LUMI_KIT_HOME` / `LUMI_KIT_CONFIG` | `~/.lumi-scanner-kit/config.json` | Kit config (saved sharing answer, telemetry and sharing switches) |
+| `LUMI_CHECK_TELEMETRY` | off (until the user says yes) | `on` enables tier 1 outcome reports, `off` disables them; overrides the saved answer |
 | `LUMI_SHARE_RECEIPTS` | off | `1` enables tier 2 receipt submission |
 | `LUMI_CONTRIB_KEY_FILE` | – | Contributor key for tier 2 submissions (`lumi-scan keygen`) |
 | `XRPL_WS_URL` | `wss://xrplcluster.com` / `wss://testnet.xrpl-labs.com` | Ledger connection used to autofill and sign |

@@ -74,7 +74,7 @@ export function createLumiCheck({ api = DEFAULT_API, publicKeys, timeoutMs, fail
   return {
     check,
     config: cfg,
-    /** Tier 1 (ON by default, one off switch): seller host + delivered yes/no + status class only. */
+    /** Tier 1 (OFF until the user says yes): seller host + delivered yes/no + status class only. */
     reportOutcome: (o) => reportOutcome(o, { api: base, fetchImpl, config: cfg }),
   };
 }

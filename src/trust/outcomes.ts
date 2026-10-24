@@ -1,5 +1,5 @@
 /**
- * Lumi Check tier-1 delivery outcomes (ON by default in the kit, one off switch): anonymous, aggregate-only.
+ * Lumi Check tier-1 delivery outcomes (OFF in the kit until the user says yes to a one-time question): anonymous, aggregate-only.
  *
  * Accepted body (anything else is rejected, so a client cannot leak more than this by accident):
  *   { v: 1, subject: "<seller host>" | "vendor:<id>", delivered: boolean, status_class?: "2xx"|"3xx"|"4xx"|"5xx"|"timeout"|"network", token?: "<random, per event>" }
@@ -12,7 +12,7 @@ import type { D1Like } from "../config";
 
 export const OUTCOME_FIELDS = ["v", "subject", "delivered", "status_class", "token"] as const;
 export const STATUS_CLASSES = ["2xx", "3xx", "4xx", "5xx", "timeout", "network"] as const;
-/** Raw tier-1 rows are deleted this many days after their UTC day, and only once that day is rolled up (approved by Bobby). */
+/** Raw tier-1 rows are deleted this many days after their UTC day, and only once that day is rolled up (approved by the owner). */
 export const OUTCOME_RETENTION_DAYS = 90;
 /** Daily summaries (check_outcome_daily) are kept long-term: never purged. */
 export const OUTCOME_SUMMARY_RETENTION = "forever" as const;

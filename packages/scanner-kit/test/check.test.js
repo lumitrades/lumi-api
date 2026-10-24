@@ -90,10 +90,13 @@ test("MCP onPaymentRequired adapter: checks by payTo only for mcp:// tools, retu
 // ---- Tier 1: anonymous delivery outcomes ----
 const FORBIDDEN = ["payTo", "pay_to", "payer", "wallet", "address", "amount", "asset", "tx_hash", "tx", "url", "path", "query", "payload", "body", "client_id", "install_id", "key_id", "network"];
 
-test("tier 1 is ON by default and sends exactly the allowed keys, never a forbidden field", async () => {
+test("tier 1 is OFF until the user says yes; once on it sends exactly the allowed keys, never a forbidden field", async () => {
   const dir = mkdtempSync(join(tmpdir(), "lk-"));
-  const cfg = kit.loadConfig(join(dir, "none.json"), {});
-  assert.equal(cfg.telemetry, true);
+  const def = kit.loadConfig(join(dir, "none.json"), {});
+  assert.equal(def.telemetry, false); assert.equal(def.share_answered, false);
+  const p = join(dir, "yes.json"); kit.recordShareChoice(true, { path: p });
+  const cfg = kit.loadConfig(p, {});
+  assert.equal(cfg.telemetry, true); assert.equal(cfg.share_answered, true);
   const f = fakeFetch(() => new Response("{}", { status: 202 }));
   const r = await kit.reportOutcome({ target: "https://user:pw@api.seller.example:8443/v1/data?q=secret&wallet=rABC#x", delivered: false, status: 503, payTo: "0xabc", amount: "1", tx_hash: "A".repeat(64) }, { fetchImpl: f, config: cfg });
   assert.equal(r.sent, true);
@@ -168,7 +171,7 @@ test("receipts carry origin + path only", async () => {
 });
 
 test("disclosure names both tiers and all three off switches", () => {
-  for (const s of ["Tier 1 (ON by default)", "Tier 2 (OFF by default", "lumi-scan telemetry off", "LUMI_CHECK_TELEMETRY=off", "\"telemetry\": false", "No cash"]) assert.ok(kit.DISCLOSURE.includes(s), s);
+  for (const s of ["nothing is sent until you say yes", "Tier 1 (OFF until you say yes)", "Tier 2 (OFF by default", "lumi-scan telemetry on|off", "LUMI_CHECK_TELEMETRY=on|off", "\"telemetry\": true|false", "never changes any score", "No cash"]) assert.ok(kit.DISCLOSURE.includes(s), s);
 });
 
 test("account delete: the client refuses without the matching key id and sends a signed DELETE when confirmed", async () => {

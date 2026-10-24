@@ -102,3 +102,28 @@ test("lumiCheckHooks re-exports the x402 and MCP adapters", async () => {
   assert.equal(typeof h.x402Hook, "function"); assert.equal(typeof h.mcpHook, "function");
   assert.equal(await h.x402Hook({ paymentRequired: { resource: { url: "https://a.example/x" } }, selectedRequirements: { payTo: "0x1111111111111111111111111111111111111111" } }), undefined); // fail-open
 });
+
+test("lumi_check in MCP server mode never asks: sharing stays off, one stderr hint per process, result unchanged", async () => {
+  const { mkdtempSync, existsSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { registerContribTools } = await import("../src/contrib.js");
+  const { _resetHintForTests } = await import("../../packages/scanner-kit/src/first_run.js");
+  _resetHintForTests();
+  const cfg = join(mkdtempSync(join(tmpdir(), "lk-mcp-")), "config.json");
+  const handlers = {};
+  const server = { registerTool: (name, _meta, h) => { handlers[name] = h; } };
+  const err = { text: "", write(s) { this.text += s; } };
+  const calls = [];
+  registerContribTools(server, { apiUrl: "https://api.test" }, { env: { LUMI_KIT_CONFIG: cfg }, fetchImpl: async (u) => { calls.push(String(u)); throw new TypeError("down"); }, stderr: err });
+  for (let i = 0; i < 2; i++) {
+    const j = JSON.parse((await handlers.lumi_check({ url: "https://x.example/a" })).content[0].text);
+    assert.equal(j.decision, "warn");
+    assert.ok(!("sharing" in j));
+  }
+  assert.equal(err.text.split("\n").filter(Boolean).length, 1);
+  assert.match(err.text, /LUMI_CHECK_TELEMETRY=on/);
+  assert.ok(calls.every((u) => !u.includes("/v1/check/outcome")));
+  assert.equal(existsSync(cfg), false);
+});
+

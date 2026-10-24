@@ -29,7 +29,7 @@ async function secretFor(kit, settings, network, env) {
 /** Kit config location: LUMI_KIT_CONFIG, else <LUMI_KIT_HOME>/config.json, else ~/.lumi-scanner-kit/config.json. */
 const configPathOf = (env) => env.LUMI_KIT_CONFIG || (env.LUMI_KIT_HOME ? join(env.LUMI_KIT_HOME, "config.json") : undefined);
 
-export function registerContribTools(server, settings, { env = process.env, fetchImpl, kitLoader = loadKit } = {}) {
+export function registerContribTools(server, settings, { env = process.env, fetchImpl, kitLoader = loadKit, stderr } = {}) {
   server.registerTool(
     "lumi_check",
     {
@@ -49,6 +49,9 @@ export function registerContribTools(server, settings, { env = process.env, fetc
       const kit = await kitLoader();
       const lumi = kit.createLumiCheck({ api: env.LUMI_CHECK_API || settings.apiUrl, fetchImpl, configPath: configPathOf(env), env });
       const { receipt, ...r } = await lumi.check({ url, payTo: pay_to, amountUsd: amount_usd, network });
+      // An MCP server cannot ask the one-time sharing question, so sharing stays off: one hint on stderr per process
+      // (stdout is the MCP channel), only while unanswered. Nothing is shared and the tool result is unchanged.
+      kit.hintOnce?.(lumi.config, { stderr });
       return text({ ...r, receipt_id: receipt?.id ?? null, signed_by: receipt?.signer?.key_id ?? null });
     },
   );
