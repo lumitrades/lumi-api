@@ -170,3 +170,32 @@ test("receipts carry origin + path only", async () => {
 test("disclosure names both tiers and all three off switches", () => {
   for (const s of ["Tier 1 (ON by default)", "Tier 2 (OFF by default", "lumi-scan telemetry off", "LUMI_CHECK_TELEMETRY=off", "\"telemetry\": false", "No cash"]) assert.ok(kit.DISCLOSURE.includes(s), s);
 });
+
+test("account delete: the client refuses without the matching key id and sends a signed DELETE when confirmed", async () => {
+  const f = fakeFetch(() => ({ deleted: true, status: "deleted" }));
+  const priv = hex(ed25519.utils.randomPrivateKey());
+  const c = kit.createLumiClient({ keyId: "lck_0123456789abcdef", privateKey: priv, fetchImpl: f, env: {} });
+  assert.equal((await c.deleteAccount()).deleted, false);
+  assert.equal((await c.deleteAccount("lck_ffffffffffffffff")).error, "confirm_key_id_required");
+  assert.equal(f.calls.length, 0);
+  const r = await c.deleteAccount("lck_0123456789abcdef");
+  assert.equal(r.deleted, true);
+  assert.equal(f.calls.length, 1);
+  assert.ok(f.calls[0].url.endsWith("/v1/contrib/me"));
+  assert.equal(f.calls[0].init.method, "DELETE");
+  assert.deepEqual(JSON.parse(f.calls[0].init.body), { confirm: "lck_0123456789abcdef" });
+  assert.ok(f.calls[0].init.headers["Lumi-Signature"]);
+  assert.match(kit.ACCOUNT_DELETE_NOTICE, /cannot be undone/);
+});
+
+test("lumi-scan account delete: non-interactive needs --confirm; a wrong key id cancels without sending", async () => {
+  const { execFileSync } = await import("node:child_process");
+  const dir = mkdtempSync(join(tmpdir(), "lk-"));
+  const keyFile = join(dir, "key.json");
+  writeFileSync(keyFile, JSON.stringify({ key_id: "lck_0123456789abcdef", private_key: hex(ed25519.utils.randomPrivateKey()) }));
+  const run = (args) => { try { execFileSync(process.execPath, ["bin/lumi-scan.js", "account", "delete", "--key", keyFile, ...args], { env: { ...process.env, LUMI_API: "http://127.0.0.1:9", LUMI_KIT_CONFIG: join(dir, "cfg.json") }, stdio: ["ignore", "pipe", "pipe"] }); return { code: 0 }; } catch (e) { return { code: e.status, err: String(e.stderr) }; } };
+  const a = run([]);
+  assert.equal(a.code, 2); assert.match(a.err, /Nothing was sent/);
+  const b = run(["--confirm", "lck_ffffffffffffffff"]);
+  assert.equal(b.code, 1); assert.match(b.err, /Cancelled/);
+});

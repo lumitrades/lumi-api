@@ -54,8 +54,18 @@ name or badges. Those remain Lumi's, and nothing here or in the license grants r
   per UTC day with delivered, failed and status-class counts (no wallet, amount, tx hash, URL query, payload or identifier
   of you), are kept long-term.
 - Your contributor account (key id, public key, registered wallets) is kept while it is active, meaning you submitted a
-  receipt or made a signed check in the last 12 months. It is not deleted at 90 days. You can ask Lumi to revoke it
-  at any time.
+  receipt or made a signed check in the last 12 months. It is not deleted at 90 days.
+- **Deleting your account.** You can delete it at any time yourself (`lumi-scan account delete`, which calls the signed
+  `DELETE /v1/contrib/me`) or by emailing hello@lumitrades.io. Deletion cannot be undone.
+  Deleted at once: your key (it can never sign again), label, public key, registered wallets and the funding wallet
+  recorded for each, own domains, demand opt-in, last-activity date, your free check credits (balance, earned batches
+  and spends), your leaderboard entry, and every tier-2 receipt you shared (including the stored copy), except receipts
+  Lumi has already cited in a published, dated test result.
+  Kept, with no link to you: those cited receipts, with your wallet signature, payer address, kit details and key id
+  removed (the transaction hash, seller and delivery result stay because the published result cites them; they still
+  fall under the 90-day raw retention), and the anonymous per-seller daily summaries and tier-1 counters, which never
+  had a link to you. What remains of the key is a tombstone (the random key id, status "deleted" and dates) so it cannot
+  be reused. Payments on a public blockchain cannot be deleted by anyone.
 
 ## 6. Demand data
 
