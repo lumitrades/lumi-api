@@ -34,7 +34,8 @@ name or badges. Those remain Lumi's, and nothing here or in the license grants r
 - Each **verified** contributed receipt earns **free Lumi Check credits**, which you can spend on Lumi checks and
   detailed reports. Only tier-2 signed receipts earn credits; tier-1 anonymous outcomes earn nothing. One receipt per
   unique seller per UTC day earns; self-tests, duplicates, unconfirmed negatives and disputed findings earn nothing.
-  The amount per receipt is set by Lumi and may change. Credits expire with the 90-day retention window.
+  The amount per receipt is set by Lumi and may change. Unused credits expire 90 days after the day they were earned;
+  spends use your oldest credits first.
 - **Credits are not cash**, not money, not a security, not transferable and cannot be redeemed for money.
 - Contributors with a verified receipt also get the contributor badge, a place on the public (pseudonymous)
   leaderboard, early access and higher rate limits.
@@ -48,7 +49,13 @@ name or badges. Those remain Lumi's, and nothing here or in the license grants r
   id), delivered yes/no, and a coarse status class. No wallet address, amount, tx hash, URL path or query, payload, or
   stable identifier. Turn it off with `lumi-scan telemetry off`, `LUMI_CHECK_TELEMETRY=off`, or `"telemetry": false`.
 - **Tier 2 (off by default, opt-in):** full signed receipts. Nothing is sent unless you turn it on (`lumi-scan sharing on`).
-- Stored contributor data and outcome counters are kept for 90 days, then deleted.
+- **Retention.** Raw data (tier-1 outcome counters and tier-2 submissions, including the stored receipt copy) is kept for
+  90 days, then deleted. A raw tier-1 day is deleted only after it has been summarised. The summaries, one row per seller
+  per UTC day with delivered, failed and status-class counts (no wallet, amount, tx hash, URL query, payload or identifier
+  of you), are kept long-term.
+- Your contributor account (key id, public key, registered wallets) is kept while it is active, meaning you submitted a
+  receipt or made a signed check in the last 12 months. It is not deleted at 90 days. You can ask Lumi to revoke it
+  at any time.
 
 ## 6. Demand data
 

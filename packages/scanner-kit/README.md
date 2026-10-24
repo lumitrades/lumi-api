@@ -57,7 +57,10 @@ You are shown this at first run and in `lumi-scan setup`.
   `~/.lumi-scanner-kit/config.json`.
 - Tier 2 on/off: `lumi-scan sharing on|off`, `"share_receipts": true|false`, or env `LUMI_SHARE_RECEIPTS=1|0`.
 - Env always wins over the config file. `lumi-scan telemetry status` / `sharing status` show the effective setting.
-- Lumi keeps contributor data and outcome counters for 90 days, then deletes them. Tier-1 outcomes are never a
+- Retention: raw data (tier-1 outcome counters, tier-2 submissions) is kept for 90 days, then deleted, and a raw day is
+  deleted only after it has been rolled up. The daily per-seller summaries (delivered, failed, status-class counts; no
+  wallet, amount, tx, query or client id) are kept long-term. Contributor accounts are kept while active (a receipt or
+  signed check in the last 12 months). Unused credits expire 90 days after they were earned. Tier-1 outcomes are never a
   scoring input.
 
 ## How contributing works (tier 2, opt-in)

@@ -102,6 +102,8 @@ export interface ContributorKey {
   key_id: string; label: string; public_key: string; wallets: string[]; own_domains: string[];
   daily_cap: number | null; share_demand: boolean; status: "active" | "revoked"; forfeited: boolean;
   created_at: number; revoked_at: number | null; revoke_reason: string | null;
+  /** UTC day of the last accepted receipt or signed check (updated at most once per key per day). Accounts are kept while active. */
+  last_active_day?: string | null;
 }
 export interface WalletRow { address: string; key_id: string; funder: string | null; funded_at: number | null; source: string }
 export interface Submission {
@@ -112,12 +114,15 @@ export interface Submission {
   credit_uusd: number; credit_note: string | null; dispute: string | null; metrics: string | null; receipt: string;
 }
 /** One redemption of free Lumi Check credits (the earn side is derived from verified submissions, so disputes reverse it). */
-export interface CreditSpend { id: string; key_id: string; ts: number; day: string; product: string; cost: number; ref: string | null }
+export interface CreditSpend { id: string; key_id: string; ts: number; day: string; product: string; cost: number; ref: string | null; alloc?: CreditAlloc[] | null }
+/** Which earned lot (seller:day) a spend consumed, oldest first, so expiry is exact: unused credits expire 90 days after they were earned. */
+export interface CreditAlloc { lot: string; n: number }
 export type Finding = "counted" | "unconfirmed" | "confirmed" | "held" | "disputed" | "contradicted";
 export interface CapCounts { key_day: number; key_ep_day: number; ep_day_sources: number; source_ep_day: number; key_ep_recent: number; month_credit: number; dup: number }
 export type WriteOp =
   | { op: "insert"; row: Submission }
-  | { op: "finding"; tx_hash: string; finding: Finding; dispute?: string | null };
+  | { op: "finding"; tx_hash: string; finding: Finding; dispute?: string | null }
+  | { op: "touch"; key_id: string; day: string };
 
 export interface ContributorStore {
   getKey(id: string): Promise<ContributorKey | null>;
@@ -126,6 +131,8 @@ export interface ContributorStore {
   issue(k: ContributorKey, wallets: WalletRow[]): Promise<void>;
   revoke(id: string, at: number, reason: string, forfeit: boolean): Promise<boolean>;
   setShareDemand(id: string, v: boolean): Promise<void>;
+  /** Record activity (no-op if already recorded for that day or later). */
+  touch(id: string, day: string): Promise<void>;
   counts(q: { key_id: string; endpoint_key: string; source: string; day: string; since_recent: string; since_month: string; tx_hash: string }): Promise<CapCounts>;
   /** Apply queued writes in ONE batch; returns D1 rows written (for the contributions budget). */
   apply(ops: WriteOp[], budgetKey: string): Promise<number>;
@@ -151,7 +158,7 @@ export interface ContributorStore {
 const parseKey = (r: any): ContributorKey => ({
   key_id: r.key_id, label: r.label, public_key: r.public_key, wallets: safeArr(r.wallets), own_domains: safeArr(r.own_domains),
   daily_cap: r.daily_cap ?? null, share_demand: !!r.share_demand, status: r.status, forfeited: !!r.forfeited,
-  created_at: Number(r.created_at), revoked_at: r.revoked_at ?? null, revoke_reason: r.revoke_reason ?? null,
+  created_at: Number(r.created_at), revoked_at: r.revoked_at ?? null, revoke_reason: r.revoke_reason ?? null, last_active_day: r.last_active_day ?? null,
 });
 const parseSub = (r: any): Submission => ({ ...r, new_wallet: !!r.new_wallet, wanted: !!r.wanted, demand_opt_in: !!r.demand_opt_in });
 function safeArr(s: unknown): string[] { try { const a = JSON.parse(String(s ?? "[]")); return Array.isArray(a) ? a.map(String) : []; } catch { return []; } }
@@ -171,6 +178,7 @@ export class MemoryContributorStore implements ContributorStore {
     Object.assign(k, { status: "revoked", revoked_at: at, revoke_reason: reason, forfeited: k.forfeited || forfeit }); this.writes++; return true;
   }
   async setShareDemand(id: string, v: boolean) { const k = this.keys.get(id); if (k) k.share_demand = v; this.writes++; }
+  async touch(id: string, day: string) { const k = this.keys.get(id); if (k && (!k.last_active_day || k.last_active_day < day)) { k.last_active_day = day; this.writes++; } }
   async counts(q: Parameters<ContributorStore["counts"]>[0]): Promise<CapCounts> {
     const s = [...this.subs.values()];
     const epDay = s.filter((x) => x.endpoint_key === q.endpoint_key && x.day === q.day);
@@ -188,6 +196,7 @@ export class MemoryContributorStore implements ContributorStore {
     let rows = 0;
     for (const o of ops) {
       if (o.op === "insert") { if (!this.subs.has(o.row.tx_hash)) { this.subs.set(o.row.tx_hash, { ...o.row }); rows += ROWS_PER_SUBMISSION; } }
+      else if (o.op === "touch") { const k = this.keys.get(o.key_id); if (k && (!k.last_active_day || k.last_active_day < o.day)) { k.last_active_day = o.day; rows++; } }
       else { const s = this.subs.get(o.tx_hash); if (s) { s.finding = o.finding; if (o.dispute !== undefined) s.dispute = o.dispute; rows++; } }
     }
     if (rows) { this.meta.set(budgetKey, String(Number(this.meta.get(budgetKey) ?? "0") + rows)); rows++; }
@@ -217,11 +226,12 @@ export class MemoryContributorStore implements ContributorStore {
   }
   spends = new Map<string, CreditSpend>();
   async verifiedSince(id: string, d: string) { return [...this.subs.values()].filter((s) => s.key_id === id && s.day >= d).map(({ domain, pay_to, day, finding, dispute }) => ({ domain, pay_to, day, finding, dispute })); }
-  async addSpend(r: CreditSpend) { this.spends.set(r.id, { ...r }); this.writes++; }
+  async addSpend(r: CreditSpend) { this.spends.set(r.id, { ...r, alloc: r.alloc ? r.alloc.map((a) => ({ ...a })) : null }); this.writes++; }
   async deleteSpend(id: string) { this.spends.delete(id); this.writes++; }
-  async spendsSince(id: string, d: string) { return [...this.spends.values()].filter((s) => s.key_id === id && s.day >= d).sort((a, b) => b.ts - a.ts).map((x) => ({ ...x })); }
+  async spendsSince(id: string, d: string) { return [...this.spends.values()].filter((s) => s.key_id === id && s.day >= d).sort((a, b) => b.ts - a.ts).map((x) => ({ ...x, alloc: x.alloc ? x.alloc.map((a) => ({ ...a })) : null })); }
 }
 
+const TOUCH_SQL = "UPDATE contributor_keys SET last_active_day = ?2 WHERE key_id = ?1 AND (last_active_day IS NULL OR last_active_day < ?2)";
 const SUB_COLS = "tx_hash, key_id, day, created_at, mode, kit_version, endpoint, endpoint_key, domain, network, asset, amount, pay_to, payer, source, new_wallet, receipt_hash, http_status, outcome, finding, wanted, demand_opt_in, ledger_ts, credit_uusd, credit_note, dispute, metrics, receipt";
 
 export class D1ContributorStore implements ContributorStore {
@@ -249,6 +259,7 @@ export class D1ContributorStore implements ContributorStore {
     return (r?.meta?.changes ?? 1) > 0;
   }
   async setShareDemand(id: string, v: boolean) { await this.db.prepare("UPDATE contributor_keys SET share_demand = ?2 WHERE key_id = ?1").bind(id, v ? 1 : 0).run(); }
+  async touch(id: string, day: string) { await this.db.prepare(TOUCH_SQL).bind(id, day).run(); }
   async counts(q: Parameters<ContributorStore["counts"]>[0]): Promise<CapCounts> {
     // Every sub-select is served by (key_id, day), (endpoint_key, day) or the primary key: index reads only.
     const r = await this.db.prepare(
@@ -264,7 +275,7 @@ export class D1ContributorStore implements ContributorStore {
     return { key_day: 0, key_ep_day: 0, ep_day_sources: 0, source_ep_day: 0, key_ep_recent: 0, month_credit: 0, dup: 0, ...(r ?? {}) };
   }
   async apply(ops: WriteOp[], budgetKey: string) {
-    const st = ops.map((o) => o.op === "insert"
+    const st = ops.map((o) => o.op === "touch" ? this.db.prepare(TOUCH_SQL).bind(o.key_id, o.day) : o.op === "insert"
       ? this.db.prepare(`INSERT OR IGNORE INTO contributor_submissions (${SUB_COLS}) VALUES (${SUB_COLS.split(",").map((_, i) => `?${i + 1}`).join(",")})`).bind(
         o.row.tx_hash, o.row.key_id, o.row.day, o.row.created_at, o.row.mode, o.row.kit_version, o.row.endpoint, o.row.endpoint_key, o.row.domain, o.row.network,
         o.row.asset, o.row.amount, o.row.pay_to, o.row.payer, o.row.source, o.row.new_wallet ? 1 : 0, o.row.receipt_hash, o.row.http_status, o.row.outcome,
@@ -311,11 +322,12 @@ export class D1ContributorStore implements ContributorStore {
     return ((await this.db.prepare("SELECT domain, pay_to, day, finding, dispute FROM contributor_submissions WHERE key_id = ?1 AND day >= ?2").bind(id, d).all<any>()).results ?? []);
   }
   async addSpend(r: CreditSpend) {
-    await this.db.prepare("INSERT INTO contributor_credit_spends (id, key_id, ts, day, product, cost, ref) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)").bind(r.id, r.key_id, r.ts, r.day, r.product, r.cost, r.ref).run();
+    await this.db.prepare("INSERT INTO contributor_credit_spends (id, key_id, ts, day, product, cost, ref, alloc) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)").bind(r.id, r.key_id, r.ts, r.day, r.product, r.cost, r.ref, r.alloc ? JSON.stringify(r.alloc) : null).run();
   }
   async deleteSpend(id: string) { await this.db.prepare("DELETE FROM contributor_credit_spends WHERE id = ?1").bind(id).run(); }
   async spendsSince(id: string, d: string) {
-    return ((await this.db.prepare("SELECT id, key_id, ts, day, product, cost, ref FROM contributor_credit_spends WHERE key_id = ?1 AND day >= ?2 ORDER BY ts DESC").bind(id, d).all<any>()).results ?? []).map((r: any) => ({ ...r, ts: Number(r.ts), cost: Number(r.cost) }));
+    return ((await this.db.prepare("SELECT id, key_id, ts, day, product, cost, ref, alloc FROM contributor_credit_spends WHERE key_id = ?1 AND day >= ?2 ORDER BY ts DESC").bind(id, d).all<any>()).results ?? [])
+      .map((r: any) => ({ ...r, ts: Number(r.ts), cost: Number(r.cost), alloc: r.alloc ? (JSON.parse(r.alloc) as CreditAlloc[]) : null }));
   }
 }
 
@@ -426,13 +438,23 @@ export interface ContributorDeps {
 
 export type CreditProduct = "trust_check" | "vendor_report";
 
-/** Lumi Check v0: contributed submissions (incl. the stored receipt copy) are deleted after this many days. DRAFT, needs Bobby's approval. */
+/** Lumi Check v0: raw contributed submissions (incl. the stored receipt copy) and credit spends are deleted after this many days (approved by Bobby). Accounts are not: see CONTRIB_ACTIVE_WINDOW_DAYS. */
 export const CONTRIB_RETENTION_DAYS = 90;
+/** Unused free Lumi Check credits expire this many days after the UTC day they were earned (approved by Bobby). Spends use the oldest credits first. */
+export const CHECK_CREDIT_EXPIRY_DAYS = 90;
+/**
+ * Contributor accounts (keys, wallets) are NOT purged at 90 days: they are kept while active. Active = not revoked and a
+ * verified-or-pending receipt accepted, or a signed /v1/check made, within the last CONTRIB_ACTIVE_WINDOW_DAYS (a new key
+ * counts from its creation). PLACEHOLDER definition, flagged for Bobby. Inactive handling is a placeholder that only
+ * lists keys (GET /v1/owner/contributors/inactive); it deletes, revokes or notifies nothing.
+ */
+export const CONTRIB_ACTIVE_WINDOW_DAYS = 365;
 /**
  * Free Lumi Check credits (launch rewards, NO cash). Each verified receipt earns CHECK_CREDITS_PER_RECEIPT, at most ONE
  * earning per (contributor, seller, UTC day): extra receipts on the same seller that day, duplicates and rejected
  * (self-dealt, unverifiable) receipts earn nothing. Only findings counted/confirmed without a dispute earn; a later dispute
- * or contradiction removes the earning (the earn side is derived, not stored). Credits expire with the receipt (retention).
+ * or contradiction removes the earning (the earn side is derived, not stored). Each earning is a lot that expires
+ * CHECK_CREDIT_EXPIRY_DAYS after the day it was earned; spends draw from the oldest unexpired lot first.
  * Spend on detailed checks (paid /v1/trust/check) or vendor reports. PLACEHOLDER numbers, flagged for Bobby.
  */
 export const CHECK_CREDITS_PER_RECEIPT = 5;
@@ -534,7 +556,7 @@ export function createContributors(deps: ContributorDeps) {
     if (!ops.length) return;
     if (deps.queue) {
       for (const o of ops) if (o.op === "insert") pending.set(o.row.tx_hash, now());
-      pendingRows += ops.length * ROWS_PER_SUBMISSION;
+      pendingRows += ops.reduce((n, o) => n + (o.op === "insert" ? ROWS_PER_SUBMISSION : 1), 0);
       await deps.queue.send({ kind: "contrib_write", ops });
     } else await flush(ops);
   }
@@ -735,6 +757,7 @@ export function createContributors(deps: ContributorDeps) {
       metrics: metrics ? JSON.stringify(metrics) : null, receipt: storedReceipt(r),
     };
     ops.unshift({ op: "insert", row });
+    ops.push({ op: "touch", key_id: key.key_id, day });
     await write(ops);
     return json(202, {
       accepted: true, queued: !!deps.queue, tx_hash: tx, finding,
@@ -845,6 +868,7 @@ export function createContributors(deps: ContributorDeps) {
       return json(200, { window_days: days, rows: out, privacy: `Opt-in contributors only; domains with fewer than ${CAPS.demand_min_contributors} contributors are withheld; no key ids or wallets.` }, noStore);
     }
     if (path === "/v1/owner/contributors/purge" && m === "POST") return json(200, await purge(), noStore);
+    if (path === "/v1/owner/contributors/inactive" && m === "GET") return json(200, await inactiveReview(), noStore);
     if (path === "/v1/owner/contributors/reconcile" && m === "POST") {
       const rows = (await store.since(dayOf(now() - 7 * DAY_MS), 5000)).filter((r) => r.finding === "unconfirmed");
       const ops: WriteOp[] = [];
@@ -975,20 +999,58 @@ export function createContributors(deps: ContributorDeps) {
 
   // ---------------------------------------------------- free Lumi Check credits (no cash)
 
-  /** Earned = per-receipt value x unique (seller, UTC day) slots with a verified, undisputed finding, within retention. */
-  async function creditBalance(key: ContributorKey) {
-    const since = dayOf(now() - CONTRIB_RETENTION_DAYS * DAY_MS);
+  /** Expiry boundary: lots earned before this UTC day have expired. */
+  const creditSince = () => dayOf(now() - CHECK_CREDIT_EXPIRY_DAYS * DAY_MS);
+
+  /**
+   * Credit lots: one per unique (seller, UTC day) with a verified, undisputed finding, worth perReceipt, expiring
+   * CHECK_CREDIT_EXPIRY_DAYS after that day. Spends record which lots they consumed (oldest first); balance = what is left
+   * in unexpired lots. Spends without an allocation (older rows) are allocated oldest-first here.
+   */
+  async function creditLedger(key: ContributorKey) {
+    const since = creditSince();
     const [rows, spends] = await Promise.all([store.verifiedSince(key.key_id, since), store.spendsSince(key.key_id, since)]);
-    const slots = new Set<string>();
-    for (const r of rows) if (VERIFIED.includes(r.finding) && !r.dispute) slots.add(`${(r.domain || r.pay_to || "?").toLowerCase()}:${r.day}`);
-    const earned = key.forfeited ? 0 : slots.size * perReceipt;
-    const spent = spends.reduce((a, x) => a + x.cost, 0);
+    const lots = new Map<string, { lot: string; day: string; value: number; used: number }>();
+    if (!key.forfeited) for (const r of rows) {
+      if (!VERIFIED.includes(r.finding) || r.dispute || r.day < since) continue;
+      const lot = `${(r.domain || r.pay_to || "?").toLowerCase()}:${r.day}`;
+      if (!lots.has(lot)) lots.set(lot, { lot, day: r.day, value: perReceipt, used: 0 });
+    }
+    const ordered = [...lots.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.lot.localeCompare(b.lot)));
+    let unallocated = 0;
+    for (const sp of [...spends].sort((a, b) => a.ts - b.ts)) {
+      if (sp.alloc?.length) { for (const a of sp.alloc) { const l = lots.get(a.lot); if (l) l.used += a.n; } continue; }
+      let left = sp.cost;
+      for (const l of ordered) { if (left <= 0) break; const take = Math.min(left, Math.max(0, l.value - l.used)); l.used += take; left -= take; }
+      unallocated += left;
+    }
+    return { since, lots: ordered, spends, overdrawn: ordered.some((l) => l.used > l.value) || unallocated > 0 };
+  }
+
+  /** Oldest-first allocation of `cost` across unexpired lots; null if the balance is short. */
+  function allocate(lots: { lot: string; value: number; used: number }[], cost: number): CreditAlloc[] | null {
+    const out: CreditAlloc[] = [];
+    let left = cost;
+    for (const l of lots) { if (left <= 0) break; const take = Math.min(left, Math.max(0, l.value - l.used)); if (take > 0) { out.push({ lot: l.lot, n: take }); left -= take; } }
+    return left > 0 ? null : out;
+  }
+
+  async function creditBalance(key: ContributorKey) {
+    const L = await creditLedger(key);
+    const balance = L.lots.reduce((a, l) => a + Math.max(0, l.value - l.used), 0);
+    const earned = L.lots.reduce((a, l) => a + l.value, 0);
+    const spent = L.spends.reduce((a, x) => a + x.cost, 0);
+    const expiryOf = (day: string) => dayOf(Date.parse(day + "T00:00:00Z") + (CHECK_CREDIT_EXPIRY_DAYS + 1) * DAY_MS);
+    const live = L.lots.filter((l) => l.value - l.used > 0);
+    const soonDay = dayOf(now() + 7 * DAY_MS);
     return {
-      kind: "lumi_check_credits", key_id: key.key_id, balance: Math.max(0, earned - spent), earned, spent,
-      earning_slots: slots.size, per_verified_receipt: perReceipt, prices, expires_after_days: CONTRIB_RETENTION_DAYS,
-      perks: { early_access: slots.size > 0, higher_rate_limit: slots.size > 0 ? { checks_per_minute: CONTRIB_PERK_CHECKS_PER_MINUTE } : null },
-      spends: spends.slice(0, 20).map(({ key_id: _k, ...x }) => x),
-      rule: "One earning per seller per UTC day per contributor, for verified receipts only. Self-dealt, duplicate, held, disputed or contradicted receipts earn nothing. Credits are not cash, cannot be transferred or sold, and expire with the receipt after the retention window.",
+      kind: "lumi_check_credits", key_id: key.key_id, balance, earned, spent,
+      earning_slots: L.lots.length, per_verified_receipt: perReceipt, prices, expires_after_days: CHECK_CREDIT_EXPIRY_DAYS,
+      next_expiry: live.length ? { on: expiryOf(live[0].day), credits: live.filter((l) => l.day === live[0].day).reduce((a, l) => a + l.value - l.used, 0) } : null,
+      expiring_within_7_days: live.filter((l) => expiryOf(l.day) <= soonDay).reduce((a, l) => a + l.value - l.used, 0),
+      perks: { early_access: L.lots.length > 0, higher_rate_limit: L.lots.length > 0 ? { checks_per_minute: CONTRIB_PERK_CHECKS_PER_MINUTE } : null },
+      spends: L.spends.slice(0, 20).map(({ key_id: _k, alloc: _a, ...x }) => x),
+      rule: `One earning per seller per UTC day per contributor, for verified receipts only. Self-dealt, duplicate, held, disputed or contradicted receipts earn nothing. Credits are not cash, cannot be transferred or sold, are spent oldest first, and unused credits expire ${CHECK_CREDIT_EXPIRY_DAYS} days after they were earned.`,
     };
   }
 
@@ -1000,19 +1062,39 @@ export function createContributors(deps: ContributorDeps) {
     const input: Record<string, string> = {};
     for (const [k, v] of Object.entries(b?.input ?? {})) if (typeof v === "string" || typeof v === "number") input[k] = String(v).slice(0, 500);
     const cost = prices[product];
-    const before = await creditBalance(key);
-    if (before.balance < cost) return err(402, "insufficient_credits", { balance: before.balance, cost, hint: "Earn free Lumi Check credits with verified receipts, or pay with x402 as usual." });
+    const L = await creditLedger(key);
+    const balanceBefore = L.lots.reduce((a, l) => a + Math.max(0, l.value - l.used), 0);
+    const alloc = allocate(L.lots, cost);
+    if (!alloc) return err(402, "insufficient_credits", { balance: balanceBefore, cost, hint: "Earn free Lumi Check credits with verified receipts, or pay with x402 as usual." });
     const t = now();
     const id = `spend_${t.toString(36)}_${(await sha256Hex(key.key_id + ":" + raw + ":" + Math.random())).slice(0, 10)}`;
-    // Reserve first, then re-check (concurrent spends cannot overdraw: the loser is rolled back).
-    await store.addSpend({ id, key_id: key.key_id, ts: t, day: dayOf(t), product, cost, ref: null });
-    const after = await creditBalance(key);
-    if (after.earned - after.spent < 0) { await store.deleteSpend(id); return err(402, "insufficient_credits", { balance: before.balance, cost }); }
+    // Reserve first, then re-check (concurrent spends cannot overdraw a lot: the loser is rolled back).
+    await store.addSpend({ id, key_id: key.key_id, ts: t, day: dayOf(t), product, cost, ref: null, alloc });
+    if ((await creditLedger(key)).overdrawn) { await store.deleteSpend(id); return err(402, "insufficient_credits", { balance: balanceBefore, cost }); }
     let out: Awaited<ReturnType<NonNullable<ContributorDeps["redeem"]>>>;
     try { out = await deps.redeem(product, input, new URL(req.url).origin); } catch { out = { ok: false, status: 503, error: { error: "data_unavailable" } }; }
     if (!out.ok) { await store.deleteSpend(id); return json(out.status, { ...out.error, note: "No credits were spent." }, noStore); }
     deps.log?.({ event: "contrib_credit_spend", product, cost }); // no key id, no query
-    return json(200, { ...out.body, lumi_credits: { spent: cost, balance: after.balance, spend_id: id, note: "Paid with free Lumi Check credits. Credits never change a score, tier, ranking or badge." } }, noStore);
+    return json(200, { ...out.body, lumi_credits: { spent: cost, balance: balanceBefore - cost, spend_id: id, note: "Paid with free Lumi Check credits. Credits never change a score, tier, ranking or badge." } }, noStore);
+  }
+
+  /** Activity for account retention: a signed check counts, recorded at most once per key per UTC day. */
+  const touched = new Map<string, string>();
+  async function touchActive(key: ContributorKey) {
+    const d = dayOf(now());
+    if (touched.get(key.key_id) === d || (key.last_active_day ?? "") >= d) return;
+    touched.set(key.key_id, d);
+    if (touched.size > 10_000) touched.clear();
+    await store.touch(key.key_id, d).catch(() => {});
+  }
+  const activeSince = () => dayOf(now() - CONTRIB_ACTIVE_WINDOW_DAYS * DAY_MS);
+  const isActive = (k: ContributorKey) => k.status === "active" && (k.last_active_day ?? dayOf(k.created_at)) >= activeSince();
+
+  /** PLACEHOLDER (flagged for Bobby): lists inactive keys only. Deletes, revokes and notifies nothing. Owner route only, never the cron. */
+  async function inactiveReview() {
+    const keys = await store.listKeys();
+    const inactive = keys.filter((k) => k.status === "active" && !isActive(k)).map((k) => ({ key_id: k.key_id, last_active_day: k.last_active_day ?? null, created_day: dayOf(k.created_at) }));
+    return { kind: "contributor_inactive_review", active_window_days: CONTRIB_ACTIVE_WINDOW_DAYS, active_since: activeSince(), total_keys: keys.length, active: keys.filter(isActive).length, inactive, action: "none (placeholder: nothing is deleted, revoked or sent)" };
   }
 
   /** Higher /v1/check rate limit for contributors with a verified receipt (signed request). null = not a contributor request. */
@@ -1020,6 +1102,7 @@ export function createContributors(deps: ContributorDeps) {
     if (!req.headers.get("Lumi-Contributor-Key")) return null;
     const a = await authContributor(req, "");
     if (!a.ok) return null; // fall back to the anonymous free limit
+    await touchActive(a.key);
     const bal = await creditBalance(a.key);
     if (!bal.perks.higher_rate_limit) return null;
     const t = now(), m = perkMinute.get(a.key.key_id);
@@ -1033,7 +1116,7 @@ export function createContributors(deps: ContributorDeps) {
     const before = dayOf(now() - CONTRIB_RETENTION_DAYS * DAY_MS);
     const deleted = await store.purge(before);
     deps.log?.({ event: "contrib_purge", deleted });
-    return { retention_days: CONTRIB_RETENTION_DAYS, before_day: before, deleted };
+    return { retention_days: CONTRIB_RETENTION_DAYS, before_day: before, deleted, accounts: `kept while active (receipt or signed check within ${CONTRIB_ACTIVE_WINDOW_DAYS} days); never purged here` };
   }
 
   /** Queue consumer for lumi-contrib-writes: every message's ops in ONE D1 batch. */
@@ -1045,6 +1128,6 @@ export function createContributors(deps: ContributorDeps) {
     return rows;
   }
 
-  return { handle, consume, purge, leaderboard, checkPerk, rules: { credits: CREDITS, caps: CAPS, credits_enabled: creditsOn, cash_bounties: CONTRIB_BOUNTIES, check_credits: { per_verified_receipt: perReceipt, prices }, retention_days: CONTRIB_RETENTION_DAYS }, _boostFlag: boostFlag, _credit: credit };
+  return { handle, consume, purge, leaderboard, checkPerk, inactiveReview, rules: { credits: CREDITS, caps: CAPS, credits_enabled: creditsOn, cash_bounties: CONTRIB_BOUNTIES, check_credits: { per_verified_receipt: perReceipt, prices, expires_after_days: CHECK_CREDIT_EXPIRY_DAYS }, retention_days: CONTRIB_RETENTION_DAYS, active_window_days: CONTRIB_ACTIVE_WINDOW_DAYS }, _boostFlag: boostFlag, _credit: credit };
 }
 export type Contributors = ReturnType<typeof createContributors>;

@@ -127,7 +127,7 @@ describe("signed submissions", () => {
     const m = JSON.parse(row.metrics);
     expect(m).toMatchObject({ latency_ms: 420, response_bytes: 1234, schema_fingerprint: "b".repeat(32), facilitator: "t54", settlement_ms: 2100, freshness_s: 30 });
     expect(m.junk).toBeUndefined();
-    expect(s.store.meta.get(contribBudgetKey(NOW))).toBe("3");
+    expect(s.store.meta.get(contribBudgetKey(NOW))).toBe("4"); // 3 for the submission + 1 activity touch (first today)
     // own submissions come back via /v1/contrib/me
     const me: any = await (await s.signed(c, "GET", "/v1/contrib/me")).json();
     expect(me.submissions).toHaveLength(1);
@@ -315,9 +315,9 @@ describe("D1 write budget and queue", () => {
     await s.submit(b, await s.receipt(wallet(2), 111));
     const before = s.store.writes;
     const rows = await s.app.contribQueue(sent);
-    expect(rows).toBe(2 * 3 + 1);
+    expect(rows).toBe(2 * 3 + 2 + 1); // 2 submissions + 2 activity touches + budget meta
     expect(s.store.subs.size).toBe(2);
-    expect(s.store.writes - before).toBe(7);
+    expect(s.store.writes - before).toBe(9);
   });
 
   it("D1 store: migration 0015 applies and the batched SQL round-trips (miniflare)", async () => {
@@ -326,7 +326,7 @@ describe("D1 write budget and queue", () => {
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
-      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
+      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
       for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
       const store = new D1ContributorStore(db);
       const s = setup({ store });
@@ -336,7 +336,8 @@ describe("D1 write budget and queue", () => {
       const row = await store.byTx(txh(120));
       expect(row?.finding).toBe("counted");
       expect(row?.demand_opt_in).toBe(true);
-      expect(await store.getMeta(contribBudgetKey(NOW))).toBe("3");
+      expect(await store.getMeta(contribBudgetKey(NOW))).toBe("4"); // + activity touch
+      expect((await store.getKey(a.key_id))?.last_active_day).toBe(new Date(NOW).toISOString().slice(0, 10));
       const c = await store.counts({ key_id: a.key_id, endpoint_key: row!.endpoint_key, source: row!.source, day: row!.day, since_recent: "2026-01-01", since_month: "2026-10-01", tx_hash: txh(120) });
       expect(c).toMatchObject({ key_day: 1, key_ep_day: 1, ep_day_sources: 1, dup: 1, month_credit: 0 }); // credits disabled by default
       await store.addSpend({ id: "sp1", key_id: a.key_id, ts: NOW, day: "2026-10-23", product: "trust_check", cost: 1, ref: null });
@@ -502,6 +503,68 @@ describe("free Lumi Check credits (no cash)", () => {
     expect(b.spends).toHaveLength(1);
   });
 
+  it("credits expire 90 days after they were earned; spends use the oldest lot first (FIFO); legacy spends are allocated FIFO", async () => {
+    const s = setup({ env: { CONTRIB_CHECK_CREDIT_PRICES: JSON.stringify({ trust_check: 3 }) } });
+    const a = await s.issue(1, [wallet(1)]);
+    await s.submit(a, await s.receipt(wallet(1), 470));
+    const base = await s.store.byTx(txh(470));
+    const day = (n: number) => new Date(NOW - n * 86_400_000).toISOString().slice(0, 10);
+    for (const [i, ago] of [[1, 89], [2, 10], [3, 91]] as const) {
+      const r = { ...base, tx_hash: `LOT${i}`.padEnd(64, "0"), day: day(ago), created_at: NOW - ago * 86_400_000 };
+      s.store.subs.set(r.tx_hash, r);
+    }
+    let b: any = await credits(s, a);
+    expect(b).toMatchObject({ balance: 15, earned: 15, earning_slots: 3, expires_after_days: 90 }); // the 91-day-old lot has expired
+    expect(b.next_expiry).toEqual({ on: day(89 - 91), credits: 5 });
+    expect(b.expiring_within_7_days).toBe(5);
+    expect((await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP } })).status).toBe(200);
+    expect((await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP } })).status).toBe(200);
+    const allocs = [...s.store.spends.values()].sort((x: any, y: any) => x.ts - y.ts || x.id.localeCompare(y.id)).map((x: any) => x.alloc);
+    const dom = (base.domain as string).toLowerCase();
+    expect(allocs.flat()).toEqual(expect.arrayContaining([{ lot: `${dom}:${day(89)}`, n: 3 }]));
+    expect(allocs.flat().filter((x: any) => x.lot === `${dom}:${day(89)}`).reduce((t: number, x: any) => t + x.n, 0)).toBe(5); // oldest lot used up first
+    expect(allocs.flat().filter((x: any) => x.lot === `${dom}:${day(10)}`).reduce((t: number, x: any) => t + x.n, 0)).toBe(1);
+    b = await credits(s, a);
+    expect(b).toMatchObject({ balance: 9, spent: 6, expiring_within_7_days: 0 });
+    expect(b.next_expiry).toEqual({ on: day(10 - 91), credits: 4 });
+    // The oldest lot ages out: what was spent from it stays spent, the rest of the balance is untouched.
+    for (const r of s.store.subs.values()) if (r.day === day(89)) r.day = day(91);
+    for (const sp of s.store.spends.values()) sp.alloc = sp.alloc.map((x: any) => (x.lot.endsWith(day(89)) ? { ...x, lot: `${dom}:${day(91)}` } : x));
+    expect(await credits(s, a)).toMatchObject({ balance: 9, earned: 10, earning_slots: 2 });
+    // An unspent lot that ages out is lost (expired), not carried over.
+    for (const r of s.store.subs.values()) if (r.day === day(0)) r.day = day(91);
+    expect((await credits(s, a)).balance).toBe(4);
+    // Legacy spend rows without an allocation are charged oldest first.
+    const s2 = setup({ env: { CONTRIB_CHECK_CREDIT_PRICES: JSON.stringify({ trust_check: 3 }) } });
+    const a2 = await s2.issue(1, [wallet(1)]);
+    await s2.submit(a2, await s2.receipt(wallet(1), 471));
+    await s2.store.addSpend({ id: "legacy", key_id: a2.key_id, ts: NOW - 1000, day: day(0), product: "trust_check", cost: 4, ref: null });
+    expect(await credits(s2, a2)).toMatchObject({ balance: 1, spent: 4 });
+    expect((await s2.signed(a2, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP } })).status).toBe(402);
+  });
+
+  it("accounts are kept while active: receipts and signed checks record activity; the inactive review is a non-destructive placeholder", async () => {
+    const s = setup();
+    const a = await s.issue(1, [wallet(1)]);
+    const b = await s.issue(2, [wallet(2)]);
+    await s.submit(a, await s.receipt(wallet(1), 480));
+    const today = new Date(NOW).toISOString().slice(0, 10);
+    expect((await s.store.getKey(a.key_id)).last_active_day).toBe(today);
+    const kb = s.store.keys.get(b.key_id);
+    kb.created_at = NOW - 400 * 86_400_000; kb.last_active_day = new Date(NOW - 366 * 86_400_000).toISOString().slice(0, 10);
+    const old = { ...(await s.store.byTx(txh(480))), tx_hash: "OLDA".padEnd(64, "0"), day: "2025-01-01" };
+    s.store.subs.set(old.tx_hash, old);
+    const purge: any = await (await s.owner("POST", "/v1/owner/contributors/purge")).json();
+    expect(purge.deleted).toBe(1);
+    expect(await s.store.getKey(b.key_id)).not.toBeNull(); // the 90-day purge never removes accounts
+    const r: any = await (await s.owner("GET", "/v1/owner/contributors/inactive")).json();
+    expect(r).toMatchObject({ active_window_days: 365, total_keys: 2, active: 1, action: expect.stringContaining("placeholder") });
+    expect(r.inactive.map((x: any) => x.key_id)).toEqual([b.key_id]);
+    expect((await s.store.getKey(b.key_id)).status).toBe("active"); // nothing revoked or deleted
+    expect(s.store.keys.size).toBe(2);
+    expect((await s.app.fetch(new Request(BASE + "/v1/owner/contributors/inactive"))).status).toBe(401);
+  });
+
   it("perks: contributors with a verified receipt get early access + a higher /v1/check limit; cash bounties are a disabled stub", async () => {
     const s = setup();
     const a = await s.issue(1, [wallet(1)]);
@@ -514,6 +577,13 @@ describe("free Lumi Check credits (no cash)", () => {
     for (let i = 0; i < 31; i++) if ((await s.app.fetch(new Request(BASE + q))).status === 429) anonLimited = true;
     expect(anonLimited).toBe(true);
     expect((await s.signed(a, "GET", q)).status).toBe(200);
+    // A signed check counts as activity (at most one write per key per day).
+    const b = await s.issue(2, [wallet(2)]);
+    expect((await s.store.getKey(b.key_id)).last_active_day ?? null).toBeNull();
+    const w0 = s.store.writes;
+    for (let i = 0; i < 3; i++) await s.signed(b, "GET", q);
+    expect((await s.store.getKey(b.key_id)).last_active_day).toBe(new Date(NOW).toISOString().slice(0, 10));
+    expect(s.store.writes - w0).toBe(1);
     const bounties: any = await (await s.app.fetch(new Request(BASE + "/v1/contrib/bounties"))).json();
     expect(bounties).toMatchObject({ enabled: false, payout: "none", wanted: [] });
   });
