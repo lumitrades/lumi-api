@@ -1,25 +1,27 @@
 /**
- * Lumi Check v0, server side: contributor keys, contributed receipts, caps and credits.
+ * Lumi Check v0, server side: contributor keys, contributed receipts, caps and contributor badges.
  * DRAFT on branch scanner-kit-v0. Not deployed.
  *
  * The open kit (packages/scanner-kit) only checks quotes, optionally makes capped test-buys, signs receipts with the
  * contributor's own wallet and submits them here. Everything that decides what counts (which sellers to test,
- * verification, anti-fraud, anti-boost, weighting, credits) lives in this file and never ships in the kit.
+ * verification, anti-fraud, anti-boost, weighting, badges) lives in this file and never ships in the kit.
  *
  * Routes
  *   Contributor (ed25519 request signature, see signedMessage):
  *     POST /v1/contrib/submissions   one signed receipt (passive purchase or test-buy)
  *     GET  /v1/contrib/wanted        what to test next (server-chosen, per key rotation)
- *     GET  /v1/contrib/me            own credits, caps left and own recent submissions
+ *     GET  /v1/contrib/me            own badge, verified-contribution count, caps left and own recent submissions
  *     POST /v1/contrib/me            { share_demand: boolean } (opt-in to aggregate-only demand stats)
  *     DELETE /v1/contrib/me          { confirm: "<own key_id>" } delete the account (see eraseAccount)
  *     POST /v1/contrib/me/wallet-proof { address, key_type, public_key?, signature } prove control of a registered wallet
+ *   Public (no auth):
+ *     GET  /v1/contrib/badge/{handle} one contributor's public badge and verified-contribution count (no ranking)
  *   Seller (signed with the payTo wallet):
  *     POST /v1/contrib/disputes      { tx_hash, reason, signer } holds a contributed finding for review
  *   Owner (Authorization: Bearer <OWNER_MCP_KEY>, same check as the other owner routes):
  *     POST /v1/owner/contributors                     issue a key
- *     GET  /v1/owner/contributors                     list keys with credit totals
- *     POST /v1/owner/contributors/{key_id}/revoke     revoke now ({ reason, forfeit })
+ *     GET  /v1/owner/contributors                     list keys with submission counts
+ *     POST /v1/owner/contributors/{key_id}/revoke     revoke now ({ reason, forfeit }: forfeit removes the badge)
  *     GET  /v1/owner/contributors/{key_id}/submissions
  *     GET  /v1/owner/contributors/flags               endpoints dominated by few funding sources / new wallets
  *     GET  /v1/owner/contributors/demand              opt-in demand, aggregate only (>= 2 contributors per row)
@@ -31,12 +33,18 @@
  *
  * Anti-gaming (docs/contributors-antigaming.md): wallet-control proof at issue (walletProofMessage), cached first-funder
  * tracing (XRPL / Stellar / Base) with one-hop clusters, weight 0 for unproven / seller-funded / same-cluster receipts,
- * near-duplicate refusal (payer + pay_to + amount within near_dup_window_s).
+ * near-duplicate refusal (same paying wallet + pay_to within near_dup_window_s).
+ *
+ * Data minimisation (tier 2): a contributed receipt carries only the payment's chain and transaction hash. Lumi looks the
+ * transaction up on the public ledger to confirm it is a real, successful payment from the signing wallet to the seller.
+ * The paying wallet is kept internally (registered-wallet match, funding clusters, self-test and duplicate checks) and is
+ * never shown in any public response; the amount is not stored at all.
  *
  * D1: one row (+3 index entries) per accepted submission on its OWN daily counter `contrib_writes:<day>`
  * (CONTRIB_CAPS.write_budget_rows), separate from the catalog `writes:<day>` counter, so contributions never starve
  * ingest. With CONTRIB_QUEUE bound, inserts go through the lumi-contrib-writes queue and are flushed in one batch.
- * Rejected submissions write nothing. Credits are derived from the submission rows; there is no payout code.
+ * Rejected submissions write nothing. Rewards are badges only (derived from the submission rows): no credits, perks,
+ * rate-limit changes, money or payout code of any kind.
  */
 import { originPath } from "./check";
 import { ed25519 } from "@noble/curves/ed25519";
@@ -58,18 +66,8 @@ export const ACCEPTED_FORMATS = [CONTRIB_FORMAT];
 export const KIT_NAME = "lumi-scanner-kit";
 export const DEFAULT_MIN_KIT = "0.1.0";
 
-/** Credits (DRAFT amounts for the owner to set). Credits only: never cash, no payout code. 1 USD = 1_000_000 uusd. */
-export const DEFAULT_CREDITS = {
-  base_uusd: 20_000, // $0.02 of API credits per verified receipt
-  wanted_mult: 2, // endpoint is on the current wanted list
-  chain_mult: { "xrpl:0": 1.5, "stellar:pubnet": 1.5, "eip155:8453": 1 } as Record<string, number>, // under-tested chains weigh more
-  passive_mult: 1,
-  test_buy_mult: 1,
-  repeat_mult: 0.25, // same key + endpoint again inside repeat_window_days
-  repeat_window_days: 30,
-  unlisted_mult: 0, // endpoint unknown to Lumi, or pay_to not the listed one: stored, no credit
-  monthly_cap_uusd: 5_000_000, // pilot: $5 of credits per contributor per calendar month (UTC)
-};
+/** Wanted-list ordering only: under-tested chains are suggested first. Not a reward and not a scoring input. */
+export const WANTED_CHAIN_PRIORITY: Record<string, number> = { "xrpl:0": 2, "stellar:pubnet": 2, "eip155:8453": 1 };
 export const DEFAULT_CAPS = {
   key_daily: 20, // accepted submissions per key per UTC day (key.daily_cap overrides)
   key_endpoint_daily: 1, // same key, same endpoint, same day
@@ -79,7 +77,7 @@ export const DEFAULT_CAPS = {
   observed_skew_min: 60, // |delivery.observed_at - ledger time| allowed
   write_budget_rows: 5_000, // contributions-only D1 rows per UTC day
   per_minute: 10, // per-key request limit: Workers Rate Limiting binding when bound (CONTRIB_RATE_LIMITER), else in-isolate
-  near_dup_window_s: 120, // same payer + seller + amount with ledger times this close = one purchase, whatever the tx hashes
+  near_dup_window_s: 120, // same paying wallet + seller with ledger times this close = one purchase, whatever the tx hashes
   funding_recheck_days: 7, // cached "no funder found" lookups are retried after this; found funders are kept
   new_wallet_days: 30,
   flag_min_receipts: 4, // anti-boost flag needs at least this many receipts on the endpoint in 7 days
@@ -87,7 +85,6 @@ export const DEFAULT_CAPS = {
   flag_new_wallet_share: 0.6, // ... this share from wallets funded < new_wallet_days ago
   demand_min_contributors: 2, // aggregate rows need at least this many distinct contributors
 };
-export type Credits = typeof DEFAULT_CREDITS;
 export type Caps = typeof DEFAULT_CAPS;
 
 const POSITIVE = "delivered";
@@ -96,7 +93,6 @@ export const isNegative = (o: string | null | undefined) => !!o && o !== POSITIV
 const DAY_MS = 86_400_000;
 const iso = (t: number) => new Date(t).toISOString();
 const dayOf = (t: number) => iso(t).slice(0, 10);
-const monthStart = (t: number) => iso(t).slice(0, 7) + "-01";
 export const contribBudgetKey = (t: number) => "contrib_writes:" + dayOf(t);
 /** D1 rows written per accepted submission: the row + its secondary index entries (approximate, for the budget). */
 export const ROWS_PER_SUBMISSION = 4;
@@ -111,7 +107,9 @@ export function cmpVersion(a: string, b: string): number {
 
 export interface ContributorKey {
   key_id: string; label: string; public_key: string; wallets: string[]; own_domains: string[];
-  daily_cap: number | null; share_demand: boolean; status: "active" | "revoked" | "deleted"; forfeited: boolean;
+  daily_cap: number | null; share_demand: boolean; status: "active" | "revoked" | "deleted";
+  /** Badge removed by the owner (fraud or abuse). Column name kept from the draft schema. */
+  forfeited: boolean;
   created_at: number; revoked_at: number | null; revoke_reason: string | null;
   /** UTC day of the last accepted receipt or signed check (updated at most once per key per day). Accounts are kept while active. */
   last_active_day?: string | null;
@@ -139,14 +137,17 @@ export function verifyWalletProof(contributorPublicKeyHex: string, address: stri
 }
 export interface Submission {
   tx_hash: string; key_id: string; day: string; created_at: number; mode: "passive" | "test_buy"; kit_version: string | null;
-  endpoint: string; endpoint_key: string; domain: string | null; network: string; asset: string; amount: string;
-  pay_to: string; payer: string; source: string; new_wallet: boolean; receipt_hash: string; http_status: number | null;
+  endpoint: string; endpoint_key: string; domain: string | null; network: string;
+  /** Seller's receiving address (from the receipt, confirmed on-ledger). */
+  pay_to: string;
+  /** Paying wallet, taken from the on-ledger transaction. Internal only (anti-gaming checks); never in a public response. */
+  payer: string; source: string; new_wallet: boolean; receipt_hash: string; http_status: number | null;
   outcome: string | null; finding: Finding; wanted: boolean; demand_opt_in: boolean; ledger_ts: number | null;
-  credit_uusd: number; credit_note: string | null; dispute: string | null; metrics: string | null; receipt: string;
+  dispute: string | null; metrics: string | null; receipt: string;
   /** Set by the owner when the receipt is cited in a published, dated test result (migration 0021). */
   published_at?: number | null;
   /**
-   * Scoring weight (migration 0022): 1 = counts; 0 = stored for evidence but no leaderboard, credits or confirmations.
+   * Weight (migration 0022): 1 = counts; 0 = stored for evidence but no badge progress or confirmations.
    * weight_note says why: wallet_unproven, seller_funded (payer funded by the seller's pay_to or its cluster), same_cluster
    * (another key in the same funding cluster already counted this seller today).
    */
@@ -154,9 +155,9 @@ export interface Submission {
 }
 /** Zero-weight reasons. */
 export type WeightNote = "wallet_unproven" | "seller_funded" | "same_cluster";
-/** True when a submission counts for scores and credits. */
+/** True when a submission counts as a verified contribution (badge progress and confirmations). */
 export const weighs = (s: { finding: Finding; dispute: string | null; weight?: number | null }) => (s.finding === "counted" || s.finding === "confirmed") && !s.dispute && s.weight !== 0;
-export interface EraseResult { found: boolean; submissions_deleted: number; submissions_anonymised: number; credit_spends_deleted: number; wallets_deleted: number }
+export interface EraseResult { found: boolean; submissions_deleted: number; submissions_anonymised: number; wallets_deleted: number }
 /** Placeholder key id left on anonymised submissions and in the key tombstone's place: no link to the deleted contributor. */
 export const DELETED_CONTRIBUTOR = "deleted";
 /**
@@ -171,15 +172,11 @@ export function anonymisedReceipt(raw: string, at: number): string {
   return JSON.stringify({
     ...rest, ...(payment ? { payment } : {}), issuer: { name: "Lumi Check contributor (deleted)" },
     ...(x?.measurements ? { x_lumi_contrib: { measurements: x.measurements } } : {}),
-    x_lumi_stored: { anonymised_at: new Date(at).toISOString(), removed: ["signer", "payment.payer", "x_lumi_contrib.kit", "x_lumi_contrib.mode", "issuer.methodology"], note: "Contributor account deleted; kept only because a published, dated test result cites it." },
+    x_lumi_stored: { anonymised_at: new Date(at).toISOString(), removed: ["signer", "x_lumi_contrib.kit", "x_lumi_contrib.mode", "issuer.methodology"], note: "Contributor account deleted; kept only because a published, dated test result cites it." },
   }).slice(0, 12_000);
 }
-/** One redemption of free Lumi Check credits (the earn side is derived from verified submissions, so disputes reverse it). */
-export interface CreditSpend { id: string; key_id: string; ts: number; day: string; product: string; cost: number; ref: string | null; alloc?: CreditAlloc[] | null }
-/** Which earned lot (seller:day) a spend consumed, oldest first, so expiry is exact: unused credits expire 90 days after they were earned. */
-export interface CreditAlloc { lot: string; n: number }
 export type Finding = "counted" | "unconfirmed" | "confirmed" | "held" | "disputed" | "contradicted";
-export interface CapCounts { key_day: number; key_ep_day: number; ep_day_sources: number; source_ep_day: number; key_ep_recent: number; month_credit: number; dup: number }
+export interface CapCounts { key_day: number; key_ep_day: number; ep_day_sources: number; source_ep_day: number; dup: number }
 export type WriteOp =
   | { op: "insert"; row: Submission }
   | { op: "finding"; tx_hash: string; finding: Finding; dispute?: string | null }
@@ -198,9 +195,9 @@ export interface ContributorStore {
   setShareDemand(id: string, v: boolean): Promise<void>;
   /** Record activity (no-op if already recorded for that day or later). */
   touch(id: string, day: string): Promise<void>;
-  counts(q: { key_id: string; endpoint_key: string; source: string; day: string; since_recent: string; since_month: string; tx_hash: string }): Promise<CapCounts>;
-  /** Near-duplicate purchase: this key, same payer + pay_to + amount, ledger time within windowMs (index: key_id, day). */
-  nearDup(q: { key_id: string; since_day: string; payer: string; pay_to: string; amount: string; ledger_ts: number; window_ms: number }): Promise<number>;
+  counts(q: { key_id: string; endpoint_key: string; source: string; day: string; tx_hash: string }): Promise<CapCounts>;
+  /** Near-duplicate purchase: this key, same paying wallet + pay_to, ledger time within windowMs (index: key_id, day). */
+  nearDup(q: { key_id: string; since_day: string; payer: string; pay_to: string; ledger_ts: number; window_ms: number }): Promise<number>;
   /** Weighted receipts for this seller (domain or pay_to) today from OTHER keys sharing the funding source (index: source, day). */
   clusterSeller(q: { source: string; day: string; domain: string | null; pay_to: string; key_id: string }): Promise<number>;
   /** Re-point wallets whose source was `from` (a wallet now known to be funded upstream) to `to`. */
@@ -218,16 +215,11 @@ export interface ContributorStore {
   endpointKeysSince(key_id: string, sinceDay: string): Promise<string[]>;
   /** Recent submissions on one endpoint (anti-boost flag and negative confirmation). */
   byEndpoint(endpoint_key: string, sinceDay: string): Promise<Submission[]>;
-  totals(): Promise<{ key_id: string; n: number; credit_uusd: number; month_uusd: number }[]>;
+  totals(): Promise<{ key_id: string; n: number }[]>;
   since(sinceDay: string, limit: number): Promise<Submission[]>;
   getMeta(k: string): Promise<string | null>;
   /** Retention: delete submissions (incl. the stored receipt copy) older than `beforeDay`. Returns rows deleted. */
   purge(beforeDay: string): Promise<number>;
-  /** Earn side of the check-credit ledger: this key's submissions since a day (seller, day, finding only). */
-  verifiedSince(key_id: string, sinceDay: string): Promise<Pick<Submission, "domain" | "pay_to" | "day" | "finding" | "dispute" | "weight">[]>;
-  addSpend(row: CreditSpend): Promise<void>;
-  deleteSpend(id: string): Promise<void>;
-  spendsSince(key_id: string, sinceDay: string): Promise<CreditSpend[]>;
 }
 
 // ---------------------------------------------------------------- stores
@@ -258,17 +250,16 @@ export class MemoryContributorStore implements ContributorStore {
   async touch(id: string, day: string) { const k = this.keys.get(id); if (k && k.status === "active" && (!k.last_active_day || k.last_active_day < day)) { k.last_active_day = day; this.writes++; } }
   async erase(id: string, at: number, reason: string): Promise<EraseResult> {
     const k = this.keys.get(id);
-    const out: EraseResult = { found: !!k, submissions_deleted: 0, submissions_anonymised: 0, credit_spends_deleted: 0, wallets_deleted: 0 };
+    const out: EraseResult = { found: !!k, submissions_deleted: 0, submissions_anonymised: 0, wallets_deleted: 0 };
     if (!k) return out;
     for (const [tx, r] of this.subs) {
       if (r.key_id !== id) continue;
       if (r.published_at) { this.subs.set(tx, { ...r, ...ANON_FIELDS, receipt: anonymisedReceipt(r.receipt, at) }); out.submissions_anonymised++; }
       else { this.subs.delete(tx); out.submissions_deleted++; }
     }
-    for (const [sid, sp] of this.spends) if (sp.key_id === id) { this.spends.delete(sid); out.credit_spends_deleted++; }
     for (const [a, w] of this.walletRows) if (w.key_id === id) { this.walletRows.delete(a); out.wallets_deleted++; }
     this.keys.set(id, tombstone(id, k, at, reason));
-    this.writes += out.submissions_deleted + out.submissions_anonymised + out.credit_spends_deleted + out.wallets_deleted + 1;
+    this.writes += out.submissions_deleted + out.submissions_anonymised + out.wallets_deleted + 1;
     return out;
   }
   async markPublished(tx: string, at: number) { const r = this.subs.get(tx); if (!r) return false; r.published_at = r.published_at ?? at; this.writes++; return true; }
@@ -280,8 +271,6 @@ export class MemoryContributorStore implements ContributorStore {
       key_ep_day: epDay.filter((x) => x.key_id === q.key_id).length,
       ep_day_sources: new Set(epDay.map((x) => x.source)).size,
       source_ep_day: epDay.filter((x) => x.source === q.source).length,
-      key_ep_recent: s.filter((x) => x.key_id === q.key_id && x.endpoint_key === q.endpoint_key && x.day >= q.since_recent).length,
-      month_credit: s.filter((x) => x.key_id === q.key_id && x.day >= q.since_month).reduce((a, x) => a + x.credit_uusd, 0),
       dup: this.subs.has(q.tx_hash) ? 1 : 0,
     };
   }
@@ -301,12 +290,8 @@ export class MemoryContributorStore implements ContributorStore {
   async endpointKeysSince(id: string, d: string) { return [...new Set([...this.subs.values()].filter((s) => s.key_id === id && s.day >= d).map((s) => s.endpoint_key))]; }
   async byEndpoint(ek: string, d: string) { return [...this.subs.values()].filter((s) => s.endpoint_key === ek && s.day >= d).map((s) => ({ ...s })); }
   async totals() {
-    const m = new Map<string, { key_id: string; n: number; credit_uusd: number; month_uusd: number }>();
-    const ms = monthStart(Date.now());
-    for (const s of this.subs.values()) {
-      const t = m.get(s.key_id) ?? { key_id: s.key_id, n: 0, credit_uusd: 0, month_uusd: 0 };
-      t.n++; t.credit_uusd += s.credit_uusd; if (s.day >= ms) t.month_uusd += s.credit_uusd; m.set(s.key_id, t);
-    }
+    const m = new Map<string, { key_id: string; n: number }>();
+    for (const s of this.subs.values()) { const t = m.get(s.key_id) ?? { key_id: s.key_id, n: 0 }; t.n++; m.set(s.key_id, t); }
     return [...m.values()];
   }
   async since(d: string, n: number) { return [...this.subs.values()].filter((s) => s.day >= d).slice(0, n); }
@@ -314,14 +299,11 @@ export class MemoryContributorStore implements ContributorStore {
   async purge(d: string) {
     let n = 0;
     for (const [k, s] of this.subs) if (s.day < d) { this.subs.delete(k); n++; }
-    for (const [k, s] of this.spends) if (s.day < d) this.spends.delete(k);
     this.writes += n; return n;
   }
-  spends = new Map<string, CreditSpend>();
-  async verifiedSince(id: string, d: string) { return [...this.subs.values()].filter((s) => s.key_id === id && s.day >= d).map(({ domain, pay_to, day, finding, dispute, weight }) => ({ domain, pay_to, day, finding, dispute, weight })); }
   funding = new Map<string, FundingRow>();
   async nearDup(q: Parameters<ContributorStore["nearDup"]>[0]) {
-    return [...this.subs.values()].filter((s) => s.key_id === q.key_id && s.day >= q.since_day && s.payer === q.payer && s.pay_to === q.pay_to && s.amount === q.amount && s.ledger_ts != null && Math.abs(s.ledger_ts - q.ledger_ts) <= q.window_ms).length;
+    return [...this.subs.values()].filter((s) => s.key_id === q.key_id && s.day >= q.since_day && s.payer === q.payer && s.pay_to === q.pay_to && s.ledger_ts != null && Math.abs(s.ledger_ts - q.ledger_ts) <= q.window_ms).length;
   }
   async clusterSeller(q: Parameters<ContributorStore["clusterSeller"]>[0]) {
     return [...this.subs.values()].filter((s) => s.source === q.source && s.day === q.day && s.key_id !== q.key_id && s.weight !== 0 && (s.pay_to === q.pay_to || (!!q.domain && s.domain === q.domain))).length;
@@ -335,19 +317,16 @@ export class MemoryContributorStore implements ContributorStore {
     for (const w of this.walletRows.values()) { const e = by.get(w.source) ?? { keys: new Set(), wallets: [] }; e.keys.add(w.key_id); e.wallets.push(w.address); by.set(w.source, e); }
     return [...by.entries()].filter(([, e]) => e.keys.size > 1).map(([source, e]) => ({ source, keys: [...e.keys], wallets: e.wallets }));
   }
-  async addSpend(r: CreditSpend) { this.spends.set(r.id, { ...r, alloc: r.alloc ? r.alloc.map((a) => ({ ...a })) : null }); this.writes++; }
-  async deleteSpend(id: string) { this.spends.delete(id); this.writes++; }
-  async spendsSince(id: string, d: string) { return [...this.spends.values()].filter((s) => s.key_id === id && s.day >= d).sort((a, b) => b.ts - a.ts).map((x) => ({ ...x, alloc: x.alloc ? x.alloc.map((a) => ({ ...a })) : null })); }
 }
 
 const TOUCH_SQL = "UPDATE contributor_keys SET last_active_day = ?2 WHERE key_id = ?1 AND status = 'active' AND (last_active_day IS NULL OR last_active_day < ?2)";
 /** Submission fields cleared when a deleted contributor's published receipt is kept. */
-const ANON_FIELDS = { key_id: DELETED_CONTRIBUTOR, payer: "", source: "", new_wallet: false, demand_opt_in: false, credit_uusd: 0, credit_note: null, kit_version: null } as const;
+const ANON_FIELDS = { key_id: DELETED_CONTRIBUTOR, payer: "", source: "", new_wallet: false, demand_opt_in: false, kit_version: null } as const;
 /** What is left of a deleted key: the random key id (so it can never be reused or re-authenticate), status and dates. No profile. */
 function tombstone(id: string, k: ContributorKey, at: number, reason: string): ContributorKey {
   return { key_id: id, label: "", public_key: "", wallets: [], own_domains: [], daily_cap: null, share_demand: false, status: "deleted", forfeited: k.forfeited, created_at: k.created_at, revoked_at: at, revoke_reason: reason, last_active_day: null };
 }
-const SUB_COLS = "tx_hash, key_id, day, created_at, mode, kit_version, endpoint, endpoint_key, domain, network, asset, amount, pay_to, payer, source, new_wallet, receipt_hash, http_status, outcome, finding, wanted, demand_opt_in, ledger_ts, credit_uusd, credit_note, dispute, metrics, receipt, weight, weight_note";
+const SUB_COLS = "tx_hash, key_id, day, created_at, mode, kit_version, endpoint, endpoint_key, domain, network, pay_to, payer, source, new_wallet, receipt_hash, http_status, outcome, finding, wanted, demand_opt_in, ledger_ts, dispute, metrics, receipt, weight, weight_note";
 
 export class D1ContributorStore implements ContributorStore {
   constructor(private db: D1Like) {}
@@ -376,19 +355,18 @@ export class D1ContributorStore implements ContributorStore {
   async setShareDemand(id: string, v: boolean) { await this.db.prepare("UPDATE contributor_keys SET share_demand = ?2 WHERE key_id = ?1").bind(id, v ? 1 : 0).run(); }
   async touch(id: string, day: string) { await this.db.prepare(TOUCH_SQL).bind(id, day).run(); }
   /**
-   * One batch (one transaction). Index reads only: submissions and spends by (key_id, ...), wallets by primary key.
+   * One batch (one transaction). Index reads only: submissions by (key_id, ...), wallets by primary key.
    * Published rows are anonymised in place (receipt rewritten in JS); the rest are deleted.
    */
   async erase(id: string, at: number, reason: string): Promise<EraseResult> {
     const k = await this.getKey(id);
-    const out: EraseResult = { found: !!k, submissions_deleted: 0, submissions_anonymised: 0, credit_spends_deleted: 0, wallets_deleted: 0 };
+    const out: EraseResult = { found: !!k, submissions_deleted: 0, submissions_anonymised: 0, wallets_deleted: 0 };
     if (!k) return out;
     const pub = ((await this.db.prepare("SELECT tx_hash, receipt FROM contributor_submissions WHERE key_id = ?1 AND published_at IS NOT NULL").bind(id).all<{ tx_hash: string; receipt: string }>()).results ?? []);
     const t = tombstone(id, k, at, reason);
     const st = [
-      ...pub.map((r) => this.db.prepare("UPDATE contributor_submissions SET key_id = ?2, payer = '', source = '', new_wallet = 0, demand_opt_in = 0, credit_uusd = 0, credit_note = NULL, kit_version = NULL, receipt = ?3 WHERE tx_hash = ?1 AND key_id = ?4").bind(r.tx_hash, DELETED_CONTRIBUTOR, anonymisedReceipt(r.receipt, at), id)),
+      ...pub.map((r) => this.db.prepare("UPDATE contributor_submissions SET key_id = ?2, payer = '', source = '', new_wallet = 0, demand_opt_in = 0, kit_version = NULL, receipt = ?3 WHERE tx_hash = ?1 AND key_id = ?4").bind(r.tx_hash, DELETED_CONTRIBUTOR, anonymisedReceipt(r.receipt, at), id)),
       this.db.prepare("DELETE FROM contributor_submissions WHERE key_id = ?1 AND published_at IS NULL").bind(id),
-      this.db.prepare("DELETE FROM contributor_credit_spends WHERE key_id = ?1").bind(id),
       ...k.wallets.map((w) => this.db.prepare("DELETE FROM contributor_wallets WHERE address = ?1 AND key_id = ?2").bind(w, id)),
       this.db.prepare("UPDATE contributor_keys SET label = '', public_key = '', wallets = '[]', own_domains = '[]', daily_cap = NULL, share_demand = 0, status = 'deleted', revoked_at = ?2, revoke_reason = ?3, last_active_day = NULL WHERE key_id = ?1").bind(id, t.revoked_at, reason),
     ];
@@ -396,8 +374,7 @@ export class D1ContributorStore implements ContributorStore {
     const ch = (i: number) => Number(res?.[i]?.meta?.changes ?? 0);
     out.submissions_anonymised = pub.reduce((n, _, i) => n + ch(i), 0);
     out.submissions_deleted = ch(pub.length);
-    out.credit_spends_deleted = ch(pub.length + 1);
-    out.wallets_deleted = k.wallets.reduce((n, _, i) => n + ch(pub.length + 2 + i), 0);
+    out.wallets_deleted = k.wallets.reduce((n, _, i) => n + ch(pub.length + 1 + i), 0);
     return out;
   }
   async markPublished(tx: string, at: number) {
@@ -412,18 +389,16 @@ export class D1ContributorStore implements ContributorStore {
          (SELECT COUNT(*) FROM contributor_submissions WHERE key_id = ?1 AND day = ?2 AND endpoint_key = ?3) key_ep_day,
          (SELECT COUNT(DISTINCT source) FROM contributor_submissions WHERE endpoint_key = ?3 AND day = ?2) ep_day_sources,
          (SELECT COUNT(*) FROM contributor_submissions WHERE endpoint_key = ?3 AND day = ?2 AND source = ?4) source_ep_day,
-         (SELECT COUNT(*) FROM contributor_submissions WHERE key_id = ?1 AND day >= ?5 AND endpoint_key = ?3) key_ep_recent,
-         (SELECT COALESCE(SUM(credit_uusd), 0) FROM contributor_submissions WHERE key_id = ?1 AND day >= ?6) month_credit,
-         (SELECT COUNT(*) FROM contributor_submissions WHERE tx_hash = ?7) dup`,
-    ).bind(q.key_id, q.day, q.endpoint_key, q.source, q.since_recent, q.since_month, q.tx_hash).first<CapCounts>();
-    return { key_day: 0, key_ep_day: 0, ep_day_sources: 0, source_ep_day: 0, key_ep_recent: 0, month_credit: 0, dup: 0, ...(r ?? {}) };
+         (SELECT COUNT(*) FROM contributor_submissions WHERE tx_hash = ?5) dup`,
+    ).bind(q.key_id, q.day, q.endpoint_key, q.source, q.tx_hash).first<CapCounts>();
+    return { key_day: 0, key_ep_day: 0, ep_day_sources: 0, source_ep_day: 0, dup: 0, ...(r ?? {}) };
   }
   async apply(ops: WriteOp[], budgetKey: string) {
     const st = ops.map((o) => o.op === "touch" ? this.db.prepare(TOUCH_SQL).bind(o.key_id, o.day) : o.op === "insert"
       ? this.db.prepare(`INSERT OR IGNORE INTO contributor_submissions (${SUB_COLS}) VALUES (${SUB_COLS.split(",").map((_, i) => `?${i + 1}`).join(",")})`).bind(
         o.row.tx_hash, o.row.key_id, o.row.day, o.row.created_at, o.row.mode, o.row.kit_version, o.row.endpoint, o.row.endpoint_key, o.row.domain, o.row.network,
-        o.row.asset, o.row.amount, o.row.pay_to, o.row.payer, o.row.source, o.row.new_wallet ? 1 : 0, o.row.receipt_hash, o.row.http_status, o.row.outcome,
-        o.row.finding, o.row.wanted ? 1 : 0, o.row.demand_opt_in ? 1 : 0, o.row.ledger_ts, o.row.credit_uusd, o.row.credit_note, o.row.dispute, o.row.metrics, o.row.receipt, o.row.weight ?? 1, o.row.weight_note ?? null)
+        o.row.pay_to, o.row.payer, o.row.source, o.row.new_wallet ? 1 : 0, o.row.receipt_hash, o.row.http_status, o.row.outcome,
+        o.row.finding, o.row.wanted ? 1 : 0, o.row.demand_opt_in ? 1 : 0, o.row.ledger_ts, o.row.dispute, o.row.metrics, o.row.receipt, o.row.weight ?? 1, o.row.weight_note ?? null)
       : o.dispute !== undefined
         ? this.db.prepare("UPDATE contributor_submissions SET finding = ?2, dispute = ?3 WHERE tx_hash = ?1").bind(o.tx_hash, o.finding, o.dispute)
         : this.db.prepare("UPDATE contributor_submissions SET finding = ?2 WHERE tx_hash = ?1").bind(o.tx_hash, o.finding));
@@ -449,8 +424,7 @@ export class D1ContributorStore implements ContributorStore {
     return ((await this.db.prepare(`SELECT ${SUB_COLS} FROM contributor_submissions WHERE endpoint_key = ?1 AND day >= ?2 LIMIT 200`).bind(ek, d).all<any>()).results ?? []).map(parseSub);
   }
   async totals() {
-    return (await this.db.prepare("SELECT key_id, COUNT(*) n, COALESCE(SUM(credit_uusd),0) credit_uusd, COALESCE(SUM(CASE WHEN day >= ?1 THEN credit_uusd ELSE 0 END),0) month_uusd FROM contributor_submissions GROUP BY key_id")
-      .bind(monthStart(Date.now())).all<any>()).results ?? [];
+    return ((await this.db.prepare("SELECT key_id, COUNT(*) n FROM contributor_submissions GROUP BY key_id").all<any>()).results ?? []).map((r: any) => ({ key_id: r.key_id, n: Number(r.n) }));
   }
   async since(d: string, n: number) {
     // Owner-only aggregate views; the table is small (owner-issued keys, capped per day).
@@ -459,16 +433,12 @@ export class D1ContributorStore implements ContributorStore {
   async getMeta(k: string) { return (await this.db.prepare("SELECT v FROM meta WHERE k = ?1").bind(k).first<{ v: string }>())?.v ?? null; }
   async purge(d: string) {
     const r: any = await this.db.prepare("DELETE FROM contributor_submissions WHERE day < ?1").bind(d).run();
-    await this.db.prepare("DELETE FROM contributor_credit_spends WHERE day < ?1").bind(d).run();
     return Number(r?.meta?.changes ?? 0);
-  }
-  async verifiedSince(id: string, d: string) {
-    return ((await this.db.prepare("SELECT domain, pay_to, day, finding, dispute, weight FROM contributor_submissions WHERE key_id = ?1 AND day >= ?2").bind(id, d).all<any>()).results ?? []);
   }
   async nearDup(q: Parameters<ContributorStore["nearDup"]>[0]) {
     // (key_id, day) index range, then a filter on that key's few rows: no table scan.
-    const r = await this.db.prepare("SELECT COUNT(*) n FROM contributor_submissions WHERE key_id = ?1 AND day >= ?2 AND payer = ?3 AND pay_to = ?4 AND amount = ?5 AND ledger_ts IS NOT NULL AND ABS(ledger_ts - ?6) <= ?7")
-      .bind(q.key_id, q.since_day, q.payer, q.pay_to, q.amount, q.ledger_ts, q.window_ms).first<any>();
+    const r = await this.db.prepare("SELECT COUNT(*) n FROM contributor_submissions WHERE key_id = ?1 AND day >= ?2 AND payer = ?3 AND pay_to = ?4 AND ledger_ts IS NOT NULL AND ABS(ledger_ts - ?5) <= ?6")
+      .bind(q.key_id, q.since_day, q.payer, q.pay_to, q.ledger_ts, q.window_ms).first<any>();
     return Number(r?.n ?? 0);
   }
   async clusterSeller(q: Parameters<ContributorStore["clusterSeller"]>[0]) {
@@ -494,14 +464,6 @@ export class D1ContributorStore implements ContributorStore {
     const by = new Map<string, { keys: Set<string>; wallets: string[] }>();
     for (const w of rows) { const e = by.get(w.source) ?? { keys: new Set(), wallets: [] }; e.keys.add(w.key_id); e.wallets.push(w.address); by.set(w.source, e); }
     return [...by.entries()].map(([source, e]) => ({ source, keys: [...e.keys], wallets: e.wallets }));
-  }
-  async addSpend(r: CreditSpend) {
-    await this.db.prepare("INSERT INTO contributor_credit_spends (id, key_id, ts, day, product, cost, ref, alloc) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)").bind(r.id, r.key_id, r.ts, r.day, r.product, r.cost, r.ref, r.alloc ? JSON.stringify(r.alloc) : null).run();
-  }
-  async deleteSpend(id: string) { await this.db.prepare("DELETE FROM contributor_credit_spends WHERE id = ?1").bind(id).run(); }
-  async spendsSince(id: string, d: string) {
-    return ((await this.db.prepare("SELECT id, key_id, ts, day, product, cost, ref, alloc FROM contributor_credit_spends WHERE key_id = ?1 AND day >= ?2 ORDER BY ts DESC").bind(id, d).all<any>()).results ?? [])
-      .map((r: any) => ({ ...r, ts: Number(r.ts), cost: Number(r.cost), alloc: r.alloc ? (JSON.parse(r.alloc) as CreditAlloc[]) : null }));
   }
 }
 
@@ -532,24 +494,21 @@ function mergeJson<T extends Record<string, any>>(base: T, raw: string | undefin
   } catch { return base; }
 }
 
-/** Keep only known, small measurement fields from the kit (never trust size or shape). */
+/** Keep only known, small measurement fields from the kit (never trust size or shape). No prices, amounts or addresses. */
 export function cleanMetrics(m: any): Record<string, unknown> | null {
   if (!m || typeof m !== "object") return null;
   const num = (v: unknown, max = 1e12) => (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= max ? Math.round(v) : undefined);
   const str = (v: unknown, n = 128) => (typeof v === "string" ? v.slice(0, n) : undefined);
-  const quotes = Array.isArray(m.quotes) ? m.quotes.slice(0, 6).map((q: any) => ({
-    network: str(q?.network, 40), asset: str(q?.asset, 80), amount: str(q?.amount, 32), pay_to: str(q?.pay_to, 80), scheme: str(q?.scheme, 16),
-  })) : undefined;
   const out = {
     latency_ms: num(m.latency_ms, 600_000), http_status: num(m.http_status, 999), response_bytes: num(m.response_bytes, 1e9),
     response_sha256: typeof m.response_sha256 === "string" && HEX64.test(m.response_sha256) ? m.response_sha256 : undefined,
     schema_fingerprint: typeof m.schema_fingerprint === "string" && /^[0-9a-f]{16,64}$/.test(m.schema_fingerprint) ? m.schema_fingerprint : undefined,
     content_type: str(m.content_type, 80), freshness_s: typeof m.freshness_s === "number" && Number.isFinite(m.freshness_s) ? Math.round(Math.max(-86400, Math.min(m.freshness_s, 1e9))) : undefined,
     data_timestamp: str(m.data_timestamp, 40), facilitator: str(m.facilitator, 120), settlement_ms: num(m.settlement_ms, 600_000),
-    quote_latency_ms: num(m.quote_latency_ms, 600_000), quotes,
+    quote_latency_ms: num(m.quote_latency_ms, 600_000),
   };
-  const s = canonicalJson(out);
-  return s.length <= 2048 ? out : { ...out, quotes: undefined };
+  // Prices, amounts and addresses are never kept from measurements (the quote list is dropped on purpose).
+  return canonicalJson(out).length <= 2048 ? out : null;
 }
 
 /** Funding source: who funded this wallet (one hop through other contributor wallets); the wallet itself if unknown or ignored. */
@@ -624,51 +583,25 @@ export interface ContributorDeps {
   rateLimiter?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   queue?: ContribQueue;
   log?: (e: Record<string, unknown>) => void;
-  credits?: string; caps?: string; minKit?: string; retiredKits?: string;
+  caps?: string; minKit?: string; retiredKits?: string;
   /** Scoped admin key for /v1/owner/contributors* (CONTRIB_ADMIN_KEY). When set, OWNER_MCP_KEY no longer opens these routes. */
   adminKey?: string;
-  /** Legacy USD-denominated credit / cash-bounty accounting (CONTRIB_CASH_BOUNTIES_ENABLED). Default false: never cash. */
-  creditsEnabled?: boolean;
-  /** Free Lumi Check credits per verified receipt (CONTRIB_CHECK_CREDITS_PER_RECEIPT). Placeholder default, needs Bobby. */
-  checkCreditsPerReceipt?: string;
-  /** Free Lumi Check credit prices (CONTRIB_CHECK_CREDIT_PRICES JSON). */
-  checkCreditPrices?: string;
-  /** Serves a paid product for credits: the same body the x402 route returns. Not charged on errors. */
-  redeem?: (product: CreditProduct, input: Record<string, string>, base: string) => Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; status: number; error: Record<string, unknown> }>;
 }
 
-export type CreditProduct = "trust_check" | "vendor_report";
-
-/** Lumi Check v0: raw contributed submissions (incl. the stored receipt copy) and credit spends are deleted after this many days (approved by Bobby). Accounts are not: see CONTRIB_ACTIVE_WINDOW_DAYS. */
+/** Lumi Check v0: raw contributed submissions (incl. the stored receipt copy) are deleted after this many days (owner-approved). Accounts are not: see CONTRIB_ACTIVE_WINDOW_DAYS. */
 export const CONTRIB_RETENTION_DAYS = 90;
-/** Unused free Lumi Check credits expire this many days after the UTC day they were earned (approved by Bobby). Spends use the oldest credits first. */
-export const CHECK_CREDIT_EXPIRY_DAYS = 90;
 /**
  * Contributor accounts (keys, wallets) are NOT purged at 90 days: they are kept while active. Active = not revoked and a
- * verified-or-pending receipt accepted, or a signed /v1/check made, within the last CONTRIB_ACTIVE_WINDOW_DAYS (a new key
- * counts from its creation). PLACEHOLDER definition, flagged for Bobby. Inactive handling is a placeholder that only
- * lists keys (GET /v1/owner/contributors/inactive); it deletes, revokes or notifies nothing.
+ * verified-or-pending receipt accepted within the last CONTRIB_ACTIVE_WINDOW_DAYS (a new key counts from its creation).
+ * PLACEHOLDER definition for the owner to confirm. Inactive handling is a placeholder that only lists keys
+ * (GET /v1/owner/contributors/inactive); it deletes, revokes or notifies nothing.
  */
 export const CONTRIB_ACTIVE_WINDOW_DAYS = 365;
 /**
- * Free Lumi Check credits (launch rewards, NO cash). Each verified receipt earns CHECK_CREDITS_PER_RECEIPT, at most ONE
- * earning per (contributor, seller, UTC day): extra receipts on the same seller that day, duplicates and rejected
- * (self-dealt, unverifiable) receipts earn nothing. Only findings counted/confirmed without a dispute earn; a later dispute
- * or contradiction removes the earning (the earn side is derived, not stored). Each earning is a lot that expires
- * CHECK_CREDIT_EXPIRY_DAYS after the day it was earned; spends draw from the oldest unexpired lot first.
- * Spend on detailed checks (paid /v1/trust/check) or vendor reports. PLACEHOLDER numbers, flagged for Bobby.
+ * Rewards are badges only: a public contributor badge plus a count of verified contributions. No credits, cash, perks,
+ * rate-limit changes, rankings or anything else of monetary value. Sharing data never changes how scores are computed.
  */
-export const CHECK_CREDITS_PER_RECEIPT = 5;
-export const CHECK_CREDIT_PRICES: Record<CreditProduct, number> = { trust_check: 1, vendor_report: 10 };
-/** Perks for contributors with >= 1 verified receipt: early access + a higher /v1/check rate limit (per key, per minute). */
-export const CONTRIB_PERK_CHECKS_PER_MINUTE = 120;
-/**
- * DISABLED STUB (design note, nothing pays out): post-revenue "wanted list" of FIXED bounties for testing specific sellers,
- * paid from a capped budget. See docs/contrib-bounties.md. No payout code exists; /v1/contrib/bounties reports disabled.
- */
-export const CONTRIB_BOUNTIES = Object.freeze({ enabled: false, status: "planned_after_revenue", budget_cap_usd: 0, payout: "none" });
-
-/** Contributor badges: verified receipts (findings counted or confirmed; at most one per endpoint per UTC day per key). */
+/** Contributor badges by verified contributions (findings counted or confirmed; at most one per endpoint per UTC day per key). */
 export const CONTRIB_BADGES = [
   { id: "first_receipt", label: "First verified receipt", min: 1 },
   { id: "scout", label: "Scout", min: 10 },
@@ -691,7 +624,6 @@ export function storedReceipt(r: any): string {
 
 export function createContributors(deps: ContributorDeps) {
   const { store, now } = deps;
-  const CREDITS: Credits = mergeJson(DEFAULT_CREDITS, deps.credits);
   const CAPS: Caps = mergeJson(DEFAULT_CAPS, deps.caps);
   const minKit = deps.minKit || DEFAULT_MIN_KIT;
   const retired = new Set((deps.retiredKits ?? "").split(",").map((s) => s.trim()).filter(Boolean));
@@ -702,7 +634,7 @@ export function createContributors(deps: ContributorDeps) {
   const pending = new Map<string, number>(); // queued tx hashes (dedupe until the batch lands)
   let pendingRows = 0;
   let wantedMemo: { at: number; list: WantedItem[] } | undefined;
-  const pendingPurchases = new Map<string, { ts: number; at: number }[]>(); // payer|pay_to|amount -> ledger times queued (near-dup until the batch lands)
+  const pendingPurchases = new Map<string, { ts: number; at: number }[]>(); // payer|pay_to -> ledger times queued (near-dup until the batch lands)
 
   /** First funder, cached in wallet_funding: found funders forever, misses re-checked after funding_recheck_days. */
   async function funding(address: string): Promise<{ funder: string | null; funded_at: number | null }> {
@@ -733,15 +665,6 @@ export function createContributors(deps: ContributorDeps) {
   // Scoped: CONTRIB_ADMIN_KEY when set (OWNER_MCP_KEY then does NOT open contributor admin), else OWNER_MCP_KEY (back-compat).
   const adminKey = deps.adminKey || deps.ownerKey;
   const ownerOk = async (req: Request) => isOwnerKey(/^Bearer\s+(\S+)$/i.exec(req.headers.get("Authorization") ?? "")?.[1], adminKey);
-  const creditsOn = deps.creditsEnabled === true;
-  const perReceipt = (() => { const n = Number(deps.checkCreditsPerReceipt); return Number.isInteger(n) && n >= 0 && n <= 1000 ? n : CHECK_CREDITS_PER_RECEIPT; })();
-  const prices: Record<CreditProduct, number> = (() => {
-    const m = mergeJson({ ...CHECK_CREDIT_PRICES }, deps.checkCreditPrices) as Record<CreditProduct, unknown>;
-    const out = { ...CHECK_CREDIT_PRICES };
-    for (const k of Object.keys(out) as CreditProduct[]) { const n = Number(m[k]); if (Number.isInteger(n) && n >= 1 && n <= 10_000) out[k] = n; }
-    return out;
-  })();
-  const perkMinute = new Map<string, { at: number; n: number }>();
   const noStore = { "Cache-Control": "no-store" };
   const err = (status: number, error: string, extra: Record<string, unknown> = {}) => json(status, { error, ...extra }, noStore);
 
@@ -784,8 +707,8 @@ export function createContributors(deps: ContributorDeps) {
 
   /**
    * Account deletion (self-service or owner on an email request). Deletes: the key's profile (label, public key,
-   * wallets, own domains, demand opt-in, activity date), registered wallet rows, every credit spend, and every
-   * submission row, which also removes the credit balance and lots (derived from them) and the leaderboard entry.
+   * wallets, own domains, demand opt-in, activity date), registered wallet rows and every submission row, which also
+   * removes the badge and verified-contribution count (derived from them).
    * Keeps, with the contributor link stripped: submissions the owner marked as cited in a published, dated test
    * result (anonymisedReceipt). Untouched: tier-1 daily summaries and raw tier-1 rows, which never held a
    * contributor link. Leaves a tombstone key row (status 'deleted', no personal data) so the key can never sign again.
@@ -884,7 +807,7 @@ export function createContributors(deps: ContributorDeps) {
       pool.push({ w, r: await rank(w) });
     }
     // Under-tested chains first, then a per-key daily rotation so contributors spread out.
-    const chainW = (n: string) => CREDITS.chain_mult[n] ?? 1;
+    const chainW = (n: string) => WANTED_CHAIN_PRIORITY[n] ?? 1;
     pool.sort((a, b) => chainW(b.w.network) - chainW(a.w.network) || a.r - b.r);
     return pool.slice(0, limit).map(({ w }) => ({ url: w.url, method: w.method, ...(w.body ? { body: w.body } : {}), network: w.network, max_listed_price: w.max_price, ...(w.asset_hint ? { asset_hint: w.asset_hint } : {}) }));
   }
@@ -894,21 +817,6 @@ export function createContributors(deps: ContributorDeps) {
   }
 
   // ---------------------------------------------------- submissions
-
-  function credit(o: { mode: string; network: string; wanted: boolean; repeat: boolean; listed: boolean; payToListed: boolean; monthSoFar: number; forfeited: boolean }) {
-    if (!creditsOn) return { uusd: 0, note: "credits_disabled" };
-    if (o.forfeited) return { uusd: 0, note: "forfeited" };
-    if (!o.listed) return { uusd: Math.round(CREDITS.base_uusd * CREDITS.unlisted_mult), note: "unlisted_endpoint" };
-    if (!o.payToListed) return { uusd: Math.round(CREDITS.base_uusd * CREDITS.unlisted_mult), note: "pay_to_not_listed" };
-    let c = CREDITS.base_uusd * (CREDITS.chain_mult[o.network] ?? 1) * (o.mode === "passive" ? CREDITS.passive_mult : CREDITS.test_buy_mult);
-    const notes: string[] = [];
-    if (o.wanted) { c *= CREDITS.wanted_mult; notes.push("wanted"); }
-    if (o.repeat) { c *= CREDITS.repeat_mult; notes.push("repeat"); }
-    c = Math.round(c);
-    const room = Math.max(0, CREDITS.monthly_cap_uusd - o.monthSoFar);
-    if (c > room) { c = room; notes.push("monthly_cap"); }
-    return { uusd: c, note: notes.join(",") || null };
-  }
 
   /** Anti-boost: an endpoint whose recent verified receipts come from few funding sources or mostly new wallets. */
   function boostFlag(rows: Pick<Submission, "source" | "new_wallet">[]) {
@@ -920,16 +828,20 @@ export function createContributors(deps: ContributorDeps) {
     return null;
   }
 
+  /**
+   * The receipt names only the chain and tx hash. The ledger must show a successful transfer from the wallet that signed
+   * the receipt to the seller's pay_to. The amount and asset are read from the public ledger for this check only and
+   * are never stored.
+   */
   async function ledgerCheck(r: Receipt): Promise<{ ok: true; ts: number } | { ok: false; status: number; error: string }> {
-    const p = r.payment;
+    const p = r.payment, signer = String((r as any).signer?.address ?? "");
     const look: Lookup = p.network === "xrpl:0" ? await lookupXrplPayment(deps.fetch, deps.xrplRpc, String(p.tx_hash))
       : p.network === "stellar:pubnet" ? await lookupStellarUsdc(deps.fetch, horizon, String(p.tx_hash))
       : await lookupBaseUsdc(deps.fetch, deps.baseRpc, String(p.tx_hash));
     if (!look.ok) return look.reason === "ledger_unavailable" ? { ok: false, status: 503, error: "ledger_unavailable" } : { ok: false, status: 422, error: "ledger_" + look.reason };
-    const pay = look.payments.find((x) => x.from.toLowerCase() === String(p.payer).toLowerCase() && x.to.toLowerCase() === String(r.seller.pay_to).toLowerCase());
-    if (!pay) return { ok: false, status: 422, error: "ledger_no_transfer_from_payer_to_pay_to" };
-    if (Math.abs(Number(pay.amount) - Number(p.amount)) > 1e-9) return { ok: false, status: 422, error: "ledger_amount_mismatch" };
-    if (pay.asset !== p.asset) return { ok: false, status: 422, error: "ledger_asset_mismatch" };
+    const pay = look.payments.find((x) => x.from.toLowerCase() === signer.toLowerCase() && x.to.toLowerCase() === String(r.seller.pay_to).toLowerCase());
+    if (!pay) return { ok: false, status: 422, error: "ledger_no_transfer_from_signer_to_pay_to" };
+    if (!(Number(pay.amount) > 0)) return { ok: false, status: 422, error: "ledger_zero_amount" };
     if (!Number.isFinite(pay.ts)) return { ok: false, status: 503, error: "ledger_unavailable" };
     return { ok: true, ts: pay.ts };
   }
@@ -941,7 +853,11 @@ export function createContributors(deps: ContributorDeps) {
     const mode = body?.mode === "test_buy" ? "test_buy" : body?.mode === "passive" ? "passive" : null;
     if (!mode) return err(400, "mode_required", { allowed: ["passive", "test_buy"] });
     // 1. Offline checks first (no network, no writes).
-    const check = await verifyReceipt(r);
+    if (r?.payment && typeof r.payment === "object") {
+      const extra = Object.keys(r.payment).filter((x) => x !== "network" && x !== "tx_hash");
+      if (extra.length) return err(422, "receipt_payment_fields_not_allowed", { fields: extra, hint: "Contributed receipts carry only payment.network and payment.tx_hash. Update Lumi Check." });
+    }
+    const check = await verifyReceipt(r, { minimalPayment: true });
     if (!check.ok) return err(422, "receipt_invalid", { errors: check.errors });
     const ext = r.x_lumi_contrib;
     if (!ext || !ACCEPTED_FORMATS.includes(ext.format)) return err(422, "receipt_format_unsupported", { accepted: ACCEPTED_FORMATS });
@@ -949,7 +865,8 @@ export function createContributors(deps: ContributorDeps) {
     if (kv) return err(426, kv, { min_kit_version: minKit });
     if (ext.mode !== mode) return err(422, "mode_mismatch");
     const p = r.payment, tx = normTx(String(p.network), String(p.tx_hash));
-    const payer = normWallet(String(p.payer)), payTo = normWallet(String(r.seller.pay_to));
+    // The paying wallet is the receipt signer; ledgerCheck (step 4) confirms it sent this transaction.
+    const payer = normWallet(String(r.signer.address)), payTo = normWallet(String(r.seller.pay_to));
     if (!key.wallets.map(normWallet).includes(payer)) return err(403, "payer_not_registered_to_key");
     const fullEndpoint = normalizeUrl(String(r.seller.endpoint ?? ""));
     // Stored, keyed and capped on origin + path only: query strings never stored, and cannot dodge per-endpoint caps.
@@ -970,7 +887,7 @@ export function createContributors(deps: ContributorDeps) {
     const newWallet = !!w?.funded_at && now() - w.funded_at < CAPS.new_wallet_days * DAY_MS;
     const ek = (await sha256Hex(endpoint)).slice(0, 32);
     const t = now(), day = dayOf(t);
-    const c = await store.counts({ key_id: key.key_id, endpoint_key: ek, source, day, since_recent: dayOf(t - CREDITS.repeat_window_days * DAY_MS), since_month: monthStart(t), tx_hash: tx });
+    const c = await store.counts({ key_id: key.key_id, endpoint_key: ek, source, day, tx_hash: tx });
     if (c.dup) return err(409, "duplicate");
     // 3. Caps (anti-boost counts funding sources, not wallets).
     if (c.key_day >= (key.daily_cap ?? CAPS.key_daily)) return err(429, "key_daily_cap");
@@ -983,11 +900,11 @@ export function createContributors(deps: ContributorDeps) {
     if (!led.ok) return err(led.status, led.error, led.status === 503 ? { retryable: true } : {});
     if (led.ts < t - CAPS.tx_max_age_days * DAY_MS) return err(422, "too_old");
     if (Math.abs(observed - led.ts) > CAPS.observed_skew_min * 60_000) return err(422, "observed_at_far_from_ledger");
-    // 4b. Near-duplicate purchase (same payer + seller + amount, ledger times within the window), stored or queued.
-    const win = CAPS.near_dup_window_s * 1000, pkey = `${payer}|${payTo}|${String(p.amount)}`;
+    // 4b. Near-duplicate purchase (same paying wallet + seller, ledger times within the window), stored or queued.
+    const win = CAPS.near_dup_window_s * 1000, pkey = `${payer}|${payTo}`;
     for (const [k2, l] of pendingPurchases) { const f = l.filter((x) => now() - x.at < 10 * 60_000); if (f.length) pendingPurchases.set(k2, f); else pendingPurchases.delete(k2); }
     if ((pendingPurchases.get(pkey) ?? []).some((x) => Math.abs(x.ts - led.ts) <= win)
-      || (await store.nearDup({ key_id: key.key_id, since_day: dayOf(led.ts - win - DAY_MS), payer, pay_to: payTo, amount: String(p.amount), ledger_ts: led.ts, window_ms: win })) > 0) {
+      || (await store.nearDup({ key_id: key.key_id, since_day: dayOf(led.ts - win - DAY_MS), payer, pay_to: payTo, ledger_ts: led.ts, window_ms: win })) > 0) {
       return err(409, "near_duplicate", { window_s: CAPS.near_dup_window_s });
     }
     // 4c. Weight: unproven wallets, seller-funded payers and repeat receipts from one funding cluster count for nothing.
@@ -1009,15 +926,12 @@ export function createContributors(deps: ContributorDeps) {
     }
     if (flag) finding = "held";
     const wanted = await isWanted(endpoint);
-    const payToListed = !k.listed || k.pay_tos.includes(payTo);
-    const cr0 = credit({ mode, network: p.network, wanted, repeat: c.key_ep_recent > 0, listed: k.listed, payToListed, monthSoFar: c.month_credit, forfeited: key.forfeited });
-    const cr = weight ? cr0 : { uusd: 0, note: weightNote };
     const metrics = cleanMetrics(ext.measurements);
     const row: Submission = {
       tx_hash: tx, key_id: key.key_id, day, created_at: t, mode, kit_version: String(ext.kit.version), endpoint, endpoint_key: ek, domain: hostOf(endpoint) || null,
-      network: p.network, asset: String(p.asset), amount: String(p.amount), pay_to: payTo, payer, source, new_wallet: newWallet, receipt_hash: r.receipt_hash,
+      network: p.network, pay_to: payTo, payer, source, new_wallet: newWallet, receipt_hash: r.receipt_hash,
       http_status: Number.isInteger(r.delivery.http_status) ? r.delivery.http_status : null, outcome: String(r.delivery.outcome), finding, wanted,
-      demand_opt_in: mode === "passive" && key.share_demand, ledger_ts: led.ts, credit_uusd: cr.uusd, credit_note: cr.note, dispute: null,
+      demand_opt_in: mode === "passive" && key.share_demand, ledger_ts: led.ts, dispute: null,
       metrics: metrics ? JSON.stringify(metrics) : null, receipt: storedReceipt(r), weight, weight_note: weightNote,
     };
     ops.unshift({ op: "insert", row });
@@ -1026,11 +940,9 @@ export function createContributors(deps: ContributorDeps) {
     await write(ops);
     return json(202, {
       accepted: true, queued: !!deps.queue, tx_hash: tx, finding, weight, ...(weightNote ? { weight_note: weightNote, counts: false } : {}),
-      ...(creditsOn ? { credit_uusd: cr.uusd, credit_usd: cr.uusd / 1e6, credit_note: cr.note } : { rewards: "check_credits_badges_leaderboard", check_credits: { per_verified_receipt: perReceipt, rule: "one earning per seller per UTC day; credited once the finding is verified" } }),
+      rewards: "badge_only",
       ...(flag ? { endpoint_flag: flag.flag } : {}),
-      note: creditsOn
-        ? "Credits are Lumi API credits, not cash. Negative findings count only after independent confirmation. Draft terms apply."
-        : "Rewards: free Lumi Check credits (detailed checks and reports), contributor badges, the leaderboard, early access and higher rate limits. No cash. Negative findings count only after independent confirmation. Draft terms apply.",
+      note: "Thank you. Contributors get a public badge and a verified-contribution count, nothing of monetary value. Negative findings count only after independent confirmation. Draft terms apply.",
     }, noStore);
   }
 
@@ -1113,18 +1025,13 @@ export function createContributors(deps: ContributorDeps) {
       const [keys, tot] = await Promise.all([store.listKeys(), store.totals()]);
       const by = new Map(tot.map((x) => [x.key_id, x]));
       return json(200, {
-        keys: keys.map((k) => {
-          const t = by.get(k.key_id);
-          return creditsOn
-            ? { ...k, submissions: t?.n ?? 0, credits_usd: (t?.credit_uusd ?? 0) / 1e6, credits_month_usd: (t?.month_uusd ?? 0) / 1e6, credits_state: k.forfeited ? "forfeited" : "earned_unpaid" }
-            : { ...k, submissions: t?.n ?? 0, credits_state: "disabled" };
-        }),
-        rules: { credits_enabled: creditsOn, ...(creditsOn ? { credits: CREDITS } : {}), caps: CAPS, min_kit_version: minKit, retired_kit_versions: [...retired], formats: ACCEPTED_FORMATS, retention_days: CONTRIB_RETENTION_DAYS },
-        note: creditsOn ? "Credits are API credits, not cash. There is no payout code." : "Cash bounties are disabled: rewards are free Lumi Check credits, badges, the leaderboard and perks. There is no payout code.",
+        keys: keys.map((k) => ({ ...k, submissions: by.get(k.key_id)?.n ?? 0, badge_removed: k.forfeited })),
+        rules: { rewards: "badge_only", caps: CAPS, min_kit_version: minKit, retired_kit_versions: [...retired], formats: ACCEPTED_FORMATS, retention_days: CONTRIB_RETENTION_DAYS },
+        note: "Rewards are a public badge and a verified-contribution count only. No credits, cash, perks or payout code exist.",
       }, noStore);
     }
     if (path === "/v1/owner/contributors/clusters" && m === "GET") {
-      return json(200, { clusters: await store.clusters(), note: "Funding sources shared by wallets of more than one key. Receipts from one cluster earn once per seller per UTC day." }, noStore);
+      return json(200, { clusters: await store.clusters(), note: "Funding sources shared by wallets of more than one key. Receipts from one cluster count once per seller per UTC day." }, noStore);
     }
     if (path === "/v1/owner/contributors/flags" && m === "GET") {
       const rows = await store.since(dayOf(now() - 7 * DAY_MS), 5000);
@@ -1185,7 +1092,7 @@ export function createContributors(deps: ContributorDeps) {
       const ok = await store.revoke(mm[1], now(), String(b?.reason ?? "revoked by owner").slice(0, 200), b?.forfeit === true);
       if (!ok) return err(404, "not_found");
       deps.log?.({ event: "contrib_key_revoked", key_id: mm[1], forfeit: b?.forfeit === true });
-      return json(200, { key_id: mm[1], status: "revoked", forfeited: b?.forfeit === true }, noStore);
+      return json(200, { key_id: mm[1], status: "revoked", badge_removed: b?.forfeit === true }, noStore);
     }
     mm = /^\/v1\/owner\/contributors\/(lck_[0-9a-f]{16})\/submissions$/.exec(path);
     if (mm && m === "GET") {
@@ -1195,9 +1102,10 @@ export function createContributors(deps: ContributorDeps) {
     return err(404, "not_found");
   }
 
+  /** A submission as shown to its own contributor or the owner: no paying wallet, no amount. */
   const publicRow = (s: Submission) => ({
-    tx_hash: s.tx_hash, day: s.day, mode: s.mode, endpoint: s.endpoint, network: s.network, asset: s.asset, amount: s.amount, outcome: s.outcome,
-    finding: s.finding, ...(creditsOn ? { credit_usd: s.credit_uusd / 1e6, credit_note: s.credit_note } : {}), kit_version: s.kit_version, disputed: !!s.dispute,
+    tx_hash: s.tx_hash, day: s.day, mode: s.mode, endpoint: s.endpoint, network: s.network, outcome: s.outcome,
+    finding: s.finding, kit_version: s.kit_version, disputed: !!s.dispute, counts: weighs(s),
     metrics: s.metrics ? JSON.parse(s.metrics) : null,
   });
 
@@ -1211,16 +1119,11 @@ export function createContributors(deps: ContributorDeps) {
     if (raw.length > 24_000) return err(413, "too_large");
     if (isOwner) return ownerRoutes(req, path, raw);
     if (path === "/v1/contrib/disputes" && req.method === "POST") return dispute(raw);
-    if (path === "/v1/contrib/bounties" && (req.method === "GET" || req.method === "HEAD")) {
-      return json(200, { kind: "contributor_bounties", ...CONTRIB_BOUNTIES, wanted: [], note: "Disabled. Planned after revenue: a wanted list of fixed bounties for testing specific sellers, paid from a capped budget. Nothing pays out today; rewards are free Lumi Check credits, badges and the leaderboard." }, noStore);
-    }
-    if (path === "/v1/contrib/leaderboard" && (req.method === "GET" || req.method === "HEAD")) {
-      const rows = (await leaderboard()).slice(0, 50).map(({ key_id: _k, ...r }) => r);
-      return json(200, {
-        kind: "contributor_leaderboard", window_days: CONTRIB_RETENTION_DAYS, rows, badges: CONTRIB_BADGES,
-        counts: "Verified receipts only: on-ledger payment checked, finding counted or confirmed, at most one per endpoint per UTC day per contributor. Held, disputed and contradicted receipts do not count.",
-        note: "Badges and rank (plus free Lumi Check credits, shown to each contributor only). No cash. Paying Lumi never changes a rank or badge. Contributors appear under a pseudonymous handle.",
-      }, { "Cache-Control": "public, max-age=300" });
+    const bm = /^\/v1\/contrib\/badge\/(contrib-[0-9a-f]{8})$/.exec(path);
+    if (bm && (req.method === "GET" || req.method === "HEAD")) {
+      const b = (await badgeTable()).find((x) => x.handle === bm[1]);
+      if (!b) return err(404, "not_found");
+      return json(200, { kind: "contributor_badge", ...badgeView(b) }, { "Cache-Control": "public, max-age=300" });
     }
     const a = await authContributor(req, raw);
     if (!a.ok) return a.res;
@@ -1235,20 +1138,17 @@ export function createContributors(deps: ContributorDeps) {
       }, noStore);
     }
     if (path === "/v1/contrib/me" && req.method === "GET") {
-      const t = now();
-      const c = await store.counts({ key_id: key.key_id, endpoint_key: "-", source: "-", day: dayOf(t), since_recent: dayOf(t), since_month: monthStart(t), tx_hash: "-" });
+      const c = await store.counts({ key_id: key.key_id, endpoint_key: "-", source: "-", day: dayOf(now()), tx_hash: "-" });
+      const mine = (await badgeTable()).find((x) => x.key_id === key.key_id);
       return json(200, {
         key_id: key.key_id, label: key.label, status: key.status, share_demand: key.share_demand, wallets: key.wallets,
         today: { accepted: c.key_day, cap: key.daily_cap ?? CAPS.key_daily },
-        ...(creditsOn ? { credits_month_usd: c.month_credit / 1e6, credits_month_cap_usd: CREDITS.monthly_cap_uusd / 1e6 } : { rewards: "check_credits_badges_leaderboard" }),
-        ...(await standing(key.key_id)),
-        check_credits: (({ spends: _s, ...b }) => b)(await creditBalance(key)),
+        rewards: "badge_only",
+        badge: mine ? badgeView(mine) : { handle: await handleOf(key.key_id), badges: [], verified_contributions: 0 },
         submissions: (await store.recentByKey(key.key_id, 50)).map(publicRow),
-        note: creditsOn ? "Your own submissions only. Credits are Lumi API credits, not cash." : "Your own submissions only. Rewards are free Lumi Check credits, badges, leaderboard rank, early access and higher rate limits. No cash.",
+        note: "Your own submissions only. Contributors get a public badge and a verified-contribution count, nothing of monetary value.",
       }, noStore);
     }
-    if (path === "/v1/contrib/credits" && req.method === "GET") return json(200, await creditBalance(key), noStore);
-    if (path === "/v1/contrib/credits/spend" && req.method === "POST") return spendCredits(req, raw, key);
     if (path === "/v1/contrib/me" && req.method === "DELETE") {
       let b: any; try { b = JSON.parse(raw || "{}"); } catch { return err(400, "invalid_json"); }
       if (b?.confirm !== key.key_id) return err(400, "confirm_key_id_required", { hint: "Send { confirm: \"<your key_id>\" } to delete this account. This cannot be undone." });
@@ -1271,148 +1171,42 @@ export function createContributors(deps: ContributorDeps) {
     return err(404, "not_found");
   }
 
-  // ---------------------------------------------------- rewards: badges + leaderboard (no cash)
+  // ---------------------------------------------------- rewards: badge only (nothing of monetary value)
 
-  async function leaderboard() {
+  const handleOf = async (key_id: string) => "contrib-" + (await sha256Hex("lumi-handle:" + key_id)).slice(0, 8);
+  /** Verified contributions per active key (no ranking is published). */
+  async function badgeTable() {
     const [rows, keys] = await Promise.all([store.since(dayOf(now() - CONTRIB_RETENTION_DAYS * DAY_MS), 50_000), store.listKeys()]);
     const active = new Set(keys.filter((k) => k.status === "active" && !k.forfeited).map((k) => k.key_id));
-    const by = new Map<string, { seen: Set<string>; verified: number; confirmed: number; endpoints: Set<string> }>();
+    const by = new Map<string, { seen: Set<string>; verified: number; confirmed: number }>();
     for (const r of rows) {
       if (!active.has(r.key_id) || !weighs(r)) continue;
-      const e = by.get(r.key_id) ?? { seen: new Set(), verified: 0, confirmed: 0, endpoints: new Set() };
+      const e = by.get(r.key_id) ?? { seen: new Set(), verified: 0, confirmed: 0 };
       const slot = `${r.endpoint_key}:${r.day}`;
-      if (!e.seen.has(slot)) { e.seen.add(slot); e.verified++; if (r.finding === "confirmed") e.confirmed++; e.endpoints.add(r.endpoint_key); }
+      if (!e.seen.has(slot)) { e.seen.add(slot); e.verified++; if (r.finding === "confirmed") e.confirmed++; }
       by.set(r.key_id, e);
     }
-    const list = await Promise.all([...by.entries()].map(async ([key_id, e]) => ({
-      key_id, handle: "contrib-" + (await sha256Hex("lumi-handle:" + key_id)).slice(0, 8), verified_receipts: e.verified, confirmed_findings: e.confirmed, endpoints: e.endpoints.size,
-      badges: badgesFor(e.verified, e.confirmed),
-    })));
-    list.sort((a, b) => b.verified_receipts - a.verified_receipts || b.endpoints - a.endpoints || a.handle.localeCompare(b.handle));
-    return list.map((x, i) => ({ rank: i + 1, ...x }));
+    return Promise.all([...by.entries()].map(async ([key_id, e]) => ({ key_id, handle: await handleOf(key_id), verified: e.verified, badges: badgesFor(e.verified, e.confirmed) })));
   }
   function badgesFor(verified: number, confirmed: number) {
     const out: string[] = CONTRIB_BADGES.filter((b) => verified >= b.min).map((b) => b.id);
     if (confirmed > 0) out.push("confirmed_finding");
     return out;
   }
-  async function standing(key_id: string) {
-    const me = (await leaderboard()).find((x) => x.key_id === key_id);
-    return { leaderboard: me ? { rank: me.rank, handle: me.handle, verified_receipts: me.verified_receipts } : { rank: null, verified_receipts: 0 }, badges: me?.badges ?? [] };
-  }
+  const badgeView = (b: { handle: string; verified: number; badges: string[] }) => ({
+    handle: b.handle, badges: b.badges, verified_contributions: b.verified, window_days: CONTRIB_RETENTION_DAYS,
+    counts: "Verified receipts only: on-ledger payment checked, finding counted or confirmed, at most one per seller endpoint per UTC day. Held, disputed and contradicted receipts do not count.",
+    note: "A badge is recognition only: no money, credits or perks, and it never changes any score.",
+  });
 
-  // ---------------------------------------------------- free Lumi Check credits (no cash)
-
-  /** Expiry boundary: lots earned before this UTC day have expired. */
-  const creditSince = () => dayOf(now() - CHECK_CREDIT_EXPIRY_DAYS * DAY_MS);
-
-  /**
-   * Credit lots: one per unique (seller, UTC day) with a verified, undisputed finding, worth perReceipt, expiring
-   * CHECK_CREDIT_EXPIRY_DAYS after that day. Spends record which lots they consumed (oldest first); balance = what is left
-   * in unexpired lots. Spends without an allocation (older rows) are allocated oldest-first here.
-   */
-  async function creditLedger(key: ContributorKey) {
-    const since = creditSince();
-    const [rows, spends] = await Promise.all([store.verifiedSince(key.key_id, since), store.spendsSince(key.key_id, since)]);
-    const lots = new Map<string, { lot: string; day: string; value: number; used: number }>();
-    if (!key.forfeited) for (const r of rows) {
-      if (!weighs(r) || r.day < since) continue;
-      const lot = `${(r.domain || r.pay_to || "?").toLowerCase()}:${r.day}`;
-      if (!lots.has(lot)) lots.set(lot, { lot, day: r.day, value: perReceipt, used: 0 });
-    }
-    const ordered = [...lots.values()].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.lot.localeCompare(b.lot)));
-    let unallocated = 0;
-    for (const sp of [...spends].sort((a, b) => a.ts - b.ts)) {
-      if (sp.alloc?.length) { for (const a of sp.alloc) { const l = lots.get(a.lot); if (l) l.used += a.n; } continue; }
-      let left = sp.cost;
-      for (const l of ordered) { if (left <= 0) break; const take = Math.min(left, Math.max(0, l.value - l.used)); l.used += take; left -= take; }
-      unallocated += left;
-    }
-    return { since, lots: ordered, spends, overdrawn: ordered.some((l) => l.used > l.value) || unallocated > 0 };
-  }
-
-  /** Oldest-first allocation of `cost` across unexpired lots; null if the balance is short. */
-  function allocate(lots: { lot: string; value: number; used: number }[], cost: number): CreditAlloc[] | null {
-    const out: CreditAlloc[] = [];
-    let left = cost;
-    for (const l of lots) { if (left <= 0) break; const take = Math.min(left, Math.max(0, l.value - l.used)); if (take > 0) { out.push({ lot: l.lot, n: take }); left -= take; } }
-    return left > 0 ? null : out;
-  }
-
-  async function creditBalance(key: ContributorKey) {
-    const L = await creditLedger(key);
-    const balance = L.lots.reduce((a, l) => a + Math.max(0, l.value - l.used), 0);
-    const earned = L.lots.reduce((a, l) => a + l.value, 0);
-    const spent = L.spends.reduce((a, x) => a + x.cost, 0);
-    const expiryOf = (day: string) => dayOf(Date.parse(day + "T00:00:00Z") + (CHECK_CREDIT_EXPIRY_DAYS + 1) * DAY_MS);
-    const live = L.lots.filter((l) => l.value - l.used > 0);
-    const soonDay = dayOf(now() + 7 * DAY_MS);
-    return {
-      kind: "lumi_check_credits", key_id: key.key_id, balance, earned, spent,
-      earning_slots: L.lots.length, per_verified_receipt: perReceipt, prices, expires_after_days: CHECK_CREDIT_EXPIRY_DAYS,
-      next_expiry: live.length ? { on: expiryOf(live[0].day), credits: live.filter((l) => l.day === live[0].day).reduce((a, l) => a + l.value - l.used, 0) } : null,
-      expiring_within_7_days: live.filter((l) => expiryOf(l.day) <= soonDay).reduce((a, l) => a + l.value - l.used, 0),
-      perks: { early_access: L.lots.length > 0, higher_rate_limit: L.lots.length > 0 ? { checks_per_minute: CONTRIB_PERK_CHECKS_PER_MINUTE } : null },
-      spends: L.spends.slice(0, 20).map(({ key_id: _k, alloc: _a, ...x }) => x),
-      rule: `One earning per seller per UTC day per contributor, for verified receipts only. Self-dealt, duplicate, held, disputed or contradicted receipts earn nothing. Credits are not cash, cannot be transferred or sold, are spent oldest first, and unused credits expire ${CHECK_CREDIT_EXPIRY_DAYS} days after they were earned.`,
-    };
-  }
-
-  async function spendCredits(req: Request, raw: string, key: ContributorKey): Promise<Response> {
-    let b: any; try { b = JSON.parse(raw); } catch { return err(400, "invalid_json"); }
-    const product = b?.product as CreditProduct;
-    if (!(product in prices)) return err(400, "unknown_product", { products: prices });
-    if (!deps.redeem) return err(503, "redeem_unavailable");
-    const input: Record<string, string> = {};
-    for (const [k, v] of Object.entries(b?.input ?? {})) if (typeof v === "string" || typeof v === "number") input[k] = String(v).slice(0, 500);
-    const cost = prices[product];
-    const L = await creditLedger(key);
-    const balanceBefore = L.lots.reduce((a, l) => a + Math.max(0, l.value - l.used), 0);
-    const alloc = allocate(L.lots, cost);
-    if (!alloc) return err(402, "insufficient_credits", { balance: balanceBefore, cost, hint: "Earn free Lumi Check credits with verified receipts, or pay with x402 as usual." });
-    const t = now();
-    const id = `spend_${t.toString(36)}_${(await sha256Hex(key.key_id + ":" + raw + ":" + Math.random())).slice(0, 10)}`;
-    // Reserve first, then re-check (concurrent spends cannot overdraw a lot: the loser is rolled back).
-    await store.addSpend({ id, key_id: key.key_id, ts: t, day: dayOf(t), product, cost, ref: null, alloc });
-    if ((await creditLedger(key)).overdrawn) { await store.deleteSpend(id); return err(402, "insufficient_credits", { balance: balanceBefore, cost }); }
-    let out: Awaited<ReturnType<NonNullable<ContributorDeps["redeem"]>>>;
-    try { out = await deps.redeem(product, input, new URL(req.url).origin); } catch { out = { ok: false, status: 503, error: { error: "data_unavailable" } }; }
-    if (!out.ok) { await store.deleteSpend(id); return json(out.status, { ...out.error, note: "No credits were spent." }, noStore); }
-    deps.log?.({ event: "contrib_credit_spend", product, cost }); // no key id, no query
-    return json(200, { ...out.body, lumi_credits: { spent: cost, balance: balanceBefore - cost, spend_id: id, note: "Paid with free Lumi Check credits. Credits never change a score, tier, ranking or badge." } }, noStore);
-  }
-
-  /** Activity for account retention: a signed check counts, recorded at most once per key per UTC day. */
-  const touched = new Map<string, string>();
-  async function touchActive(key: ContributorKey) {
-    const d = dayOf(now());
-    if (touched.get(key.key_id) === d || (key.last_active_day ?? "") >= d) return;
-    touched.set(key.key_id, d);
-    if (touched.size > 10_000) touched.clear();
-    await store.touch(key.key_id, d).catch(() => {});
-  }
   const activeSince = () => dayOf(now() - CONTRIB_ACTIVE_WINDOW_DAYS * DAY_MS);
   const isActive = (k: ContributorKey) => k.status === "active" && (k.last_active_day ?? dayOf(k.created_at)) >= activeSince();
 
-  /** PLACEHOLDER (flagged for Bobby): lists inactive keys only. Deletes, revokes and notifies nothing. Owner route only, never the cron. */
+  /** PLACEHOLDER (for the owner to confirm): lists inactive keys only. Deletes, revokes and notifies nothing. Owner route only, never the cron. */
   async function inactiveReview() {
     const keys = await store.listKeys();
     const inactive = keys.filter((k) => k.status === "active" && !isActive(k)).map((k) => ({ key_id: k.key_id, last_active_day: k.last_active_day ?? null, created_day: dayOf(k.created_at) }));
     return { kind: "contributor_inactive_review", active_window_days: CONTRIB_ACTIVE_WINDOW_DAYS, active_since: activeSince(), total_keys: keys.length, active: keys.filter(isActive).length, inactive, action: "none (placeholder: nothing is deleted, revoked or sent)" };
-  }
-
-  /** Higher /v1/check rate limit for contributors with a verified receipt (signed request). null = not a contributor request. */
-  async function checkPerk(req: Request): Promise<{ ok: true } | { ok: false; res: Response } | null> {
-    if (!req.headers.get("Lumi-Contributor-Key")) return null;
-    const a = await authContributor(req, "");
-    if (!a.ok) return null; // fall back to the anonymous free limit
-    await touchActive(a.key);
-    const bal = await creditBalance(a.key);
-    if (!bal.perks.higher_rate_limit) return null;
-    const t = now(), m = perkMinute.get(a.key.key_id);
-    if (m && t - m.at < 60_000) { if (++m.n > CONTRIB_PERK_CHECKS_PER_MINUTE) return { ok: false, res: err(429, "rate_limited", { limit_per_minute: CONTRIB_PERK_CHECKS_PER_MINUTE }) }; }
-    else perkMinute.set(a.key.key_id, { at: t, n: 1 });
-    return { ok: true };
   }
 
   /** Retention: drop submissions older than CONTRIB_RETENTION_DAYS (run from the cron and the owner route). */
@@ -1420,7 +1214,7 @@ export function createContributors(deps: ContributorDeps) {
     const before = dayOf(now() - CONTRIB_RETENTION_DAYS * DAY_MS);
     const deleted = await store.purge(before);
     deps.log?.({ event: "contrib_purge", deleted });
-    return { retention_days: CONTRIB_RETENTION_DAYS, before_day: before, deleted, accounts: `kept while active (receipt or signed check within ${CONTRIB_ACTIVE_WINDOW_DAYS} days); never purged here` };
+    return { retention_days: CONTRIB_RETENTION_DAYS, before_day: before, deleted, accounts: `kept while active (receipt within ${CONTRIB_ACTIVE_WINDOW_DAYS} days); never purged here` };
   }
 
   /** Queue consumer for lumi-contrib-writes: every message's ops in ONE D1 batch. */
@@ -1439,6 +1233,6 @@ export function createContributors(deps: ContributorDeps) {
     return rows;
   }
 
-  return { handle, consume, purge, leaderboard, checkPerk, inactiveReview, rules: { credits: CREDITS, caps: CAPS, credits_enabled: creditsOn, cash_bounties: CONTRIB_BOUNTIES, check_credits: { per_verified_receipt: perReceipt, prices, expires_after_days: CHECK_CREDIT_EXPIRY_DAYS }, retention_days: CONTRIB_RETENTION_DAYS, active_window_days: CONTRIB_ACTIVE_WINDOW_DAYS }, _boostFlag: boostFlag, _credit: credit };
+  return { handle, consume, purge, badgeTable, inactiveReview, rules: { rewards: "badge_only" as const, caps: CAPS, retention_days: CONTRIB_RETENTION_DAYS, active_window_days: CONTRIB_ACTIVE_WINDOW_DAYS }, _boostFlag: boostFlag };
 }
 export type Contributors = ReturnType<typeof createContributors>;

@@ -1,4 +1,4 @@
--- Lumi Check v0 (DRAFT, branch scanner-kit-v0; NOT applied to production).
+-- Lumi Check v0 (DRAFT; NOT applied to production).
 -- Tier-1 anonymous delivery outcomes: per-day, per-subject counters only (no wallet, amount, tx, URL query, payload, IP or client id).
 -- Raw rows: deleted 90 days after their day, only once rolled up (0019). WITHOUT ROWID: one B-tree, no extra index writes.
 CREATE TABLE IF NOT EXISTS check_outcomes (

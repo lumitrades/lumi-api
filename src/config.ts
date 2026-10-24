@@ -65,11 +65,6 @@ export interface Env {
   LUMI_CHECK_SIGNING_KEY?: string;
   /** Lumi Check v0: scoped key for the owner contributor routes (/v1/owner/contributors*). Falls back to OWNER_MCP_KEY when unset. */
   CONTRIB_ADMIN_KEY?: string;
-  /** Legacy USD credits / cash bounties. Default off ("true" re-enables the dormant accounting; there is no payout code). */
-  CONTRIB_CASH_BOUNTIES_ENABLED?: string;
-  /** Free Lumi Check credits per verified receipt (placeholder default 5) and redemption prices JSON. */
-  CONTRIB_CHECK_CREDITS_PER_RECEIPT?: string;
-  CONTRIB_CHECK_CREDIT_PRICES?: string;
   /** Public base URL used in docs/discovery (e.g. https://api.lumitrades.io). */
   PUBLIC_BASE_URL?: string;
   /** EVM (Base) receiving address for USDC over x402 (address only, never a key). Unset = Base payments off. */
@@ -124,8 +119,6 @@ export interface Env {
   TRUST_QUEUE?: { sendBatch(messages: { body: unknown }[]): Promise<unknown> };
   /** Lumi Check contributions write queue (lumi-contrib-writes). Absent = writes inline. */
   CONTRIB_QUEUE?: { send(body: unknown): Promise<unknown> };
-  /** JSON overrides for contributor credit weights / caps (see src/trust/contributors.ts DEFAULT_CREDITS / DEFAULT_CAPS). */
-  CONTRIB_CREDITS?: string;
   CONTRIB_CAPS?: string;
   /** Oldest accepted scanner-kit version (semver), and comma-separated retired versions. */
   CONTRIB_KIT_MIN_VERSION?: string;
