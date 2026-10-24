@@ -43,8 +43,9 @@ import { D1FeedStore, MemoryFeedStore, FEEDS, dueFeed, refreshFeed, feedFresh, t
 import { liteView, scanView, fundingView, fearGreedView, fearGreedFromContext, events48View, trustVerdict } from "./quick";
 import { lookupError } from "./trust/index";
 import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
-import { originPath, checkPayload, badgeDecision, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_MIN_SCORE, BADGE_MIN_PAID_TESTS, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
-import { curatedByHost } from "./trust/badge";
+import { signingSecretSeparate } from "./trust/lumi_keys";
+import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
+import { curatedByHost, badgeDocs } from "./trust/badge";
 import type { LookupQuery } from "./trust/catalog";
 import { D1LiveStore, MemoryLiveStore, refreshLive, isFresh, LIVE_UNIVERSE, LIVE_MAX_AGE_MS, LIVE_CYCLE_MS, type LiveStore } from "./live";
 import { mcpServerCard, agentsJson } from "./wellknown";
@@ -328,12 +329,15 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (!h || t - h.t > 60_000) { outcomeHits.set(ip, { t, n: 1 }); return false; }
     return ++h.n > 120;
   };
+  // LUMI_CHECK_SIGNING_KEY signs answers; CONTRIB_ADMIN_KEY (else OWNER_MCP_KEY) is the separate admin credential. If one
+  // secret is reused for both, fail closed: no signing with it and no contributor admin routes.
+  const secretReused = !signingSecretSeparate(env);
   const contributors = createContributors({
     store: opts.contributorStore ?? (env.TRUST_DB ? new D1ContributorStore(env.TRUST_DB) : new MemoryContributorStore()),
     fetch: doFetch,
     now,
-    ownerKey: env.OWNER_MCP_KEY,
-    adminKey: env.CONTRIB_ADMIN_KEY,
+    ownerKey: secretReused ? undefined : env.OWNER_MCP_KEY,
+    adminKey: secretReused ? undefined : env.CONTRIB_ADMIN_KEY,
     // Contributed receipts are mainnet-only (xrpl:0), whatever network this deployment sells on.
     xrplRpc: split(env.XRPL_RPC_URLS).length && config.network === "xrpl:0" ? split(env.XRPL_RPC_URLS) : DEFAULT_XRPL_RPC["xrpl:0"],
     baseRpc,
@@ -389,7 +393,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
 
   // Lumi Check v0: dedicated ed25519 response-signing key (Worker secret LUMI_CHECK_SIGNING_KEY; never logged).
   let signKeyMemo: Promise<SigningKey | null> | undefined;
-  const signKey = () => (signKeyMemo ??= signingKeyFrom(env.LUMI_CHECK_SIGNING_KEY));
+  const signKey = () => (signKeyMemo ??= secretReused ? Promise.resolve(null) : signingKeyFrom(env.LUMI_CHECK_SIGNING_KEY));
 
   /** Live score summary for a host or vendor id (curated vendors only; everything else is "not_scored"). */
   async function liveScore(keyOrHost: string) {
@@ -467,7 +471,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   /** Earned-only "Tested by Lumi" badge: decision from the live score only, signed and short-lived. */
   async function earnedBadge(key: string, ext: "json" | "svg", base: string): Promise<Response> {
     const s = await liveScore(key);
-    const d = s ? badgeDecision({ score: s.score, last_conclusive: s.last_conclusive, status: s.status }) : { earned: false as const, reason: "not_scored" };
+    const th = badgeThresholds(env);
+    const d = s ? badgeDecision({ score: s.score, last_conclusive: s.last_conclusive, status: s.status }, th) : { earned: false as const, reason: "not_scored" };
     const live = `${base}/trust/v/${encodeURIComponent(s?.vendor_id ?? key)}`;
     const headers = { "Cache-Control": BADGE_CACHE, "Access-Control-Allow-Origin": "*" };
     if (ext === "svg") {
@@ -478,7 +483,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       subject: s ? { vendor_id: s.vendor_id, name: s.name } : { key: key.slice(0, 200) },
       earned: d.earned, reason: d.reason,
       score: s ? { value: s.score.value, confidence: s.score.confidence, paid_test_buys: s.score.samples.paid_test_buys } : null,
-      threshold: { min_score: BADGE_MIN_SCORE, min_paid_test_buys: BADGE_MIN_PAID_TESTS, latest_test_buy: "delivered" },
+      threshold: { min_score: th.minScore, min_paid_test_buys: th.minPaidTests, latest_test_buy: "delivered" },
       live_report: live,
       embed: d.earned ? `<a href="${live}"><img src="${base}/v1/badge/${encodeURIComponent(s?.vendor_id ?? key)}.svg" alt="Tested by Lumi (live score)"></a>` : null,
       purchasable: false,
@@ -852,7 +857,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     // Lumi Check v0: free signed pre-pay check, signing keys, earned-only signed badge.
     if (request.method === "GET" || request.method === "HEAD") {
       if (path === "/v1/check") return freeCheck(request, url, base, ctx);
-      if (path === "/v1/check/keys" || path === "/.well-known/lumi-keys.json") return json(200, keysDoc(await signKey(), base), { "Cache-Control": "public, max-age=3600" });
+      if (path === "/v1/check/keys" || path === "/.well-known/lumi-keys.json") return json(200, keysDoc(await signKey(), base, { secretReused }), { "Cache-Control": "public, max-age=3600" });
+      if (path === "/v1/badge") return json(200, badgeDocs(base, badgeThresholds(env)), { "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" });
       const eb = /^\/v1\/badge\/([^/]{1,200})\.(json|svg)$/.exec(path);
       if (eb) { const k = safeDecode(eb[1]); if (k) return earnedBadge(k, eb[2] as "json" | "svg", base); }
     }
@@ -1381,7 +1387,7 @@ export function prefersHtml(accept: string | null | undefined): boolean {
 
 /** API sitemap: the human and machine-readable entry points (paid routes are listed in /openapi.json, not here). */
 export function sitemapXml(base: string): string {
-  const paths = ["/", "/llms.txt", "/skill.md", "/openapi.json", "/.well-known/x402", "/.well-known/agent-card.json", "/.well-known/mcp/server-card.json", "/.well-known/agents.json", "/v1/samples", "/v1/coins", "/v1/trust/vendors", "/v1/trust/methodology", "/v1/trust/catalog", "/badge", "/v1/monitor", "/v1/monitor/sellers", "/v1/monitor/corrections", "/v1/feed", "/v1/feed/license"];
+  const paths = ["/", "/llms.txt", "/skill.md", "/openapi.json", "/.well-known/x402", "/.well-known/agent-card.json", "/.well-known/mcp/server-card.json", "/.well-known/agents.json", "/v1/samples", "/v1/coins", "/v1/trust/vendors", "/v1/trust/methodology", "/v1/trust/catalog", "/v1/badge", "/v1/monitor", "/v1/monitor/sellers", "/v1/monitor/corrections", "/v1/feed", "/v1/feed/license"];
   const day = new Date().toISOString().slice(0, 10);
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
     paths.map((p) => `  <url><loc>${base}${p}</loc><lastmod>${day}</lastmod><changefreq>daily</changefreq></url>`).join("\n") +

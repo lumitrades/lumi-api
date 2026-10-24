@@ -20,7 +20,7 @@ sent (query strings are dropped). Paying Lumi never changes any score, tier, ran
 ```js
 import { createLumiCheck, x402BeforePaymentHook, mcpOnPaymentRequiredHook, withOutcomeReporting } from "lumi-check";
 
-const lumi = createLumiCheck();             // fail-open, 2.5 s timeout; pin keys with { publicKeys: ["<hex>"] }
+const lumi = createLumiCheck();             // fail-open, 2.5 s timeout; verdicts must be signed by a pinned Lumi key
 
 // From code
 const r = await lumi.check({ url: "https://seller.example/x402/data", payTo: "0x...", amountUsd: 0.01, network: "eip155:8453" });
@@ -40,11 +40,18 @@ CLI: `lumi-scan check https://seller.example/x402/data --pay-to 0x... --amount 0
 
 **Fail mode (defaults):** `fail_mode: "open"` with `timeout_ms: 2500`. If Lumi is slow,
 unreachable, or returns a verdict whose signature does not verify, the result is `warn` (`lumi_unreachable` /
-`lumi_unverified`) and the payment goes ahead. Set `"fail_mode": "closed"` in the config (or `failMode: "closed"`) to
+`lumi_unverified`, or `lumi_untrusted_key` / `lumi_retired_key` when it is signed by a key that is not pinned) and the
+payment goes ahead. Set `"fail_mode": "closed"` in the config (or `failMode: "closed"`) to
 block instead. The detailed paid check (`/v1/trust/check`, x402) adds reason details and a signed `lumi_receipt`.
 
-Verify any Lumi-signed response yourself: `verifyLumiSigned(response, { publicKeys })`, keys at
-`/v1/check/keys` (or `/.well-known/lumi-keys.json`).
+**Pinned keys.** The kit ships Lumi's signing public keys in `src/lumi_keys.js` (`LUMI_SIGNING_KEYS`, with a rotation
+status: `next`, `active` or `retired`) and never fetches keys at runtime, so whoever answers a request cannot choose the
+key it is checked against. A verdict or receipt signed by any other key is rejected with `lumi_untrusted_key` (a retired
+key: `lumi_retired_key`); a key rotation ships as a kit update. Current key: `lsk_5c8c2f54fd228547`.
+`/v1/check/keys` lists the same keys for reference only.
+
+Verify any Lumi-signed response yourself: `verifyLumiSigned(response)` checks against the pinned keys; the result has
+`ok`, `errors`, and on failure `error` + `detail`. `{ publicKeys }` replaces the pins (tests or a self-hosted Lumi only).
 
 ## What is shared
 

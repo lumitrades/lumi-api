@@ -593,8 +593,8 @@ export const CONTRIB_RETENTION_DAYS = 90;
 /**
  * Contributor accounts (keys, wallets) are NOT purged at 90 days: they are kept while active. Active = not revoked and a
  * verified-or-pending receipt accepted within the last CONTRIB_ACTIVE_WINDOW_DAYS (a new key counts from its creation).
- * PLACEHOLDER definition for the owner to confirm. Inactive handling is a placeholder that only lists keys
- * (GET /v1/owner/contributors/inactive); it deletes, revokes or notifies nothing.
+ * Definition approved by the owner (Oct 23 2026): activity in the last 365 days. What happens to an INACTIVE account is not
+ * decided yet, so the owner route (GET /v1/owner/contributors/inactive) only lists them; it deletes, revokes or notifies nothing.
  */
 export const CONTRIB_ACTIVE_WINDOW_DAYS = 365;
 /**
@@ -1208,11 +1208,11 @@ export function createContributors(deps: ContributorDeps) {
   const activeSince = () => dayOf(now() - CONTRIB_ACTIVE_WINDOW_DAYS * DAY_MS);
   const isActive = (k: ContributorKey) => k.status === "active" && (k.last_active_day ?? dayOf(k.created_at)) >= activeSince();
 
-  /** PLACEHOLDER (for the owner to confirm): lists inactive keys only. Deletes, revokes and notifies nothing. Owner route only, never the cron. */
+  /** Lists inactive keys only (inactive handling not decided yet). Deletes, revokes and notifies nothing. Owner route only, never the cron. */
   async function inactiveReview() {
     const keys = await store.listKeys();
     const inactive = keys.filter((k) => k.status === "active" && !isActive(k)).map((k) => ({ key_id: k.key_id, last_active_day: k.last_active_day ?? null, created_day: dayOf(k.created_at) }));
-    return { kind: "contributor_inactive_review", active_window_days: CONTRIB_ACTIVE_WINDOW_DAYS, active_since: activeSince(), total_keys: keys.length, active: keys.filter(isActive).length, inactive, action: "none (placeholder: nothing is deleted, revoked or sent)" };
+    return { kind: "contributor_inactive_review", active_window_days: CONTRIB_ACTIVE_WINDOW_DAYS, active_since: activeSince(), total_keys: keys.length, active: keys.filter(isActive).length, inactive, action: "none (inactive handling not decided: nothing is deleted, revoked or sent)" };
   }
 
   /** Retention: drop submissions older than CONTRIB_RETENTION_DAYS (run from the cron and the owner route). */

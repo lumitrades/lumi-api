@@ -32,9 +32,25 @@ export function originPath(u: string | null | undefined): string | null {
 
 export const CHECK_SIGNED_TTL_SEC = 15 * 60;
 export const BADGE_SIGNED_TTL_SEC = 15 * 60;
-/** Badge thresholds (earned-only + auto-removal approved by the owner on Oct 23 2026; the numbers are a DRAFT pending owner approval). */
+/**
+ * Badge thresholds, approved by the owner on Oct 23 2026 (earned-only, auto-removal, score >= 80 AND >= 3 conclusive paid
+ * Lumi test-buys). These are the defaults; a deployment can override them with the BADGE_MIN_SCORE /
+ * BADGE_MIN_PAID_TESTS vars (see badgeThresholds). Inconclusive test-buys never count toward the minimum.
+ */
 export const BADGE_MIN_SCORE = 80;
 export const BADGE_MIN_PAID_TESTS = 3;
+export interface BadgeThresholds { minScore: number; minPaidTests: number }
+export const DEFAULT_BADGE_THRESHOLDS: Readonly<BadgeThresholds> = Object.freeze({ minScore: BADGE_MIN_SCORE, minPaidTests: BADGE_MIN_PAID_TESTS });
+
+/** Thresholds from env overrides; anything missing or out of range (score 1..100, tests integer >= 1) keeps the default. */
+export function badgeThresholds(env: { BADGE_MIN_SCORE?: string; BADGE_MIN_PAID_TESTS?: string } = {}): BadgeThresholds {
+  const num = (v: string | undefined) => (v == null || v.trim() === "" ? NaN : Number(v));
+  const sc = num(env.BADGE_MIN_SCORE), pt = num(env.BADGE_MIN_PAID_TESTS);
+  return {
+    minScore: Number.isFinite(sc) && sc >= 1 && sc <= 100 ? sc : BADGE_MIN_SCORE,
+    minPaidTests: Number.isInteger(pt) && pt >= 1 && pt <= 1000 ? pt : BADGE_MIN_PAID_TESTS,
+  };
+}
 export const BADGE_CACHE = "public, max-age=300, s-maxage=300";
 
 export interface ScoreInput {
@@ -45,15 +61,15 @@ export interface ScoreInput {
 
 /**
  * Earned-only rule. Inputs are the live score only; extra fields (e.g. monitoring or payment status) are ignored by design.
- * Earned = score >= BADGE_MIN_SCORE, at least BADGE_MIN_PAID_TESTS conclusive Lumi test-buys in the window, the latest
+ * Earned = score >= minScore (default BADGE_MIN_SCORE), at least minPaidTests (default BADGE_MIN_PAID_TESTS) conclusive Lumi test-buys in the window, the latest
  * conclusive test-buy delivered, and the vendor is not currently unreachable.
  */
-export function badgeDecision(s: { score: ScoreInput; last_conclusive: "delivered" | "not_delivered" | null; status?: string }) {
+export function badgeDecision(s: { score: ScoreInput; last_conclusive: "delivered" | "not_delivered" | null; status?: string }, t: BadgeThresholds = DEFAULT_BADGE_THRESHOLDS) {
   const v = s.score.value;
   const conclusive = (s.score.samples.paid_test_buys ?? 0) - (s.score.samples.inconclusive_test_buys ?? 0);
   if (v == null) return { earned: false as const, reason: "not_scored" };
-  if (conclusive < BADGE_MIN_PAID_TESTS) return { earned: false as const, reason: "too_few_lumi_test_buys" };
-  if (v < BADGE_MIN_SCORE) return { earned: false as const, reason: "score_below_threshold" };
+  if (conclusive < t.minPaidTests) return { earned: false as const, reason: "too_few_lumi_test_buys" };
+  if (v < t.minScore) return { earned: false as const, reason: "score_below_threshold" };
   if (s.last_conclusive !== "delivered") return { earned: false as const, reason: "latest_test_buy_not_delivered" };
   if (s.status === "unreachable") return { earned: false as const, reason: "currently_unreachable" };
   return { earned: true as const, reason: "score_at_or_above_threshold" };
