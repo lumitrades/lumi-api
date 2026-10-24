@@ -107,8 +107,19 @@ export default {
     ctx.waitUntil(appFor(env).scheduled().catch((e) => console.error(JSON.stringify({ event: "trust_probe_error", error: String(e) }))));
   },
   /** Queue consumer (lumi-trust-jobs, batch size 1): one catalog ingest page or one quote-check slice per invocation. */
-  async queue(batch: { messages: { body: CatalogJob; ack(): void; retry(o?: { delaySeconds?: number }): void }[] }, env: Env): Promise<void> {
+  async queue(batch: { queue?: string; messages: { body: CatalogJob; ack(): void; retry(o?: { delaySeconds?: number }): void }[] }, env: Env): Promise<void> {
     const a = appFor(env);
+    // Lumi Check contributions (lumi-contrib-writes): the whole batch lands in ONE D1 batch, on its own write budget.
+    if (batch.queue === CONTRIB_QUEUE_NAME || (batch.messages[0]?.body as any)?.kind === "contrib_write") {
+      try {
+        await a.contribQueue(batch.messages.map((m) => m.body));
+        for (const m of batch.messages) m.ack();
+      } catch (e) {
+        console.error(JSON.stringify({ event: "contrib_write_error", n: batch.messages.length, error: String(e) }));
+        for (const m of batch.messages) m.retry({ delaySeconds: 120 });
+      }
+      return;
+    }
     for (const m of batch.messages) {
       try {
         await a.queue(m.body);
@@ -120,5 +131,7 @@ export default {
     }
   },
 };
+
+const CONTRIB_QUEUE_NAME = "lumi-contrib-writes";
 
 export { InvoiceGuard } from "./invoice-guard";

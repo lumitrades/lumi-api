@@ -11,6 +11,7 @@ import { z } from "zod";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createClient, loadSettings, assetLabel } from "./lumi.js";
+import { registerContribTools } from "./contrib.js";
 
 const VENDOR_LOOKUP_DESCRIPTION =
   "Free. Check an x402 seller before you pay it: pass url (the resource you are about to buy), domain, or payTo (the address in its 402 quote, case-insensitive). Lumi ingests the full CDP x402 Bazaar catalog daily and runs free, unpaid 402-quote checks of listings on a rotating schedule (valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response), labelled 'quote-verified, low confidence', plus Lumi's own test-buys confirmed on-chain, labelled 'purchase-verified' and counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated list, separately). Answer-only: tx evidence is in the paid trust check. Observations, not ratings; no match is not a negative signal. With no arguments: the curated XRPL vendor scores and catalog counts; vendor_id gives one curated vendor's summary (tx evidence is in the paid vendor report).";
@@ -102,9 +103,10 @@ const MARKET_IDEAS_NOTICE = "Paper-trade analysis, not investment advice. Lumi d
 const MARKET_IDEAS_TOOLS = new Set(["lumi_signal", "lumi_lite", "lumi_scan", "lumi_slate", "lumi_trades", "lumi_levels"]);
 const text = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] });
 
-export function buildServer(client) {
+export function buildServer(client, opts = {}) {
   const server = new McpServer({ name: "lumi-trades-mcp", version: VERSION });
   const s = client.settings;
+  registerContribTools(server, s, opts.contrib);
 
   server.registerTool(
     "lumi_catalog",

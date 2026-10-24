@@ -1,0 +1,14 @@
+Lumi Check
+Copyright 2026 Lumi Trades
+
+This product (the Lumi Check client code in this directory) is licensed under the Apache License,
+Version 2.0. See LICENSE.
+
+Scope. The license covers only the client source code distributed in this package. It does NOT grant any
+rights in, and does not license:
+  - Lumi's pooled dataset of submissions, observations and test results;
+  - Lumi's scoring, selection, anti-fraud logic and verification server;
+  - contributor keys issued by Lumi (they are revocable credentials, not property);
+  - the names "Lumi", "Lumi Trades" and "Tested by Lumi", and Lumi's badges and logos.
+Use of Lumi's API and contributor program is governed by Lumi's terms (TERMS.md, DRAFT), not by this license.
+Apache-2.0 section 6 (Trademarks) applies: no permission is granted to use Lumi's trade names or marks.

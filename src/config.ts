@@ -61,6 +61,10 @@ export interface Env {
   PRIVATE_NAMES?: string;
   /** Owner access key for the remote MCP endpoint (/mcp): paid tools return data free. `wrangler secret put OWNER_MCP_KEY`. */
   OWNER_MCP_KEY?: string;
+  /** Lumi Check v0: ed25519 seed (64 hex) that signs check responses and badge verdicts. Not a wallet key. `wrangler secret put LUMI_CHECK_SIGNING_KEY`. Unset = unsigned (signature null). */
+  LUMI_CHECK_SIGNING_KEY?: string;
+  /** Lumi Check v0: scoped key for the owner contributor routes (/v1/owner/contributors*). Falls back to OWNER_MCP_KEY when unset. */
+  CONTRIB_ADMIN_KEY?: string;
   /** Public base URL used in docs/discovery (e.g. https://api.lumitrades.io). */
   PUBLIC_BASE_URL?: string;
   /** EVM (Base) receiving address for USDC over x402 (address only, never a key). Unset = Base payments off. */
@@ -113,6 +117,18 @@ export interface Env {
   TRUST_BUYER_STELLAR?: string;
   /** Cloudflare Queue producer for catalog ingest / quote-check jobs (Workers Free: fan-out keeps each invocation small). */
   TRUST_QUEUE?: { sendBatch(messages: { body: unknown }[]): Promise<unknown> };
+  /** Lumi Check contributions write queue (lumi-contrib-writes). Absent = writes inline. */
+  CONTRIB_QUEUE?: { send(body: unknown): Promise<unknown> };
+  CONTRIB_CAPS?: string;
+  /** Oldest accepted scanner-kit version (semver), and comma-separated retired versions. */
+  CONTRIB_KIT_MIN_VERSION?: string;
+  CONTRIB_KIT_RETIRED?: string;
+  /** Comma-separated funder addresses ignored when grouping contributor wallets by funding source (exchange hot wallets). */
+  CONTRIB_FUNDER_IGNORE?: string;
+  /** Etherscan-compatible explorer API for Base first-funder lookups (default https://base.blockscout.com/api). */
+  CONTRIB_BASE_EXPLORER_API?: string;
+  /** Workers Rate Limiting binding for contributor requests (wrangler.toml [[unsafe.bindings]] type "ratelimit"; not bound by default). */
+  CONTRIB_RATE_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   /** Sales alert (optional, off unless set): incoming-webhook URL (Slack/Discord/generic JSON POST). */
   SALES_WEBHOOK_URL?: string;
   /** Sales alert by email (optional): recipient; needs the SALES_EMAIL send_email binding and SALES_ALERT_FROM. */
