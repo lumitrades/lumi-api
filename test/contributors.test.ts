@@ -269,6 +269,11 @@ describe("signed submissions", () => {
     const bad = await s.submit(a, fat);
     expect(bad.status).toBe(422);
     expect(bad.j).toMatchObject({ error: "receipt_payment_fields_not_allowed", fields: ["amount", "asset", "payer"] });
+    // price data hidden in measurements is refused too (the stored copy is the signed receipt)
+    const priced = await kit.signReceipt({ ...body, x_lumi_contrib: { ...body.x_lumi_contrib, measurements: { latency_ms: 5, quotes: [{ amount: "0.001", pay_to: "rX" }] } } }, await kit.signerFor("xrpl:0", wallet(1).seed));
+    const bad2 = await s.submit(a, priced);
+    expect(bad2.status).toBe(422);
+    expect(bad2.j).toMatchObject({ error: "receipt_payment_fields_not_allowed", fields: ["x_lumi_contrib.measurements.quotes"] });
     expect((await s.submit(a, r)).status).toBe(202);
     const me: any = await (await s.signed(a, "GET", "/v1/contrib/me")).json();
     expect(me.submissions[0]).not.toHaveProperty("amount");
