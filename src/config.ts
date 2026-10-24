@@ -111,6 +111,8 @@ export interface Env {
   TRUST_BUYER_EVM?: string;
   /** Comma-separated Stellar G-addresses whose payments count as Lumi test-buys (default: Lumi's Stellar wallet). */
   TRUST_BUYER_STELLAR?: string;
+  /** Max sellers per UTC day that trust checks (free or paid, same rule) move to the front of the Base test-buy queue (default 5). */
+  TRUST_PRIORITY_DAILY_CAP?: string;
   /** Cloudflare Queue producer for catalog ingest / quote-check jobs (Workers Free: fan-out keeps each invocation small). */
   TRUST_QUEUE?: { sendBatch(messages: { body: unknown }[]): Promise<unknown> };
   /** Sales alert (optional, off unless set): incoming-webhook URL (Slack/Discord/generic JSON POST). */

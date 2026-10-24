@@ -30,7 +30,7 @@ import { D1TrustStore, MemoryTrustStore, type TrustStore } from "./trust/store";
 import { SEED_OBSERVATIONS } from "./trust/seed";
 import { isStorageQuotaError, storageUnavailableBody } from "./trust/storage_errors";
 import { D1CatalogStore, MemoryCatalogStore, type CatalogStore } from "./trust/catalog";
-import { createCatalog, buyCandidate, type Catalog, type CatalogJob, type QueueLike } from "./trust/catalog_service";
+import { createCatalog, buyCandidate, PRIORITY_DAILY_CAP, type Catalog, type CatalogJob, type QueueLike } from "./trust/catalog_service";
 import { D1EvidenceStore, MemoryEvidenceStore, type EvidenceStore } from "./trust/evidence";
 import { D1ReceiptStore, MemoryReceiptStore, type ReceiptStore } from "./trust/receipts";
 import { productSample, sampleEntry, SAMPLE_ARGS, SAMPLE_LABEL } from "./samples";
@@ -91,8 +91,14 @@ const DEFAULT_XRPL_RPC: Record<string, string[]> = {
   "xrpl:2": ["https://s.devnet.rippletest.net:51234/"],
 };
 
+/** TRUST_PRIORITY_DAILY_CAP: non-negative integer; unset or invalid = default (5). "0" turns check-driven priority off. */
+export function priorityCap(v: string | undefined): number {
+  const n = v == null || v.trim() === "" ? NaN : Number(v);
+  return Number.isInteger(n) && n >= 0 && n <= 1000 ? n : PRIORITY_DAILY_CAP;
+}
+
 export type Prepared =
-  | { ok: true; route: PaidRoute; coin?: CoinRef; body: Record<string, unknown>; onPaid?: () => Promise<unknown> }
+  | { ok: true; route: PaidRoute; coin?: CoinRef; body: Record<string, unknown>; onServed?: () => Promise<unknown> }
   | { ok: false; status: number; error: Record<string, unknown>; headers?: Record<string, string> };
 
 export interface App {
@@ -269,6 +275,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     now,
     log: (e) => deps.log?.(e),
     queue: opts.queue ?? (env.TRUST_QUEUE as QueueLike | undefined),
+    priorityDailyCap: priorityCap(env.TRUST_PRIORITY_DAILY_CAP),
     xrplRpc,
     baseRpc,
     receipts: receiptStore,
@@ -306,6 +313,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     stellarBuyers,
     stellarHorizon,
     annotate: (doc, payTos) => commerce.annotate(doc, payTos),
+    // Free lookups by exact URL feed the same test-buy priority signal as the paid trust/check (payment never changes the order).
+    onFreeCheck: (q, base) => (q.url ? checkSignal({ url: q.url, ...(q.payTo ? { payTo: q.payTo } : {}) }, base, "free_lookup") : Promise.resolve(null)),
   });
   const badges = createBadges({
     now,
@@ -514,19 +523,49 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const err = lookupError({ url, ...(payTo ? { payTo } : {}) }, { url: true, payTo: payTo !== undefined }, "check");
     if (err) return { ok: false, status: 400, error: { ...err, note: "Not charged." } };
     if (amountRaw && !(amountUsd !== undefined && Number.isFinite(amountUsd) && amountUsd >= 0 && amountUsd < 1e6)) return bad("amount must be a USD number, e.g. 0.01.");
-    let host = "";
-    try { host = new URL(url).hostname.toLowerCase(); } catch { return bad("url must be an absolute http(s) URL."); }
+    try { new URL(url); } catch { return bad("url must be an absolute http(s) URL."); }
     try {
-      const exact = (await trust.lookup({ url } as LookupQuery, base)) as any;
-      const hasExact = !!exact?.self || (exact?.catalog?.entries?.length ?? 0) > 0;
-      const dom = hasExact ? null : ((await trust.lookup({ domain: host } as LookupQuery, base)) as any);
-      const body = trustVerdict({ url, payTo, amountUsd, network: sp.get("network") ?? undefined }, exact, dom, base);
+      const { body, exact } = await checkVerdict({ url, payTo, amountUsd, network: sp.get("network") ?? undefined }, base);
       const t = now();
       const meta = metaFrom(t, t + 86_400_000, t + 30 * 60_000, t);
-      const cand = buyCandidate(body as any, exact);
-      return { ok: true, route: "trust_check", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)), ...(cand ? { onPaid: () => catalog.queueBuy(cand) } : {}) };
+      // Runs once the check is served, paid or free trial: the same priority signal either way.
+      return { ok: true, route: "trust_check", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)), onServed: () => prioritySignal(body, exact, "trust_check") };
     } catch (e) {
       return notForSale("data_unavailable", "the trust catalog is unavailable right now", 60, null);
+    }
+  }
+
+  /** The trust/check verdict from the full (non-free) lookup. Shared by every check surface so the priority signal is identical. */
+  async function checkVerdict(input: { url: string; payTo?: string; amountUsd?: number; network?: string }, base: string) {
+    const exact = (await trust.lookup({ url: input.url } as LookupQuery, base)) as any;
+    const hasExact = !!exact?.self || (exact?.catalog?.entries?.length ?? 0) > 0;
+    let host = "";
+    try { host = new URL(input.url).hostname.toLowerCase(); } catch { /* exact lookup only */ }
+    const dom = hasExact || !host ? null : ((await trust.lookup({ domain: host } as LookupQuery, base)) as any);
+    return { body: trustVerdict(input, exact, dom, base) as Record<string, unknown>, exact };
+  }
+
+  /**
+   * Test-buy priority signal: ONE path for paid and free checks. A never-test-bought Base seller with a warning sign moves
+   * to the front of the next day's Base test-buy list, within the abuse limits in catalog.queueBuy (one slot per seller per
+   * UTC day, TRUST_PRIORITY_DAILY_CAP sellers per day). `source` is only logged; it never changes the outcome.
+   */
+  async function prioritySignal(body: Record<string, unknown>, exact: unknown, source: string) {
+    const cand = buyCandidate(body as any, exact, now());
+    if (!cand) return null;
+    const r = await catalog.queueBuy(cand);
+    deps.log?.({ event: "buy_priority", source, resource: cand.resource, ...r });
+    return r;
+  }
+
+  /** Free check surfaces (lookup by URL; scanner-kit's /v1/check): build the verdict server-side and send the same signal. */
+  async function checkSignal(input: { url: string; payTo?: string }, base: string, source: string) {
+    try {
+      const { body, exact } = await checkVerdict(input, base);
+      return await prioritySignal(body, exact, source);
+    } catch (e) {
+      deps.log?.({ event: "buy_queue_error", source, error: String(e) });
+      return null;
     }
   }
 
@@ -646,7 +685,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     // Trust layer: free GETs, rate-limited public POSTs, owner-only ingest.
     if (path.startsWith("/v1/trust") || path === "/v1/reports" || path === "/v1/tips") {
-      const r = await trust.handle(request, path, base);
+      const r = await trust.handle(request, path, base, ctx);
       if (r) return r;
     }
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -891,6 +930,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         const r = await runTrial(request, siwxHeader, trialUri, route);
         if (r.ok) {
           deps.log?.({ event: "trial_call", route, wallet: r.wallet, used: r.used });
+          if (prep.onServed) {
+            // A free trial trust/check sends exactly the same priority signal as a paid one.
+            const p = prep.onServed().catch((e) => deps.log?.({ event: "buy_queue_error", error: String(e) }));
+            if (ctx) ctx.waitUntil(p); else await p;
+          }
           const access = { mode: "trial", charged: false, wallet: r.wallet, trial_calls_used: r.used, trial_calls_remaining: Math.max(0, TRIAL_LIMITS.perWallet - r.used) };
           if (wantsMarkdown) {
             const md = String((body as { markdown?: string }).markdown ?? "");
@@ -906,9 +950,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
 
     return requirePayment(request, config, paywallDeps(ctx), quote, (s: Settlement, paid: PaymentRequirements) => {
-      if (prep.onPaid) {
-        // Demand-driven test-buys: a paid trust/check only queues the resource for the daily routine (caps apply there).
-        const p = prep.onPaid().catch((e) => deps.log?.({ event: "buy_queue_error", error: String(e) }));
+      if (prep.onServed) {
+        // Demand-driven test-buys: a served trust/check only queues the resource for the daily routine (caps apply there).
+        const p = prep.onServed().catch((e) => deps.log?.({ event: "buy_queue_error", error: String(e) }));
         if (ctx) ctx.waitUntil(p);
       }
       const evm = isEvmRequirement(paid);

@@ -48,6 +48,8 @@ export interface Vet402Row {
 }
 export interface QueueRow { resource: string; network: string; price_usd: number | null; reasons: string; hits: number; status: string; queued_at: number; updated_at: number; note: string | null }
 
+export type PriorityClaim = "claimed" | "duplicate" | "cap_reached";
+
 export interface EvidenceStore {
   getCensus(network: string, payTo: string): Promise<CensusRow | null>;
   putCensus(row: CensusRow): Promise<void>;
@@ -64,6 +66,12 @@ export interface EvidenceStore {
   enqueueBuy(r: { resource: string; network: string; price_usd: number | null; reasons: string[] }, t: number): Promise<void>;
   buyQueue(status: string, limit: number): Promise<QueueRow[]>;
   setBuyStatus(resource: string, status: string, note: string | null, t: number): Promise<boolean>;
+  /**
+   * Test-buy priority slot for one seller on one UTC day (abuse limit for check-driven queue jumps, free and paid alike):
+   * "claimed" when this is the seller's first signal today and fewer than `cap` sellers were claimed today; "duplicate"
+   * when the seller already has today's slot; "cap_reached" when the day's cap is used up. Atomic on D1.
+   */
+  claimPriority(day: string, seller: string, resource: string, cap: number, t: number): Promise<PriorityClaim>;
   existingResources(urls: string[]): Promise<string[]>;
   evmPayTos(): Promise<string[]>;
   xrplPayTos(): Promise<string[]>;
@@ -126,6 +134,13 @@ export class MemoryEvidenceStore implements EvidenceStore {
   async buyQueue(status: string, limit: number) { return [...this.queue.values()].filter((q) => status === "all" || q.status === status).sort((a, b) => b.hits - a.hits || a.queued_at - b.queued_at).slice(0, limit); }
   async setBuyStatus(resource: string, status: string, note: string | null, t: number) {
     const ex = this.queue.get(resource); if (!ex) return false; ex.status = status; ex.note = note; ex.updated_at = t; return true;
+  }
+  priority = new Map<string, { day: string; seller: string; resource: string; at: number }>();
+  async claimPriority(day: string, seller: string, resource: string, cap: number, t: number): Promise<PriorityClaim> {
+    if (this.priority.has(`${day}|${seller}`)) return "duplicate";
+    if ([...this.priority.values()].filter((p) => p.day === day).length >= cap) return "cap_reached";
+    this.priority.set(`${day}|${seller}`, { day, seller, resource, at: t });
+    return "claimed";
   }
   async existingResources(urls: string[]) { return urls.filter((u) => this.resources.has(u)); }
   async evmPayTos() { return this.evm; }
@@ -225,6 +240,17 @@ export class D1EvidenceStore implements EvidenceStore {
   async setBuyStatus(resource: string, status: string, note: string | null, t: number) {
     const r = await this.db.prepare("UPDATE buy_queue SET status = ?2, note = ?3, updated_at = ?4 WHERE resource = ?1 RETURNING resource").bind(resource, status, note, t).first();
     return !!r;
+  }
+  async claimPriority(day: string, seller: string, resource: string, cap: number, t: number): Promise<PriorityClaim> {
+    // One statement: the cap count and the insert run together (D1 serialises writes), so concurrent checks cannot overshoot.
+    const r = await this.db.prepare(
+      `INSERT INTO buy_priority (day, seller, resource, at) SELECT ?1, ?2, ?3, ?4
+       WHERE (SELECT COUNT(*) FROM buy_priority WHERE day = ?1) < ?5
+       ON CONFLICT(day, seller) DO NOTHING RETURNING seller`,
+    ).bind(day, seller, resource, t, cap).first();
+    if (r) return "claimed";
+    const ex = await this.db.prepare("SELECT seller FROM buy_priority WHERE day = ?1 AND seller = ?2").bind(day, seller).first();
+    return ex ? "duplicate" : "cap_reached";
   }
   async existingResources(urls: string[]) {
     if (!urls.length) return [];
