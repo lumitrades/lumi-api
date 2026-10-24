@@ -34,7 +34,8 @@ extension block, `x_lumi_contrib`. ARS consumers can ignore it, but it is covere
 `payment` carries exactly two fields, `network` and `tx_hash`. The server refuses a contributed receipt with any other
 payment field (HTTP 422 `receipt_payment_fields_not_allowed`). The amount, asset and paying wallet are not in the
 receipt; the server reads the public ledger to confirm that the signing wallet paid `seller.pay_to` a non-zero amount.
-The server does not store the amount. Measurements carry no prices or amounts.
+The server does not store the amount. Measurements carry no prices, amounts or addresses: a receipt whose
+`x_lumi_contrib.measurements` has a `quotes`, `amount`, `price`, `asset`, `pay_to` or `payer` key is refused the same way.
 
 A transaction ID is public: anyone who has it can look it up on the blockchain and link it to the paying wallet. The
 kit's tier-2 opt-in says so before sharing is turned on.

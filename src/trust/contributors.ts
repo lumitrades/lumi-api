@@ -857,6 +857,12 @@ export function createContributors(deps: ContributorDeps) {
       const extra = Object.keys(r.payment).filter((x) => x !== "network" && x !== "tx_hash");
       if (extra.length) return err(422, "receipt_payment_fields_not_allowed", { fields: extra, hint: "Contributed receipts carry only payment.network and payment.tx_hash. Update Lumi Check." });
     }
+    // The stored copy is the signed receipt, so price data in measurements would be kept: refuse it instead.
+    const meas = r?.x_lumi_contrib?.measurements;
+    if (meas && typeof meas === "object") {
+      const priced = Object.keys(meas).filter((x) => /^(quotes?|amount|price|prices|asset|pay_?to|payer)$/i.test(x));
+      if (priced.length) return err(422, "receipt_payment_fields_not_allowed", { fields: priced.map((x) => `x_lumi_contrib.measurements.${x}`), hint: "Measurements carry no prices, amounts or addresses. Update Lumi Check." });
+    }
     const check = await verifyReceipt(r, { minimalPayment: true });
     if (!check.ok) return err(422, "receipt_invalid", { errors: check.errors });
     const ext = r.x_lumi_contrib;
