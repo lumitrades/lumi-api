@@ -4,6 +4,7 @@ export { checkQuote, quoteAmount } from "./quote.js";
 export { measureBody, schemaFingerprint, dataTimestamp, outcomeOf } from "./measure.js";
 export { buildReceiptBody, signReceipt, receiptHash, receiptMessage, OUTCOMES } from "./receipt.js";
 export { signerFor, secretFromEnv } from "./signers.js";
+export { walletProof, walletProofMessage } from "./wallet_proof.js";
 export { generateKey, saveKey, loadKey, signRequest, signedMessage } from "./contributor_key.js";
 export { paymentFromLedger } from "./ledger.js";
 export { createLumiClient } from "./client.js";

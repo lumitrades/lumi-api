@@ -132,6 +132,10 @@ export interface Env {
   CONTRIB_KIT_RETIRED?: string;
   /** Comma-separated funder addresses ignored when grouping contributor wallets by funding source (exchange hot wallets). */
   CONTRIB_FUNDER_IGNORE?: string;
+  /** Etherscan-compatible explorer API for Base first-funder lookups (default https://base.blockscout.com/api). */
+  CONTRIB_BASE_EXPLORER_API?: string;
+  /** Workers Rate Limiting binding for contributor requests (wrangler.toml [[unsafe.bindings]] type "ratelimit"; not bound by default). */
+  CONTRIB_RATE_LIMITER?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   /** Sales alert (optional, off unless set): incoming-webhook URL (Slack/Discord/generic JSON POST). */
   SALES_WEBHOOK_URL?: string;
   /** Sales alert by email (optional): recipient; needs the SALES_EMAIL send_email binding and SALES_ALERT_FROM. */

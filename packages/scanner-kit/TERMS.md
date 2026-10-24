@@ -22,6 +22,11 @@ name or badges. Those remain Lumi's, and nothing here or in the license grants r
 - Only **test data** about purchases from x402 sellers: payment facts that can be checked on-ledger, HTTP status,
   timing, response size, response hash, schema fingerprint, freshness, quoted prices, facilitator and settlement
   time. No response bodies and no personal data.
+- You prove control of each wallet you register by signing a message bound to your contributor key. Wallets without a
+  proof earn no credits and no leaderboard place.
+- Wallets funded from the same source count as one contributor: at most one earning per seller per UTC day across
+  all of them. Receipts from wallets funded by the seller (its pay-to wallet or that wallet's funder) earn nothing.
+  Lumi looks up and caches each wallet's first funder from public ledger data for this.
 - You confirm that you actually made each payment from a wallet you control, and that it reflects a real
   interaction. Self-testing (your own endpoints, domains or wallets) is not allowed and is rejected.
 - Lumi verifies each receipt on-ledger before it counts. It may reject, hold, down-weight or remove any submission,

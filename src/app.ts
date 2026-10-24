@@ -338,6 +338,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       pay_to: [config.payTo, ...xrplBuyers, ...(config.evm ? [config.evm.payTo] : []), ...(config.stellar ? [config.stellar.payTo] : []), ...evmBuyers, ...stellarBuyers],
     },
     ignoreFunders: split(env.CONTRIB_FUNDER_IGNORE),
+    baseExplorer: env.CONTRIB_BASE_EXPLORER_API || undefined,
+    rateLimiter: env.CONTRIB_RATE_LIMITER,
     queue: opts.contribQueue === null ? undefined : opts.contribQueue ?? (env.CONTRIB_QUEUE ? { send: (b: unknown) => env.CONTRIB_QUEUE!.send(b) } : undefined),
     log: (e) => deps.log?.(e),
     credits: env.CONTRIB_CREDITS,

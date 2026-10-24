@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { generateSeed, deriveKeypair, deriveAddress, sign } from "ripple-keypairs";
 import { ed25519 } from "@noble/curves/ed25519";
 import { createApp } from "../src/app";
-import { MemoryContributorStore, D1ContributorStore, contribBudgetKey, cmpVersion, cleanMetrics, disputeMessage } from "../src/trust/contributors";
+import { MemoryContributorStore, D1ContributorStore, contribBudgetKey, cmpVersion, cleanMetrics, disputeMessage, verifyWalletProof, walletProofMessage, fundingOf } from "../src/trust/contributors";
 import { MemoryCatalogStore } from "../src/trust/catalog";
 import { MemoryReceiptStore } from "../src/trust/receipts";
 import { sha256Hex, utf8Hex } from "../src/trust/verify";
@@ -29,6 +29,7 @@ const txh = (n: number) => n.toString(16).toUpperCase().padStart(64, "0");
 function ledger() {
   const txs = new Map<string, { from: string; to: string; value: string; ts: number }>();
   let down = false;
+  const funders = new Map<string, string>(), fundingCalls = new Map<string, number>();
   const f = (async (url: string | URL | Request, init?: RequestInit) => {
     const u = String(url);
     if (u.includes("xrplcluster") || u.includes("ripple.com")) {
@@ -39,12 +40,16 @@ function ledger() {
         if (!t) return Response.json({ result: { error: "txnNotFound" } });
         return Response.json({ result: { validated: true, hash: b.params[0].transaction, close_time_iso: new Date(t.ts).toISOString(), tx_json: { TransactionType: "Payment", Account: t.from, Destination: t.to, SigningPubKey: "" }, meta: { TransactionResult: "tesSUCCESS", delivered_amount: { currency: "524C555344000000000000000000000000000000", issuer: "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De", value: t.value } } } });
       }
-      if (b.method === "account_tx") return Response.json({ result: { transactions: [] } });
+      if (b.method === "account_tx") {
+        const acct = b.params[0].account; fundingCalls.set(acct, (fundingCalls.get(acct) ?? 0) + 1);
+        const fu = funders.get(acct);
+        return Response.json({ result: { transactions: fu ? [{ close_time_iso: new Date(NOW - 90 * 86_400_000).toISOString(), tx_json: { TransactionType: "Payment", Account: fu, Destination: acct } }] : [] } });
+      }
       return Response.json({ result: { error: "unknown" } });
     }
     return new Response("not found", { status: 404 });
   }) as typeof fetch;
-  return { f, txs, setDown: (v: boolean) => (down = v) };
+  return { f, txs, funders, fundingCalls, setDown: (v: boolean) => (down = v) };
 }
 
 function setup(o: { contribQueue?: any; env?: Record<string, string>; store?: any } = {}) {
@@ -57,7 +62,9 @@ function setup(o: { contribQueue?: any; env?: Record<string, string>; store?: an
     app.fetch(new Request(BASE + path, { method, headers: { Authorization: `Bearer ${OWNER}`, "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) }));
   async function issue(n: number, wallets: Wallet[], extra: Record<string, unknown> = {}) {
     const k = ckey(n);
-    const res = await owner("POST", "/v1/owner/contributors", { label: `c${n}`, public_key: k.pub, wallets: wallets.map((w) => w.address), ...extra });
+    const wallet_proofs: Record<string, unknown> = {};
+    for (const w of wallets) if (w.seed) wallet_proofs[w.address] = await kit.walletProof(await kit.signerFor("xrpl:0", w.seed), k.pub);
+    const res = await owner("POST", "/v1/owner/contributors", { label: `c${n}`, public_key: k.pub, wallets: wallets.map((w) => w.address), wallet_proofs, ...extra });
     const j: any = await res.json();
     expect(res.status, JSON.stringify(j)).toBe(201);
     return { ...k, key_id: j.key_id as string, wallets };
@@ -127,7 +134,7 @@ describe("signed submissions", () => {
     const m = JSON.parse(row.metrics);
     expect(m).toMatchObject({ latency_ms: 420, response_bytes: 1234, schema_fingerprint: "b".repeat(32), facilitator: "t54", settlement_ms: 2100, freshness_s: 30 });
     expect(m.junk).toBeUndefined();
-    expect(s.store.meta.get(contribBudgetKey(NOW))).toBe("4"); // 3 for the submission + 1 activity touch (first today)
+    expect(s.store.meta.get(contribBudgetKey(NOW))).toBe("5"); // 4 for the submission + 1 activity touch (first today)
     // own submissions come back via /v1/contrib/me
     const me: any = await (await s.signed(c, "GET", "/v1/contrib/me")).json();
     expect(me.submissions).toHaveLength(1);
@@ -245,7 +252,7 @@ describe("signed submissions", () => {
     expect(u.j.note).toMatch(/not cash/);
     const first = await s.submit(a, await s.receipt(wallet(1), 71));
     expect(first.j.credit_uusd).toBe(40_000); // 60k capped by the 40k monthly cap
-    const rep = await s.submit(a, await s.receipt(wallet(1), 72));
+    const rep = await s.submit(a, await s.receipt(wallet(1), 72, { ts: NOW - 300_000 })); // not a near-duplicate of 71
     expect(rep.j.credit_uusd).toBe(0);
     expect(rep.j.credit_note).toContain("repeat");
   });
@@ -294,7 +301,7 @@ describe("signed submissions", () => {
 
 describe("D1 write budget and queue", () => {
   it("contributions use their own daily budget and never touch the catalog writes counter", async () => {
-    const s = setup({ env: { CONTRIB_CAPS: JSON.stringify({ write_budget_rows: 7 }) } });
+    const s = setup({ env: { CONTRIB_CAPS: JSON.stringify({ write_budget_rows: 10 }) } });
     const a = await s.issue(1, [wallet(1)]);
     expect((await s.submit(a, await s.receipt(wallet(1), 100))).status).toBe(202);
     const r = await s.submit(a, await s.receipt(wallet(1), 101, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }));
@@ -315,9 +322,9 @@ describe("D1 write budget and queue", () => {
     await s.submit(b, await s.receipt(wallet(2), 111));
     const before = s.store.writes;
     const rows = await s.app.contribQueue(sent);
-    expect(rows).toBe(2 * 3 + 2 + 1); // 2 submissions + 2 activity touches + budget meta
+    expect(rows).toBe(2 * 4 + 2 + 1); // 2 submissions + 2 activity touches + budget meta
     expect(s.store.subs.size).toBe(2);
-    expect(s.store.writes - before).toBe(9);
+    expect(s.store.writes - before).toBe(11);
   });
 
   it("D1 store: migration 0015 applies and the batched SQL round-trips (miniflare)", async () => {
@@ -326,7 +333,7 @@ describe("D1 write budget and queue", () => {
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
-      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql", "0021_contrib_published.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
+      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql", "0021_contrib_published.sql", "0022_contrib_antigaming.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
       for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
       const store = new D1ContributorStore(db);
       const s = setup({ store });
@@ -336,7 +343,7 @@ describe("D1 write budget and queue", () => {
       const row = await store.byTx(txh(120));
       expect(row?.finding).toBe("counted");
       expect(row?.demand_opt_in).toBe(true);
-      expect(await store.getMeta(contribBudgetKey(NOW))).toBe("4"); // + activity touch
+      expect(await store.getMeta(contribBudgetKey(NOW))).toBe("5"); // + activity touch
       expect((await store.getKey(a.key_id))?.last_active_day).toBe(new Date(NOW).toISOString().slice(0, 10));
       const c = await store.counts({ key_id: a.key_id, endpoint_key: row!.endpoint_key, source: row!.source, day: row!.day, since_recent: "2026-01-01", since_month: "2026-10-01", tx_hash: txh(120) });
       expect(c).toMatchObject({ key_day: 1, key_ep_day: 1, ep_day_sources: 1, dup: 1, month_credit: 0 }); // credits disabled by default
@@ -683,7 +690,7 @@ describe("account deletion (contributor self-service + owner on email request)",
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
-      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql", "0021_contrib_published.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
+      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql", "0021_contrib_published.sql", "0022_contrib_antigaming.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
       for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
       const store = new D1ContributorStore(db);
       const s = setup({ store });
@@ -704,4 +711,232 @@ describe("account deletion (contributor self-service + owner on email request)",
       await mf.dispose();
     }
   }, 30_000);
+});
+
+describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wallets, near-duplicates", () => {
+  const credits = async (s: any, k: any) => (await (await s.signed(k, "GET", "/v1/contrib/credits")).json()) as any;
+  const board = async (s: any) => ((await (await s.app.fetch(new Request(BASE + "/v1/contrib/leaderboard"))).json()) as any).rows;
+  const loose = { CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 9, source_endpoint_daily: 9, endpoint_daily_sources: 9 }) };
+
+  it("(1) registration needs a wallet-control proof bound to the contributor key; fake or replayed proofs are refused", async () => {
+    const s = setup();
+    const k = ckey(1), w = wallet(1);
+    const none = await s.owner("POST", "/v1/owner/contributors", { label: "x", public_key: k.pub, wallets: [w.address] });
+    const j: any = await none.json();
+    expect(none.status).toBe(400);
+    expect(j).toMatchObject({ error: "wallet_proof_required", wallets: [{ address: w.address, message_to_sign: walletProofMessage(k.pub, w.address) }] });
+    // a proof made for ANOTHER contributor key can't be replayed
+    const other = await kit.walletProof(await kit.signerFor("xrpl:0", w.seed), ckey(2).pub);
+    expect((await s.owner("POST", "/v1/owner/contributors", { label: "x", public_key: k.pub, wallets: [w.address], wallet_proofs: { [w.address]: other } })).status).toBe(400);
+    // a proof signed by a different wallet's key is refused
+    const wrong = await kit.walletProof(await kit.signerFor("xrpl:0", wallet(2).seed), k.pub);
+    expect((await s.owner("POST", "/v1/owner/contributors", { label: "x", public_key: k.pub, wallets: [w.address], wallet_proofs: { [w.address]: wrong } })).status).toBe(400);
+    // the real one works
+    const good = await kit.walletProof(await kit.signerFor("xrpl:0", w.seed), k.pub);
+    const ok = await s.owner("POST", "/v1/owner/contributors", { label: "x", public_key: k.pub, wallets: [w.address], wallet_proofs: { [w.address]: good } });
+    expect(ok.status).toBe(201);
+    expect(((await ok.json()) as any).funding[0].proven).toBe(true);
+  });
+
+  it("(1) proofs verify for EVM (EIP-191, any case) and Stellar (ed25519) wallets", async () => {
+    const pk = ckey(5).pub;
+    const evm = await kit.signerFor("eip155:8453", "0x" + "11".repeat(32));
+    const ep = await kit.walletProof(evm, pk);
+    expect(ep.address).toBe(evm.address.toLowerCase());
+    expect(verifyWalletProof(pk, evm.address.toLowerCase(), ep)).toBe(true);
+    expect(verifyWalletProof(ckey(6).pub, evm.address.toLowerCase(), ep)).toBe(false);
+    const seed = new Uint8Array(32).fill(7);
+    // @ts-ignore plain JS
+    const { encodePublic } = await import("../packages/scanner-kit/src/strkey.js");
+    const g = encodePublic(ed25519.getPublicKey(seed));
+    const sig = Buffer.from(ed25519.sign(new TextEncoder().encode(walletProofMessage(pk, g)), seed)).toString("base64");
+    expect(verifyWalletProof(pk, g, { key_type: "stellar-ed25519", signature: sig })).toBe(true);
+    expect(verifyWalletProof(pk, g, { key_type: "eip191", signature: sig })).toBe(false);
+    expect(verifyWalletProof(pk, g, null)).toBe(false);
+  });
+
+  it("(1) allow_unproven wallets get zero weight (no credits, no leaderboard) until a proof is sent", async () => {
+    const s = setup();
+    const k = ckey(1), w = wallet(1);
+    const res = await s.owner("POST", "/v1/owner/contributors", { label: "x", public_key: k.pub, wallets: [w.address], allow_unproven: true });
+    const j: any = await res.json();
+    expect(res.status).toBe(201);
+    expect(j.unproven_wallets).toEqual([w.address]);
+    const a = { ...k, key_id: j.key_id as string };
+    const r = await s.submit(a, await s.receipt(w, 900));
+    expect(r.status).toBe(202);
+    expect(r.j).toMatchObject({ weight: 0, weight_note: "wallet_unproven", counts: false });
+    expect((await credits(s, a)).balance).toBe(0);
+    expect(await board(s)).toHaveLength(0);
+    // prove it later: wrong proof refused, right proof accepted, next receipt counts
+    expect((await s.signed(a, "POST", "/v1/contrib/me/wallet-proof", await kit.walletProof(await kit.signerFor("xrpl:0", wallet(2).seed), k.pub))).status).toBe(403);
+    const bad = { ...(await kit.walletProof(await kit.signerFor("xrpl:0", w.seed), ckey(9).pub)) };
+    expect((await s.signed(a, "POST", "/v1/contrib/me/wallet-proof", bad)).status).toBe(401);
+    const pr = await s.signed(a, "POST", "/v1/contrib/me/wallet-proof", await kit.walletProof(await kit.signerFor("xrpl:0", w.seed), k.pub));
+    expect(pr.status).toBe(200);
+    const r2 = await s.submit(a, await s.receipt(w, 901, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }));
+    expect(r2.j.weight).toBe(1);
+    expect((await credits(s, a)).balance).toBe(5);
+    expect(await board(s)).toHaveLength(1);
+  });
+
+  it("(2) Base first funder from the explorer: earliest inbound ETH or USDC transfer", async () => {
+    const me = "0x" + "ab".repeat(20), early = "0x" + "01".repeat(20), late = "0x" + "02".repeat(20);
+    const calls: string[] = [];
+    const f = (async (u: string) => {
+      calls.push(String(u));
+      if (String(u).includes("action=txlist")) return Response.json({ status: "1", result: [
+        { from: me, to: late, value: "5", timeStamp: "100", isError: "0" }, // outbound: ignored
+        { from: late.toUpperCase().replace("0X", "0x"), to: me.toUpperCase().replace("0X", "0x"), value: "7", timeStamp: "300", isError: "0" },
+      ] });
+      return Response.json({ status: "1", result: [{ from: early, to: me, value: "1000", timeStamp: "200", contractAddress: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913" }] });
+    }) as any;
+    expect(await fundingOf(f, { xrplRpc: [], stellarHorizon: "https://h", baseExplorer: "https://explorer.test/api" }, me)).toEqual({ funder: early, funded_at: 200_000 });
+    expect(calls.every((u) => u.startsWith("https://explorer.test/api?module=account&"))).toBe(true);
+    expect(calls.some((u) => u.includes("contractaddress=0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"))).toBe(true);
+    const down = (async () => new Response("challenge", { status: 403 })) as any;
+    expect(await fundingOf(down, { xrplRpc: [], stellarHorizon: "https://h" }, me)).toEqual({ funder: null, funded_at: null });
+  });
+
+  it("(2) wallets sharing a funder form one cluster: one earning per seller per day across keys; lookups are cached", async () => {
+    const s = setup({ env: loose });
+    const F = wallet(50).address;
+    s.L.funders.set(wallet(1).address, F); s.L.funders.set(wallet(2).address, F);
+    const a = await s.issue(1, [wallet(1)]);
+    const b = await s.issue(2, [wallet(2)]);
+    const cl: any = await (await s.owner("GET", "/v1/owner/contributors/clusters")).json();
+    expect(cl.clusters).toEqual([{ source: F, keys: [a.key_id, b.key_id], wallets: [wallet(1).address, wallet(2).address] }]);
+    expect((await s.submit(a, await s.receipt(wallet(1), 910))).j.weight).toBe(1);
+    const sib = await s.submit(b, await s.receipt(wallet(2), 911, { endpoint: new URL(EP).origin + "/cluster-other" }));
+    expect(sib.status).toBe(202);
+    expect(sib.j).toMatchObject({ weight: 0, weight_note: "same_cluster" });
+    expect((await credits(s, a)).balance).toBe(5);
+    expect((await credits(s, b)).balance).toBe(0);
+    expect((await board(s)).map((r: any) => r.verified_receipts)).toEqual([1]);
+    // a different seller still counts for the sibling
+    expect((await s.submit(b, await s.receipt(wallet(2), 912, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }))).j.weight).toBe(1);
+    // seller pay_to funding looked up once, then served from the cache
+    expect(s.L.fundingCalls.get(VPAY)).toBe(1);
+    expect(s.store.funding.get(wallet(1).address)?.funder).toBe(F);
+  });
+
+  it("(2) a wallet funded by an already-registered wallet joins that wallet's cluster (one hop), and earlier wallets re-point", async () => {
+    const s = setup({ env: loose });
+    const a = await s.issue(1, [wallet(1)]);
+    s.L.funders.set(wallet(2).address, wallet(1).address);
+    const b = await s.issue(2, [wallet(2)]);
+    expect((await s.store.wallets([wallet(2).address]))[0].source).toBe(wallet(1).address);
+    // wallet(3) registered first with funder wallet(4); wallet(4) later registers funded by F: wallet(3) moves to F's cluster
+    const F = wallet(60).address;
+    s.L.funders.set(wallet(3).address, wallet(4).address);
+    await s.issue(3, [wallet(3)]);
+    s.L.funders.set(wallet(4).address, F);
+    await s.issue(4, [wallet(4)]);
+    expect((await s.store.wallets([wallet(3).address]))[0].source).toBe(F);
+    expect(b.key_id).not.toBe(a.key_id);
+  });
+
+  it("(3) receipts from wallets funded by the seller's pay_to (or its funder) get zero weight and no credits; ignored funders don't link", async () => {
+    const s = setup({ env: loose });
+    s.L.funders.set(wallet(1).address, VPAY); // seller funded the buyer directly
+    const a = await s.issue(1, [wallet(1)]);
+    const r = await s.submit(a, await s.receipt(wallet(1), 920));
+    expect(r.j).toMatchObject({ weight: 0, weight_note: "seller_funded" });
+    expect((await credits(s, a)).balance).toBe(0);
+    expect(await board(s)).toHaveLength(0);
+    // seller and buyer share a funder (the seller's cluster)
+    const X = wallet(70).address;
+    s.L.funders.set(V2.pay_to.xrpl[0], X); s.L.funders.set(wallet(2).address, X);
+    const b = await s.issue(2, [wallet(2)]);
+    expect((await s.submit(b, await s.receipt(wallet(2), 921, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }))).j.weight_note).toBe("seller_funded");
+    // an exchange hot wallet funding both is ignored
+    const s2 = setup({ env: { ...loose, CONTRIB_FUNDER_IGNORE: X } });
+    s2.L.funders.set(V2.pay_to.xrpl[0], X); s2.L.funders.set(wallet(2).address, X);
+    const b2 = await s2.issue(2, [wallet(2)]);
+    expect((await s2.submit(b2, await s2.receipt(wallet(2), 922, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }))).j.weight).toBe(1);
+  });
+
+  it("(3) a negative from a zero-weight receipt never confirms another contributor's negative", async () => {
+    const s = setup({ env: loose });
+    const a = await s.issue(1, [wallet(1)]);
+    s.L.funders.set(wallet(2).address, VPAY);
+    const b = await s.issue(2, [wallet(2)]);
+    expect((await s.submit(a, await s.receipt(wallet(1), 930, { outcome: "no_data" }))).j.finding).toBe("unconfirmed");
+    const r = await s.submit(b, await s.receipt(wallet(2), 931, { outcome: "no_data" }));
+    expect(r.j).toMatchObject({ finding: "unconfirmed", weight_note: "seller_funded" });
+    expect((await s.store.byTx(txh(930)))?.finding).toBe("unconfirmed");
+  });
+
+  it("(4) near-duplicates: same payer + seller + amount inside the window is refused, stored or still queued", async () => {
+    const s = setup({ env: loose });
+    const a = await s.issue(1, [wallet(1)]);
+    expect((await s.submit(a, await s.receipt(wallet(1), 940, { ts: NOW - 600_000 }))).status).toBe(202);
+    const nd = await s.submit(a, await s.receipt(wallet(1), 941, { ts: NOW - 540_000 })); // new tx hash, 60s later
+    expect(nd.status).toBe(409);
+    expect(nd.j).toMatchObject({ error: "near_duplicate", window_s: 120 });
+    expect((await s.submit(a, await s.receipt(wallet(1), 942, { ts: NOW - 540_000, value: "0.002" }))).status).toBe(202); // different amount
+    expect((await s.submit(a, await s.receipt(wallet(1), 943, { ts: NOW - 300_000 }))).status).toBe(202); // outside the window
+    const sent: any[] = [];
+    const q = setup({ env: loose, contribQueue: { send: async (b: unknown) => { sent.push(b); } } });
+    const qa = await q.issue(1, [wallet(1)]);
+    expect((await q.submit(qa, await q.receipt(wallet(1), 944))).j.queued).toBe(true);
+    expect((await q.submit(qa, await q.receipt(wallet(1), 945))).j.error).toBe("near_duplicate");
+  });
+
+  it("rate limit: uses the Workers Rate Limiting binding when bound (no D1 writes), else the in-isolate limiter", async () => {
+    let n = 0;
+    const s = setup({ env: { CONTRIB_RATE_LIMITER: { limit: async () => ({ success: ++n <= 2 }) } } as any });
+    const a = await s.issue(1, [wallet(1)]);
+    expect((await s.signed(a, "GET", "/v1/contrib/me")).status).toBe(200);
+    expect((await s.signed(a, "GET", "/v1/contrib/me")).status).toBe(200);
+    const w0 = s.store.writes;
+    const r = await s.signed(a, "GET", "/v1/contrib/me");
+    expect(r.status).toBe(429);
+    expect(s.store.writes).toBe(w0);
+    const s2 = setup({ env: { CONTRIB_CAPS: JSON.stringify({ per_minute: 2 }) } });
+    const b = await s2.issue(1, [wallet(1)]);
+    for (let i = 0; i < 2; i++) expect((await s2.signed(b, "GET", "/v1/contrib/me")).status).toBe(200);
+    expect((await s2.signed(b, "GET", "/v1/contrib/me")).status).toBe(429);
+  });
+
+  it("anonymous tier-1 outcome counts never feed scores, credits or the leaderboard", async () => {
+    const s = setup();
+    const a = await s.issue(1, [wallet(1)]);
+    for (let i = 0; i < 5; i++) {
+      const r = await s.app.fetch(new Request(BASE + "/v1/check/outcome", { method: "POST", body: JSON.stringify({ v: 1, subject: new URL(EP).hostname, delivered: true, status_class: "2xx" }), headers: { "Content-Type": "application/json", "CF-Connecting-IP": "9.9.9." + i } }));
+      expect(r.status).toBe(202);
+    }
+    expect(await board(s)).toHaveLength(0);
+    expect((await credits(s, a)).balance).toBe(0);
+    expect(s.store.subs.size).toBe(0);
+  });
+
+  it("D1: nearDup, clusterSeller, wallet proofs and the funding cache round-trip (miniflare, migration 0022)", async () => {
+    const { Miniflare } = await import("miniflare");
+    const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('') } }", d1Databases: ["DB"] });
+    try {
+      const db: any = await mf.getD1Database("DB");
+      await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
+      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql", "0021_contrib_published.sql", "0022_contrib_antigaming.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
+      for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
+      const store = new D1ContributorStore(db);
+      const s = setup({ store, env: loose });
+      const F = wallet(50).address;
+      s.L.funders.set(wallet(1).address, F); s.L.funders.set(wallet(2).address, F);
+      const a = await s.issue(1, [wallet(1)]);
+      const b = await s.issue(2, [wallet(2)]);
+      expect((await store.wallets([wallet(1).address]))[0]).toMatchObject({ proven: true, source: F });
+      expect(await store.getFunding(wallet(1).address)).toMatchObject({ funder: F });
+      expect((await store.clusters())[0]).toMatchObject({ source: F });
+      expect((await s.submit(a, await s.receipt(wallet(1), 950))).j.weight).toBe(1);
+      expect((await s.submit(a, await s.receipt(wallet(1), 951, { ts: NOW - 560_000 }))).j.error).toBe("near_duplicate");
+      expect((await s.submit(b, await s.receipt(wallet(2), 952, { endpoint: new URL(EP).origin + "/cluster-other" }))).j.weight_note).toBe("same_cluster");
+      expect((await store.byTx(txh(952)))).toMatchObject({ weight: 0, weight_note: "same_cluster", credit_uusd: 0 });
+      expect((await store.verifiedSince(b.key_id, "2026-01-01"))[0].weight).toBe(0);
+      // index plan: nearDup on (key_id, day), clusterSeller on (source, day): no table scan
+      const plan = async (q: string) => JSON.stringify((await db.prepare("EXPLAIN QUERY PLAN " + q).all()).results);
+      expect(await plan("SELECT COUNT(*) FROM contributor_submissions WHERE key_id = 'k' AND day >= 'd' AND payer = 'p' AND pay_to = 'q' AND amount = '1' AND ABS(ledger_ts - 1) <= 2")).toMatch(/USING INDEX/);
+      expect(await plan("SELECT COUNT(*) FROM contributor_submissions WHERE source = 's' AND day = 'd' AND key_id != 'k' AND weight != 0 AND (pay_to = 'q' OR domain = 'x')")).toMatch(/contributor_submissions_source_day/);
+    } finally { await mf.dispose(); }
+  });
 });

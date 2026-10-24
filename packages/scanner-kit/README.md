@@ -90,7 +90,14 @@ You are shown this at first run and in `lumi-scan setup`.
 3. Lumi checks every receipt **on-ledger** before it counts. It rejects self-tests (your own endpoints or wallets) and
    caps receipts per key, per endpoint and per funding source. A negative finding counts only once a second,
    independent contributor (or a Lumi re-buy) confirms it, and sellers can dispute a finding.
-4. **No cash.** Each verified receipt earns **free Lumi Check credits** (one per unique seller per day; self-tests and
+4. **What counts.** Lumi looks up who first funded each registered wallet (Base explorer, XRPL activation, Stellar
+   `create_account`) and groups wallets with the same funder into one cluster. A cluster earns at most once per seller
+   per UTC day, however many keys it uses. Receipts from a wallet funded by the seller's pay-to wallet (or the seller's
+   own funder) count for nothing, as do receipts from wallets without a wallet-control proof. A second receipt for the
+   same payer, seller and amount within two minutes of another is refused as a near-duplicate even with a new tx hash.
+   Zero-weight receipts are stored and shown to you with `weight: 0` and the reason, but earn no credits or leaderboard
+   place and can't confirm anyone's negative finding. Exchange and faucet wallets Lumi lists are ignored as funders.
+5. **No cash.** Each verified receipt earns **free Lumi Check credits** (one per unique seller per day; self-tests and
    duplicates earn nothing), spendable on checks and detailed reports (`lumi-scan credits`,
    `lumi-scan spend trust_check <url>`). You also get the contributor badge, a place on the public leaderboard, early
    access and higher rate limits. Cash bounties are disabled.
@@ -101,7 +108,9 @@ You are shown this at first run and in `lumi-scan setup`.
 cd packages/scanner-kit && npm install          # Node >= 20
 node bin/lumi-scan.js setup                     # shows what is shared; choose tier 1 / tier 2
 node bin/lumi-scan.js keygen                    # writes ~/.lumi-scanner-kit/contributor_key.json (mode 600) and prints the PUBLIC key
-# Send Lumi the public key plus the wallet address(es) you pay from. Lumi issues a key_id: add it to the key file as "key_id".
+node bin/lumi-scan.js prove-wallet --network xrpl:0           # signs a wallet-control proof locally (needs the wallet secret env below)
+# Send Lumi the public key, the wallet address(es) you pay from and one proof per wallet. Lumi issues a key_id: add it to
+# the key file as "key_id". Wallets registered without a proof earn nothing until you run `prove-wallet --submit`.
 
 node bin/lumi-scan.js quote https://seller.example/x402/data   # free: 402 quote, latency, price per chain
 node bin/lumi-scan.js wanted --limit 5                          # what to test next (server-chosen)
