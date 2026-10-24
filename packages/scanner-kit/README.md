@@ -1,4 +1,6 @@
-# Lumi Check (v0, DRAFT, not published)
+# Lumi Check
+
+`npm install lumi-check` (Node >= 20). CLI: `npx lumi-check` or, once installed, `lumi-scan`.
 
 A thin client for checking an x402 seller **before you pay** and, if you choose, contributing **signed,
 on-ledger-verifiable delivery receipts** to Lumi ("Tested by Lumi"). Scoring, verification, the catalog and anti-fraud
@@ -16,7 +18,7 @@ Every verdict is **signed by Lumi** (ed25519) and verified locally before it is 
 sent (query strings are dropped). Paying Lumi never changes any score, tier, ranking or badge.
 
 ```js
-import { createLumiCheck, x402BeforePaymentHook, mcpOnPaymentRequiredHook, withOutcomeReporting } from "lumi-scanner-kit";
+import { createLumiCheck, x402BeforePaymentHook, mcpOnPaymentRequiredHook, withOutcomeReporting } from "lumi-check";
 
 const lumi = createLumiCheck();             // fail-open, 2.5 s timeout; pin keys with { publicKeys: ["<hex>"] }
 
@@ -36,7 +38,7 @@ const paidFetch = withOutcomeReporting(wrapFetchWithPayment(fetch, client), lumi
 
 CLI: `lumi-scan check https://seller.example/x402/data --pay-to 0x... --amount 0.01`.
 
-**Fail mode (defaults pending owner approval):** `fail_mode: "open"` with `timeout_ms: 2500`. If Lumi is slow,
+**Fail mode (defaults):** `fail_mode: "open"` with `timeout_ms: 2500`. If Lumi is slow,
 unreachable, or returns a verdict whose signature does not verify, the result is `warn` (`lumi_unreachable` /
 `lumi_unverified`) and the payment goes ahead. Set `"fail_mode": "closed"` in the config (or `failMode: "closed"`) to
 block instead. The detailed paid check (`/v1/trust/check`, x402) adds reason details and a signed `lumi_receipt`.

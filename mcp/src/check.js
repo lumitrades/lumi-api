@@ -4,7 +4,7 @@
  *   const { lumi, x402Hook, mcpHook } = await lumiCheckHooks();
  *   x402Client.onBeforePaymentCreation(x402Hook);     // aborts when Lumi says "block"
  *   mcpClient.onPaymentRequired(mcpHook);             // @x402/mcp: checked by payTo
- * Fail-open by default (warn on timeout / unverified verdict, 2.5 s). The adapters live in lumi-scanner-kit (Apache-2.0).
+ * Fail-open by default (warn on timeout / unverified verdict, 2.5 s). The adapters live in lumi-check (npm, Apache-2.0).
  */
 import { loadKit } from "./contrib.js";
 

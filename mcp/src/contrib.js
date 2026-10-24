@@ -2,7 +2,7 @@
  * Lumi Check tools (unpublished): lumi_check (free signed pre-pay check), lumi_scan_seller
  * (free quote + dry-run plan) and lumi_report_receipt (passive: sign a receipt for a purchase you already made; submitting
  * is tier 2 and needs receipt sharing turned on: LUMI_SHARE_RECEIPTS=1 or `lumi-scan sharing on`).
- * The kit is loaded lazily: the published package would depend on lumi-scanner-kit; in the repo it is ../../packages/scanner-kit.
+ * The kit is loaded lazily: the published package depends on lumi-check (npm); in the repo it is ../../packages/scanner-kit.
  * Never returns or logs wallet secrets or the contributor private key.
  */
 import { z } from "zod";
@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 export async function loadKit() {
   try {
-    return await import("lumi-scanner-kit");
+    return await import("lumi-check");
   } catch {
     return import(new URL("../../packages/scanner-kit/src/index.js", import.meta.url).href);
   }
