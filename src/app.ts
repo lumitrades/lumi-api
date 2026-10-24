@@ -25,7 +25,7 @@ import { createTrust, TRUST_POST_PATHS, REPORT_FRESH_MS, type Trust } from "./tr
 import { createCommerce, D1CommerceStore, MemoryCommerceStore, type Commerce } from "./commerce";
 import type { CommerceStore } from "./commerce/store";
 import { TEST_PRICE_USD } from "./commerce/plans";
-import { VENDORS } from "./vendors";
+import { VENDORS, vendorById } from "./vendors";
 import { D1TrustStore, MemoryTrustStore, type TrustStore } from "./trust/store";
 import { SEED_OBSERVATIONS } from "./trust/seed";
 import { isStorageQuotaError, storageUnavailableBody } from "./trust/storage_errors";
@@ -40,6 +40,9 @@ import { D1TrafficStore, MemoryTrafficStore, TRAFFIC_RETENTION_DAYS, TrafficBuff
 import { D1FeedStore, MemoryFeedStore, FEEDS, dueFeed, refreshFeed, feedFresh, type FeedStore } from "./feeds";
 import { liteView, scanView, fundingView, fearGreedView, fearGreedFromContext, events48View, trustVerdict } from "./quick";
 import { lookupError } from "./trust/index";
+import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
+import { originPath, checkPayload, badgeDecision, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_MIN_SCORE, BADGE_MIN_PAID_TESTS, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
+import { curatedByHost } from "./trust/badge";
 import type { LookupQuery } from "./trust/catalog";
 import { D1LiveStore, MemoryLiveStore, refreshLive, isFresh, LIVE_UNIVERSE, LIVE_MAX_AGE_MS, LIVE_CYCLE_MS, type LiveStore } from "./live";
 import { mcpServerCard, agentsJson } from "./wellknown";
@@ -351,6 +354,80 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     selfDomains: ["lumitrades.io", "www.lumitrades.io", "api.lumitrades.io", ...(config.publicBaseUrl ? [new URL(config.publicBaseUrl).hostname] : [])],
     log: (e) => deps.log?.(e),
   });
+
+  // Lumi Check v0: dedicated ed25519 response-signing key (Worker secret LUMI_CHECK_SIGNING_KEY; never logged).
+  let signKeyMemo: Promise<SigningKey | null> | undefined;
+  const signKey = () => (signKeyMemo ??= signingKeyFrom(env.LUMI_CHECK_SIGNING_KEY));
+
+  /** Live score summary for a host or vendor id (curated vendors only; everything else is "not_scored"). */
+  async function liveScore(keyOrHost: string) {
+    const k = keyOrHost.toLowerCase();
+    const ids = vendorById(k) ? [k] : curatedByHost(k).map((v) => v.id);
+    if (ids.length !== 1) return null;
+    return trust.vendorScore(ids[0]);
+  }
+  const scoreView = (s: Awaited<ReturnType<typeof liveScore>>, tier: unknown) => s
+    ? { scored: true, vendor_id: s.vendor_id, value: s.score.value, confidence: s.score.confidence, tier: tier ?? null, paid_test_buys: s.score.samples.paid_test_buys }
+    : { scored: false, value: null, confidence: null, tier: tier ?? null, note: "Numeric scores exist for curated vendors only; the tier comes from the catalog." };
+
+  async function checkVerdict(input: { url: string; payTo?: string; amountUsd?: number; network?: string }, base: string, free: boolean) {
+    const exact = (await trust.lookup({ url: input.url } as LookupQuery, base, free ? { free: true } : undefined)) as any;
+    const hasExact = !!exact?.self || (exact?.catalog?.entries?.length ?? 0) > 0;
+    const host = new URL(input.url).hostname.toLowerCase();
+    const dom = hasExact ? null : ((await trust.lookup({ domain: host } as LookupQuery, base, free ? { free: true } : undefined)) as any);
+    return { verdict: trustVerdict(input, exact, dom, base) as Record<string, any>, exact, host };
+  }
+
+  async function freeCheck(request: Request, url: URL, base: string): Promise<Response> {
+    const noStore = { "Cache-Control": "no-store" };
+    const sp = url.searchParams;
+    const raw = sp.get("url")?.trim() ?? "";
+    const clean = originPath(raw);
+    const payTo = sp.get("payTo")?.trim() || sp.get("pay_to")?.trim() || undefined;
+    const amountRaw = sp.get("amount")?.trim();
+    const amountUsd = amountRaw ? Number(amountRaw.replace(/^\$/, "")) : undefined;
+    const bad = (detail: string) => json(400, { error: "invalid_query", detail, example: `${base}/v1/check?url=https://api.example.com/v1/data&payTo=0x...&amount=0.01` }, noStore);
+    if (!clean) return bad("url is required: the absolute http(s) x402 resource URL you are about to pay (query strings are ignored).");
+    const lerr = lookupError({ url: clean, ...(payTo ? { payTo } : {}) }, { url: true, payTo: payTo !== undefined }, "check");
+    if (lerr) return json(400, lerr, noStore);
+    if (amountRaw && !(amountUsd !== undefined && Number.isFinite(amountUsd) && amountUsd >= 0 && amountUsd < 1e6)) return bad("amount must be a USD number, e.g. 0.01.");
+    const limit = await trust.freeLimit(request, "lookup");
+    if (limit) return limit;
+    const network = sp.get("network")?.slice(0, 40) || undefined;
+    const { verdict, host } = await checkVerdict({ url: clean, payTo, amountUsd, network }, base, true);
+    const score = scoreView(await liveScore(host), verdict.matched?.tier);
+    const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict, score, link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: false });
+    const t = now();
+    const receipt = await signResponse("lumi_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
+    return json(200, {
+      kind: "lumi_check", ...payload, receipt,
+      detail: `${base}/v1/trust/check?url=${encodeURIComponent(clean)} (x402, adds reason details and next steps)`,
+      note: "Free pre-pay check. Paying Lumi (checks, monitoring, reports) never changes a score, tier, ranking or badge. Only origin + path of the URL is used; nothing about the query is stored.",
+    }, noStore);
+  }
+
+  /** Earned-only "Tested by Lumi" badge: decision from the live score only, signed and short-lived. */
+  async function earnedBadge(key: string, ext: "json" | "svg", base: string): Promise<Response> {
+    const s = await liveScore(key);
+    const d = s ? badgeDecision({ score: s.score, last_conclusive: s.last_conclusive, status: s.status }) : { earned: false as const, reason: "not_scored" };
+    const live = `${base}/trust/v/${encodeURIComponent(s?.vendor_id ?? key)}`;
+    const headers = { "Cache-Control": BADGE_CACHE, "Access-Control-Allow-Origin": "*" };
+    if (ext === "svg") {
+      const svg = d.earned && s ? earnedBadgeSvg(s.score.value!, new Date(now()).toISOString().slice(0, 10)) : noBadgeSvg(d.reason === "not_scored" ? "not scored" : "no badge");
+      return new Response(svg, { status: 200, headers: { ...headers, "Content-Type": "image/svg+xml; charset=utf-8", Link: `<${live}>; rel="related"` } });
+    }
+    const payload = {
+      subject: s ? { vendor_id: s.vendor_id, name: s.name } : { key: key.slice(0, 200) },
+      earned: d.earned, reason: d.reason,
+      score: s ? { value: s.score.value, confidence: s.score.confidence, paid_test_buys: s.score.samples.paid_test_buys } : null,
+      threshold: { min_score: BADGE_MIN_SCORE, min_paid_test_buys: BADGE_MIN_PAID_TESTS, latest_test_buy: "delivered" },
+      live_report: live,
+      embed: d.earned ? `<a href="${live}"><img src="${base}/v1/badge/${encodeURIComponent(s?.vendor_id ?? key)}.svg" alt="Tested by Lumi (live score)"></a>` : null,
+      purchasable: false,
+    };
+    const signed = await signResponse("tested_badge", payload, await signKey(), now(), BADGE_SIGNED_TTL_SEC);
+    return json(200, { kind: "tested_badge_verdict", ...payload, signed, note: "Earned only, never sold. Re-evaluated from the live score on every request and removed automatically when it drops below the threshold. Check the signature and expires_at; a copied image proves nothing." }, headers);
+  }
   const ownHosts = new Set(["api.lumitrades.io", ...(config.publicBaseUrl ? [new URL(config.publicBaseUrl).hostname] : [])]);
   const commerce = createCommerce({
     store: commerceStore,
@@ -549,11 +626,12 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     let host = "";
     try { host = new URL(url).hostname.toLowerCase(); } catch { return bad("url must be an absolute http(s) URL."); }
     try {
-      const exact = (await trust.lookup({ url } as LookupQuery, base)) as any;
-      const hasExact = !!exact?.self || (exact?.catalog?.entries?.length ?? 0) > 0;
-      const dom = hasExact ? null : ((await trust.lookup({ domain: host } as LookupQuery, base)) as any);
-      const body = trustVerdict({ url, payTo, amountUsd, network: sp.get("network") ?? undefined }, exact, dom, base);
+      const clean = originPath(url) ?? url;
+      const network = sp.get("network") ?? undefined;
+      const { verdict: body, exact } = await checkVerdict({ url: clean, payTo, amountUsd, network }, base, false);
       const t = now();
+      const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: body, score: scoreView(await liveScore(host), (body as any).matched?.tier), link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: true });
+      (body as any).lumi_receipt = await signResponse("trust_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
       const meta = metaFrom(t, t + 86_400_000, t + 30 * 60_000, t);
       const cand = buyCandidate(body as any, exact);
       return { ok: true, route: "trust_check", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)), ...(cand ? { onPaid: () => catalog.queueBuy(cand) } : {}) };
@@ -670,6 +748,13 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           note: "Not charged.",
         });
       }
+    }
+    // Lumi Check v0: free signed pre-pay check, signing keys, earned-only signed badge.
+    if (request.method === "GET" || request.method === "HEAD") {
+      if (path === "/v1/check") return freeCheck(request, url, base);
+      if (path === "/v1/check/keys" || path === "/.well-known/lumi-keys.json") return json(200, keysDoc(await signKey(), base), { "Cache-Control": "public, max-age=3600" });
+      const eb = /^\/v1\/badge\/([^/]{1,200})\.(json|svg)$/.exec(path);
+      if (eb) { const k = safeDecode(eb[1]); if (k) return earnedBadge(k, eb[2] as "json" | "svg", base); }
     }
     // Seller monitoring + data licence feed (free docs/signup, x402 plans, keyed feed, owner routes).
     {
