@@ -3,6 +3,7 @@
  * used by the Worker entry (src/index.ts) and the Node server (src/node.ts).
  */
 
+import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCOME_FIELDS, OUTCOME_RETENTION_DAYS, type OutcomeStore } from "./trust/outcomes";
 import { createBadges } from "./trust/badge";
 import { setPrivateNames } from "./sanitize";
 import { loadConfig, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, type Config, type Env, type PaidRoute } from "./config";
@@ -54,6 +55,8 @@ export interface AppOptions {
   log?: (event: Record<string, unknown>) => void;
   /** Clock (ms), injectable for tests. */
   now?: () => number;
+  /** Tier-1 check outcome store override (tests). */
+  outcomeStore?: OutcomeStore;
   /** Trust-layer store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory seeded store. */
   trustStore?: TrustStore;
   /** Sales ledger override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
@@ -300,6 +303,16 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       return isOwnerKey(m?.[1], env.OWNER_MCP_KEY);
     },
   });
+  // Lumi Check tier-1 anonymous delivery outcomes (aggregate counters only; never a scoring input).
+  const outcomes = createOutcomes(opts.outcomeStore ?? (env.TRUST_DB ? new D1OutcomeStore(env.TRUST_DB) : new MemoryOutcomeStore()), now);
+  const outcomeHits = new Map<string, { t: number; n: number }>();
+  /** Per-isolate, in-memory only: 120 outcome reports per minute per connecting IP. The IP is never stored or logged. */
+  const outcomeLimited = (request: Request) => {
+    const ip = request.headers.get("CF-Connecting-IP") ?? "local", t = now(), h = outcomeHits.get(ip);
+    if (outcomeHits.size > 20_000) outcomeHits.clear();
+    if (!h || t - h.t > 60_000) { outcomeHits.set(ip, { t, n: 1 }); return false; }
+    return ++h.n > 120;
+  };
   const contributors = createContributors({
     store: opts.contributorStore ?? (env.TRUST_DB ? new D1ContributorStore(env.TRUST_DB) : new MemoryContributorStore()),
     fetch: doFetch,
@@ -775,6 +788,17 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         });
       }
     }
+    // Lumi Check tier 1: anonymous delivery outcome (seller host or vendor id + delivered yes/no + coarse status class only).
+    if (path === "/v1/check/outcome" && request.method === "POST") {
+      const noStore = { "Cache-Control": "no-store" };
+      if (outcomeLimited(request)) return json(429, { error: "rate_limited", retry_after_s: 60 }, { ...noStore, "Retry-After": "60" });
+      const text = await request.text().catch(() => "");
+      if (text.length > 512) return json(413, { error: "body_too_large", max_bytes: 512 }, noStore);
+      let body: unknown; try { body = JSON.parse(text); } catch { body = null; }
+      const p = parseOutcome(body);
+      if (!p.ok) return json(400, { ...p, allowed: OUTCOME_FIELDS, note: "Tier 1 accepts only an anonymous delivery outcome. Nothing was stored." }, noStore);
+      return json(202, { ok: true, status: outcomes.record(p), stored: "aggregate_counter_only", note: "Not linked to you; not a scoring input. Turn off with LUMI_CHECK_TELEMETRY=off or `lumi-scan telemetry off`." }, noStore);
+    }
     // Lumi Check v0: free signed pre-pay check, signing keys, earned-only signed badge.
     if (request.method === "GET" || request.method === "HEAD") {
       if (path === "/v1/check") return freeCheck(request, url, base);
@@ -808,6 +832,13 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       }
       const days = Number(url.searchParams.get("days") ?? "7");
       return json(200, { ...(await trafficSummary(traffic, now(), days)), logging: trafficOn }, { "Cache-Control": "no-store" });
+    }
+    // Owner-only tier-1 delivery outcome aggregates (counters per day per seller host).
+    if (path === "/v1/owner/check-outcomes") {
+      if (!(await ownerReq(request))) return json(401, { error: "owner_key_required" }, { "Cache-Control": "no-store", "WWW-Authenticate": "Bearer" });
+      await outcomes.flush();
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") ?? "7") || 7));
+      return json(200, { kind: "lumi_check_outcomes", retention_days: OUTCOME_RETENTION_DAYS, rows: await outcomes.store.list(new Date(now() - days * 86_400_000).toISOString().slice(0, 10), 1000) }, { "Cache-Control": "no-store" });
     }
     // Owner-only sales ledger summary (Authorization: Bearer <OWNER_MCP_KEY>). Excludes Lumi's own test wallets.
     if (path === "/v1/owner/sales") {
@@ -1145,7 +1176,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         .catch(trafficErr);
       if (ctx) ctx.waitUntil(p);
     },
-    flushTraffic: () => trafficBuf.flush().catch(trafficErr),
+    flushTraffic: () => Promise.all([trafficBuf.flush().catch(trafficErr), outcomes.flush().catch(() => 0)]).then(() => undefined),
     live,
     feeds,
     async liveRefresh() {
@@ -1167,7 +1198,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       // Contributor retention purge: once a day (03:07 UTC tick of the per-minute cron).
       const d = new Date(now());
       const contribPurge = d.getUTCHours() === 3 && d.getUTCMinutes() === 7 ? contributors.purge().catch(() => {}) : Promise.resolve();
-      const prune = Promise.all([trafficBuf.flush().catch(trafficErr), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge]);
+      const prune = Promise.all([trafficBuf.flush().catch(trafficErr), outcomes.flush().then(() => outcomes.purge()).catch(() => {}), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge]);
       const [probes, cat, , com] = await Promise.allSettled([trust.runProbes(), catalog.cron(), prune, commerce.cron(config.publicBaseUrl ?? "https://api.lumitrades.io")]);
       return {
         probes: probes.status === "fulfilled" ? probes.value : { error: String(probes.reason) },
