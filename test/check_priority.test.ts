@@ -1,12 +1,12 @@
 /**
- * Free and paid trust checks send ONE test-buy priority signal (the owner, Oct 23 2026: payment never affects the order).
- * Abuse limits, identical for both: one slot per seller per UTC day, TRUST_PRIORITY_DAILY_CAP sellers per day (default 5),
- * never-test-bought Base sellers only.
+ * Free and paid trust checks send ONE test-buy priority signal (owner decision, Oct 23 2026: payment never affects the order).
+ * Abuse limits, identical for both: one slot per seller per 30 days (PRIORITY_SELLER_DAYS), TRUST_PRIORITY_DAILY_CAP sellers
+ * per day (default 5), never-test-bought Base sellers only, objective signals only (no caller-entered payTo).
  */
 import { describe, it, expect } from "vitest";
 import { createApp, priorityCap } from "../src/app";
 import { MemoryCatalogStore } from "../src/trust/catalog";
-import { PRIORITY_DAILY_CAP } from "../src/trust/catalog_service";
+import { BUY_SIGNALS, PRIORITY_DAILY_CAP, PRIORITY_SELLER_DAYS, buyCandidate } from "../src/trust/catalog_service";
 import { MemoryEvidenceStore } from "../src/trust/evidence";
 import { MemoryTrialStore } from "../src/trial";
 import { wrapFetchWithSIWx } from "@x402/extensions/sign-in-with-x";
@@ -109,18 +109,30 @@ describe("test-buy priority: free and paid checks are identical", () => {
     expect(y.snapshot()).toEqual(x.snapshot());
   });
 
-  it("dedupes per seller per UTC day (any mix of free and paid, any listing of the seller); the next day counts again", async () => {
+  it("dedupes per seller per 30 days (any mix of free and paid, any listing of the seller); after 30 days it counts again", async () => {
+    expect(PRIORITY_SELLER_DAYS).toBe(30);
     const s = await setup();
     await s.free(R(1)); await s.paid(R(1)); await s.free(R(1)); await s.trial(R(1));
     await s.paid("https://api.s1.com/v1/other"); await s.free("https://api.s1.com/v1/other");
     let snap = s.snapshot();
     expect(snap.queue.map((q) => [q.resource, q.hits])).toEqual([[R(1), 1]]);
     expect(snap.priority).toHaveLength(1);
-    s.advance(DAY);
+    // The next day, and up to 30 days later, the same seller still does not move up again (free or paid).
+    for (const d of [1, 15, 29]) {
+      s.advance(d === 1 ? DAY : d === 15 ? 14 * DAY : 14 * DAY);
+      await s.paid(R(1)); await s.free("https://api.s1.com/v1/other");
+      snap = s.snapshot();
+      expect(snap.queue.map((q) => [q.resource, q.hits])).toEqual([[R(1), 1]]);
+      expect(snap.priority).toHaveLength(1);
+    }
+    s.advance(DAY - 1); // 30 days minus 1 ms after the first slot
+    await s.free(R(1));
+    expect(s.snapshot().priority).toHaveLength(1);
+    s.advance(1); // exactly 30 days later
     await s.paid(R(1));
     snap = s.snapshot();
     expect(snap.queue.map((q) => [q.resource, q.hits])).toEqual([[R(1), 2]]);
-    expect(snap.priority.map((p) => p.day)).toEqual(["2026-10-22", "2026-10-23"]);
+    expect(snap.priority.map((p) => p.day)).toEqual(["2026-10-22", "2026-11-21"]);
   });
 
   it("caps jumped sellers per day at 5 by default, counting free and paid together", async () => {
@@ -160,5 +172,23 @@ describe("test-buy priority: free and paid checks are identical", () => {
     expect(s.snapshot().queue.map((q) => q.resource)).toEqual([R(3)]);
     // Rejected sellers use no cap slot.
     expect(s.snapshot().priority.map((p) => p.seller)).toEqual(["api.s3.com"]);
+  });
+
+  it("only objective signals: a caller-entered payTo mismatch alone never moves a seller up", () => {
+    expect(BUY_SIGNALS).not.toContain("pay_to_mismatch");
+    const exact = { catalog: { entries: [{ resource: R(1), pay_to: [{ network: "eip155:8453", pay_to: payTo(1) }], listed_price_usd: 0.01, purchases: [] }] } };
+    const body = (codes: string[]) => ({ matched: { exact: true }, reasons: codes.map((code) => ({ code })) });
+    expect(buyCandidate(body(["pay_to_mismatch"]), exact, NOW)).toBeNull();
+    expect(buyCandidate(body(["pay_to_mismatch", "pay_to_unrecognised"]), exact, NOW)).toBeNull();
+    expect(buyCandidate(body(["pay_to_mismatch", "no_bazaar_usage"]), exact, NOW)?.reasons).toEqual(["no_bazaar_usage"]);
+  });
+
+  it("a check that enters a mismatched payTo has the same queue effect as one that enters none", async () => {
+    const a = await setup(), b = await setup();
+    await a.free(R(1));
+    const r = await b.req("/v1/trust/vendors?url=" + enc(R(1)) + "&payTo=" + payTo(99));
+    expect(r.status).toBe(200);
+    await new Promise((s) => setTimeout(s, 0));
+    expect(b.snapshot().queue.map((q) => [q.resource, q.reasons])).toEqual(a.snapshot().queue.map((q) => [q.resource, q.reasons]));
   });
 });

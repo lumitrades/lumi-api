@@ -546,9 +546,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   }
 
   /**
-   * Test-buy priority signal: ONE path for paid and free checks. A never-test-bought Base seller with a warning sign moves
-   * to the front of the next day's Base test-buy list, within the abuse limits in catalog.queueBuy (one slot per seller per
-   * UTC day, TRUST_PRIORITY_DAILY_CAP sellers per day). `source` is only logged; it never changes the outcome.
+   * Test-buy priority signal: ONE path for paid and free checks. A never-test-bought Base seller with an objective signal
+   * (BUY_SIGNALS) moves to the front of the next day's Base test-buy list, within the abuse limits in catalog.queueBuy (one
+   * slot per seller per PRIORITY_SELLER_DAYS = 30 days, TRUST_PRIORITY_DAILY_CAP sellers per day). `source` is only logged; it never changes the outcome.
    */
   async function prioritySignal(body: Record<string, unknown>, exact: unknown, source: string) {
     const cand = buyCandidate(body as any, exact, now());
