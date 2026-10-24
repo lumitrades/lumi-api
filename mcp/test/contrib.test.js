@@ -58,7 +58,8 @@ test("lumi_report_receipt: signs a passive receipt from the ledger, submits with
   const c = await connect({ LUMI_CONTRIB_KEY_FILE: keyFile, LUMI_CONTRIB_API: "https://api.test", LUMI_SHARE_RECEIPTS: "1" }, f);
   const dry = JSON.parse((await c.callTool({ name: "lumi_report_receipt", arguments: args })).content[0].text);
   assert.equal(dry.submitted, false);
-  assert.equal(dry.receipt.payment.payer, payer);
+  assert.deepEqual(dry.receipt.payment, { network: "xrpl:0", tx_hash: TX }); // chain + tx hash only
+  assert.equal(dry.receipt.signer.address, payer); // signed by the paying wallet
   assert.equal(dry.receipt.x_lumi_contrib.mode, "passive");
   const r = await c.callTool({ name: "lumi_report_receipt", arguments: { ...args, submit: true } });
   const out = r.content[0].text;
@@ -127,3 +128,32 @@ test("lumi_check in MCP server mode never asks: sharing stays off, one stderr hi
   assert.equal(existsSync(cfg), false);
 });
 
+
+test("lumi_report_receipt description: discloses the public transaction ID and a badge-only reward", async () => {
+  const c = await connect({}, async () => Response.json({}));
+  const t = (await c.listTools()).tools.find((x) => x.name === "lumi_report_receipt");
+  assert.match(t.description, /transaction ID \(tx hash\)/);
+  assert.match(t.description, /public on-chain and can be linked to the paying wallet/);
+  assert.match(t.description, /badge only/);
+  assert.doesNotMatch(t.description, /credit|cash|leaderboard|perk/i);
+  await c.close();
+});
+
+test("lumi_report_receipt: the submitted receipt's payment block is chain + tx hash only", async () => {
+  const sent = [];
+  const f = async (url, init) => {
+    const u = String(url);
+    if (u.includes("/v1/contrib/submissions")) { sent.push(JSON.parse(init.body)); return Response.json({ accepted: true }, { status: 202 }); }
+    return Response.json({ result: { validated: true, close_time_iso: "2026-10-23T12:00:00Z", tx_json: { TransactionType: "Payment", Account: payer, Destination: PAYTO }, meta: { TransactionResult: "tesSUCCESS", delivered_amount: "1000" } } });
+  };
+  const dir = mkdtempSync(join(tmpdir(), "ck-"));
+  const keyFile = join(dir, "key.json");
+  writeFileSync(keyFile, JSON.stringify({ key_id: "lck_0123456789abcdef", private_key: "11".repeat(32), public_key: "x" }));
+  const c = await connect({ LUMI_CONTRIB_KEY_FILE: keyFile, LUMI_CONTRIB_API: "https://api.test", LUMI_SHARE_RECEIPTS: "1", XRPL_SEED: seed }, f);
+  const r = await c.callTool({ name: "lumi_report_receipt", arguments: { endpoint: "https://seller.example/a", network: "xrpl:0", tx_hash: TX, http_status: 200, outcome: "delivered", submit: true } });
+  assert.notEqual(r.isError, true, r.content[0].text);
+  assert.equal(sent.length, 1);
+  assert.deepEqual(sent[0].receipt.payment, { network: "xrpl:0", tx_hash: TX });
+  assert.doesNotMatch(JSON.stringify(sent[0]), /"(amount|asset|payer|ledger_result|quotes)"/);
+  await c.close();
+});

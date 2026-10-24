@@ -14,8 +14,7 @@ extension block, `x_lumi_contrib`. ARS consumers can ignore it, but it is covere
   "issued_at": "2026-10-23T21:00:00.000Z",
   "issuer": { "name": "Lumi Check contributor", "methodology_url": "https://api.lumitrades.io/v1/trust/methodology", "methodology_version": "v0" },
   "seller": { "endpoint": "https://seller.example/x402/data", "domain": "seller.example", "pay_to": "r..." },
-  "payment": { "network": "xrpl:0", "asset": "RLUSD", "issuer": "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De", "amount": "0.001",
-               "tx_hash": "<64 hex>", "payer": "r...", "ledger_result": "tesSUCCESS" },
+  "payment": { "network": "xrpl:0", "tx_hash": "<64 hex>" },
   "delivery": { "observed_at": "2026-10-23T20:59:58Z", "http_status": 200, "data_returned": true, "outcome": "delivered", "latency_ms": 840, "source": "contributor" },
   "x_lumi_contrib": {
     "format": "lumi-contrib/0.1",
@@ -23,13 +22,22 @@ extension block, `x_lumi_contrib`. ARS consumers can ignore it, but it is covere
     "mode": "passive",
     "measurements": { "latency_ms": 840, "http_status": 200, "response_bytes": 1834, "response_sha256": "<64 hex>",
                       "schema_fingerprint": "<32 hex>", "data_timestamp": "...", "freshness_s": 42, "quote_latency_ms": 120,
-                      "quotes": [{ "network": "xrpl:0", "asset": "RLUSD", "amount": "0.001", "pay_to": "r...", "scheme": "exact" }],
                       "facilitator": "...", "settlement_ms": 2100 }
   },
   "receipt_hash": "<sha256 hex>",
   "signer": { "key_type": "ripple-keypairs", "address": "r...", "public_key": "...", "message": "lumi-receipt:xrpl:0:<tx>:<hash>", "signature": "..." }
 }
 ```
+
+## Payment block: chain and transaction ID only
+
+`payment` carries exactly two fields, `network` and `tx_hash`. The server refuses a contributed receipt with any other
+payment field (HTTP 422 `receipt_payment_fields_not_allowed`). The amount, asset and paying wallet are not in the
+receipt; the server reads the public ledger to confirm that the signing wallet paid `seller.pay_to` a non-zero amount.
+The server does not store the amount. Measurements carry no prices or amounts.
+
+A transaction ID is public: anyone who has it can look it up on the blockchain and link it to the paying wallet. The
+kit's tier-2 opt-in says so before sharing is turned on.
 
 ## Hash and signature
 
@@ -39,7 +47,9 @@ extension block, `x_lumi_contrib`. ARS consumers can ignore it, but it is covere
   - XRPL: `ripple-keypairs` over the UTF-8 hex
   - Base: EIP-191 `personal_sign`
   - Stellar: ed25519 over the UTF-8 message, base64-encoded
-- The signer address must equal `payment.payer`.
+- The signer must be the wallet that sent the payment on-ledger. The kit checks this locally before signing (the
+  ledger's payer is passed to `signReceipt(body, signer, { payer })` and not written into the body), and the server
+  checks it again on-ledger.
 - Anyone can verify a receipt offline, or on-ledger with `POST /v1/trust/receipts/verify?ledger=1`.
 
 ## Mapping to ARS `counterparty_delivery_receipt` v0.1
@@ -51,7 +61,7 @@ extension block, `x_lumi_contrib`. ARS consumers can ignore it, but it is covere
 | `issuer` | The contributor, described generically. Contributor identity is held server-side by key id and never put in the receipt. |
 | `seller.*` | Same. `vendor_id` is omitted; the server resolves it. |
 | `payment.network` | `xrpl:0`, `eip155:8453` and **`stellar:pubnet`**. Stellar extends the v0.1 enum and is documented here. |
-| `payment.*` | Same. Optional `ledger_index` and `block_number` are filled by the server from the ledger. |
+| `payment.*` | Only `network` and `tx_hash`. ARS's `asset`, `amount`, `payer` and `ledger_result` are left out on purpose (data minimisation); the server reads them from the ledger to verify and does not store the amount. |
 | `delivery.outcome` | Same 8-value enum. `data_returned` is `null` for `inconclusive`. |
 | `delivery.source` | `"contributor"`. Lumi's own receipts use a descriptive string such as `"Lumi daily test-buy (XRPL)"`. |
 | `x_lumi_contrib` | Extension. `format` versions the block; `kit.version` lets the server retire old kits (HTTP 426). |

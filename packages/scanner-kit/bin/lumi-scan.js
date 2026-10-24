@@ -7,13 +7,12 @@
  *   report --endpoint URL --network N --tx HASH --status 200 --outcome delivered [--submit]
  *                                               passive: receipt for a purchase you already made
  *   buy <url> [--network N] [--live] [--submit] optional capped test-buy (dry run unless --live)
- *   me | share-demand on|off                    your standing / opt in to aggregate-only demand stats
+ *   me | share-demand on|off                    your badge and receipts / opt in to aggregate-only demand stats
  *   check <url> [--pay-to X --amount 0.01 --network N]   free signed pre-pay check (allow / warn / block); after the
  *                                               FIRST check, asks once: "Share your results ...? [Y/n]" (terminal only)
  *   setup [--sharing on|off] [--telemetry on|off] show what is shared, then save your choices
  *   telemetry on|off|status                     tier 1 anonymous delivery outcomes ("share your results"; OFF until you say yes)
- *   sharing on|off|status                       tier 2 full signed receipts (OFF by default; earns free check credits)
- *   credits | spend trust_check <url>           your free Lumi Check credits / spend one on a detailed check
+ *   sharing on|off|status                       tier 2 full signed receipts (OFF by default; shares a public transaction ID; badge only)
  *   account delete [--confirm <key_id>]         delete your contributor account (asks you to type your key id)
  *   prove-wallet --network N [--submit]         sign a wallet-control proof (send it with your registration, or --submit)
  * Env: LUMI_CHECK_TELEMETRY=on|off (tier 1; overrides the saved answer, and the question is not asked), LUMI_NO_PROMPT=1 (never ask), LUMI_SHARE_RECEIPTS=1 (tier 2 on), LUMI_KIT_CONFIG, LUMI_API, LUMI_KIT_KEY (contributor key file), LUMI_KIT_XRPL_SEED(_FILE), LUMI_KIT_STELLAR_SECRET(_FILE), LUMI_KIT_EVM_KEY(_FILE),
@@ -47,7 +46,8 @@ async function main() {
       const { createInterface } = await import("node:readline/promises");
       const rl = createInterface({ input: process.stdin, output: process.stderr });
       const a1 = (await rl.question(kit.renderShareQuestion({ color: !process.env.NO_COLOR }).trimStart())).trim().toLowerCase();
-      const a2 = (await rl.question("Turn ON tier 2 full signed receipts (earns free check credits)? [y/N] ")).trim().toLowerCase();
+      console.error("\n" + kit.TIER2_NOTICE);
+      const a2 = (await rl.question("Turn ON tier 2 (shares a transaction ID that is publicly linkable on-chain)? [y/N] ")).trim().toLowerCase();
       rl.close();
       patch.telemetry = kit.parseShareAnswer(a1) !== false;
       patch.share_receipts = a2 === "y" || a2 === "yes";
@@ -63,14 +63,17 @@ async function main() {
     const v = onOff(pos[0]);
     if (v !== undefined) {
       if (cmd === "telemetry") kit.recordShareChoice(v, { via: "command" }); // an explicit choice: the first-check question will not be asked
-      else kit.saveConfig({ [key]: v });
+      else {
+        if (v) console.error(kit.TIER2_NOTICE + "\n");
+        kit.saveConfig({ [key]: v });
+      }
     }
     const eff = kit.loadConfig();
     const envName = cmd === "telemetry" ? "LUMI_CHECK_TELEMETRY" : "LUMI_SHARE_RECEIPTS";
     return out({ [key]: eff[key], tier: cmd === "telemetry" ? 1 : 2, config: kit.defaultConfigPath(),
       ...(cmd === "telemetry" ? { answered: eff.share_answered, source: eff.telemetry_source } : {}),
       ...(v !== undefined && eff[key] !== v ? { note: `${envName} is set and overrides the saved file.` } : {}),
-      what: cmd === "telemetry" ? "seller host + delivered yes/no + status class, fresh random token; nothing else" : "full signed delivery receipts (earns free Lumi Check credits)" });
+      what: cmd === "telemetry" ? "seller host + delivered yes/no + status class, fresh random token; nothing else" : "full signed delivery receipts: chain + transaction ID (public on-chain, linkable to your wallet); badge only, nothing of monetary value" });
   }
   if (cmd === "check") {
     const lumi = kit.createLumiCheck({ api: process.env.LUMI_API });
@@ -103,8 +106,6 @@ async function main() {
     if (r.deleted) console.error(`Deleted. The key file ${keyPath()} can no longer sign anything; you can delete it.`);
     return out(r);
   }
-  if (cmd === "credits") return out(await client().credits());
-  if (cmd === "spend") return out(await client().spendCredits(pos[0], pos[0] === "vendor_report" ? { vendor_id: pos[1] } : { url: pos[1] }));
   if (cmd === "keygen") {
     const p = flag("out") || keyPath();
     const k = kit.generateKey();
@@ -136,7 +137,7 @@ async function main() {
     if (!has("submit")) return out({ tx_hash: res.tx_hash, outcome: res.outcome, receipt, note: "Not submitted. Add --submit to send it to Lumi." });
     return out({ tx_hash: res.tx_hash, outcome: res.outcome, lumi: await client().submit(receipt, "test_buy") });
   }
-  console.log("usage: lumi-scan check <url> | setup | telemetry on|off|status | sharing on|off|status | credits | spend trust_check <url> | account delete | keygen | quote <url> | wanted | report ... | buy <url> [--live] | me | share-demand on|off");
+  console.log("usage: lumi-scan check <url> | setup | telemetry on|off|status | sharing on|off|status | account delete | keygen | quote <url> | wanted | report ... | buy <url> [--live] | me | share-demand on|off");
   process.exitCode = cmd ? 2 : 0;
 }
 main().catch((e) => { console.error(kit.redact("error: " + (e?.message ?? e))); process.exitCode = 1; });

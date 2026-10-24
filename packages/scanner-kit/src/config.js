@@ -11,8 +11,9 @@
  *   scoring input. Change it any time: `lumi-scan telemetry on|off`, config `"telemetry": true|false`, or env
  *   LUMI_CHECK_TELEMETRY=on|off. Non-interactive runs (no terminal, CI, MCP server, code) are never asked and stay off.
  *
- * Tier 2, full signed receipts: OFF by default, separate opt-in. The only thing that earns free Lumi Check credits.
- *   On: `lumi-scan setup` or `lumi-scan sharing on`. Off: `lumi-scan sharing off`, config `"share_receipts": false`,
+ * Tier 2, full signed receipts: OFF by default, separate opt-in. Contributors get a public badge, nothing of monetary value.
+ *   A receipt shares the payment's chain and transaction ID (tx hash). A transaction ID is public on its blockchain: anyone
+ *   can look it up and link it to the paying wallet. No amount, price or wallet field is put in the receipt. On: `lumi-scan setup` or `lumi-scan sharing on`. Off: `lumi-scan sharing off`, config `"share_receipts": false`,
  *   or env LUMI_SHARE_RECEIPTS=0. While off, nothing about your purchases is sent.
  *
  * Env always wins over the file.
@@ -71,16 +72,26 @@ export const DISCLOSURE = [
   "    URL path or query, payload, or stable ID; each report carries a fresh random token. You are asked once, after your",
   "    first check. Change any time: `lumi-scan telemetry on|off`, or LUMI_CHECK_TELEMETRY=on|off, or",
   "    \"telemetry\": true|false in ~/.lumi-scanner-kit/config.json. It never changes any score.",
-  "  Tier 2 (OFF by default, opt-in): full signed delivery receipts. This is the only thing that earns free Lumi Check",
-  "    credits. Turn on with `lumi-scan sharing on`; off with `lumi-scan sharing off`. No cash rewards.",
+  "  Tier 2 (OFF by default, opt-in): full signed delivery receipts. Each receipt shares the payment's transaction ID",
+  "    (tx hash) and chain. A transaction ID is public: anyone can look it up on the blockchain and link it to the wallet",
+  "    that paid. Contributors get a public badge only, nothing of monetary value. Turn on with `lumi-scan sharing on`;",
+  "    off with `lumi-scan sharing off`.",
+].join("\n");
+
+/** Shown before tier 2 is turned on (setup question and `lumi-scan sharing on`). */
+export const TIER2_NOTICE = [
+  "Tier 2 shares full signed delivery receipts. Each receipt includes the payment's transaction ID (tx hash) and chain.",
+  "A transaction ID is public: anyone can look it up on the blockchain and link it to the wallet that paid.",
+  "No amount, price or wallet field is put in the receipt; Lumi reads the public ledger to confirm the payment.",
+  "Reward: a public contributor badge with a count of verified contributions. Nothing of monetary value.",
 ].join("\n");
 
 /** Shown by `lumi-scan account delete` before the confirm prompt. Keep in sync with README "Deleting your account" and TERMS. */
 export const ACCOUNT_DELETE_NOTICE = [
   "Delete your Lumi Check contributor account. This cannot be undone.",
   "Deleted now: your key (it can never sign again), label, public key, registered wallets, own domains, demand opt-in,",
-  "  activity date, free check credits (balance, earned batches and spends), your leaderboard entry, and every receipt you",
-  "  shared, except receipts Lumi already cited in a published, dated test result.",
-  "Kept, with no link to you: those cited receipts (your wallet signature, payer address and kit details are removed),",
+  "  activity date, your badge, and every receipt you shared, except receipts Lumi already cited in a published, dated",
+  "  test result.",
+  "Kept, with no link to you: those cited receipts (your wallet signature, wallet link and kit details are removed),",
   "  and anonymous per-seller daily summaries (they never had a link to you). Payments on a public blockchain cannot be deleted by anyone.",
 ].join("\n");

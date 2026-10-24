@@ -62,20 +62,25 @@ Share your results to help improve Lumi's public trust list? [Y/n]
   never assume yes: sharing stays off and one hint on how to turn it on is printed to stderr.
 - Your answer only controls what is shared. It never changes a check, a verdict or how any score is computed.
 
-| | Default | What is sent | Earns |
+| | Default | What is sent | Reward |
 |---|---|---|---|
 | **Tier 1: delivery outcomes ("share your results")** | **OFF until you say yes** | After each paid call: seller host (or Lumi vendor id), delivered yes/no, coarse status class (`2xx`/`4xx`/`5xx`/`timeout`), and a fresh random token per report. **No** wallet address, amount, tx hash, URL path or query, payload, or stable ID. | nothing |
-| **Tier 2: signed receipts** | **OFF** (opt-in) | Full signed delivery receipts (below). Nothing is sent unless you turn it on. | free Lumi Check credits |
+| **Tier 2: signed receipts** | **OFF** (opt-in) | Full signed delivery receipts (below), including the payment's chain and transaction ID, which is **public on-chain and can be linked to your wallet**. Nothing is sent unless you turn it on. | a public badge (nothing of monetary value) |
 
 - Tier 1 on/off (any one): `lumi-scan telemetry on|off`, env `LUMI_CHECK_TELEMETRY=on|off`, or `"telemetry": true|false` in
   `~/.lumi-scanner-kit/config.json`.
 - Tier 2 on/off: `lumi-scan sharing on|off`, `"share_receipts": true|false`, or env `LUMI_SHARE_RECEIPTS=1|0`.
+- **What a tier-2 receipt shares about the payment:** only the chain and the transaction ID (tx hash). There is no
+  amount, price, asset or wallet field in it. A transaction ID is public on its blockchain: anyone who has it can look
+  it up and link it to the wallet that paid and the amount. Lumi uses it to confirm on the public ledger that the
+  wallet that signed the receipt paid the seller. Lumi does not store the amount. It keeps the paying wallet address
+  (read from the ledger) with the submission only for the anti-gaming checks (caps, funding clusters, near-duplicates);
+  it is never published or shown by any public route, and is removed on account deletion.
 - Env always wins over the config file. `lumi-scan telemetry status` / `sharing status` show the effective setting.
 - Retention: raw data (tier-1 outcome counters, tier-2 submissions) is kept for 90 days, then deleted, and a raw day is
   deleted only after it has been rolled up. The daily per-seller summaries (delivered, failed, status-class counts; no
-  wallet, amount, tx, query or client id) are kept long-term. Contributor accounts are kept while active (a receipt or
-  signed check in the last 12 months). Unused credits expire 90 days after they were earned. Tier-1 outcomes are never a
-  scoring input.
+  wallet, amount, tx, query or client id) are kept long-term. Contributor accounts are kept while active (a verified
+  receipt in the last 12 months). Tier-1 outcomes are never a scoring input.
 
 ### Deleting your account
 
@@ -83,10 +88,9 @@ Share your results to help improve Lumi's public trust list? [Y/n]
 `DELETE /v1/contrib/me`. You can also email hello@lumitrades.io and Lumi deletes it for you the same way.
 
 - Deleted at once: your key (it can never sign again), label, public key, registered wallets and the funding wallet
-  recorded for each, own domains, demand opt-in, last-activity date, your free check credits (balance, earned batches
-  and spends), your leaderboard entry, and every tier-2 receipt you shared (including the stored copy), except receipts
-  Lumi has already cited in a published, dated test result.
-  Kept, with no link to you: those cited receipts, with your wallet signature, payer address, kit details and key id
+  recorded for each, own domains, demand opt-in, last-activity date, your badge, and every tier-2 receipt you shared
+  (including the stored copy), except receipts Lumi has already cited in a published, dated test result.
+  Kept, with no link to you: those cited receipts, with your wallet signature, paying-wallet link, kit details and key id
   removed (the transaction hash, seller and delivery result stay because the published result cites them; they still
   fall under the 90-day raw retention), and the anonymous per-seller daily summaries and tier-1 counters, which never
   had a link to you. What remains of the key is a tombstone (the random key id, status "deleted" and dates) so it cannot
@@ -105,16 +109,16 @@ Share your results to help improve Lumi's public trust list? [Y/n]
    caps receipts per key, per endpoint and per funding source. A negative finding counts only once a second,
    independent contributor (or a Lumi re-buy) confirms it, and sellers can dispute a finding.
 4. **What counts.** Lumi looks up who first funded each registered wallet (Base explorer, XRPL activation, Stellar
-   `create_account`) and groups wallets with the same funder into one cluster. A cluster earns at most once per seller
+   `create_account`) and groups wallets with the same funder into one cluster. A cluster counts at most once per seller
    per UTC day, however many keys it uses. Receipts from a wallet funded by the seller's pay-to wallet (or the seller's
-   own funder) count for nothing, as do receipts from wallets without a wallet-control proof. A second receipt for the
-   same payer, seller and amount within two minutes of another is refused as a near-duplicate even with a new tx hash.
-   Zero-weight receipts are stored and shown to you with `weight: 0` and the reason, but earn no credits or leaderboard
-   place and can't confirm anyone's negative finding. Exchange and faucet wallets Lumi lists are ignored as funders.
-5. **No cash.** Each verified receipt earns **free Lumi Check credits** (one per unique seller per day; self-tests and
-   duplicates earn nothing), spendable on checks and detailed reports (`lumi-scan credits`,
-   `lumi-scan spend trust_check <url>`). You also get the contributor badge, a place on the public leaderboard, early
-   access and higher rate limits. Cash bounties are disabled.
+   own funder) count for nothing, as do receipts from wallets without a wallet-control proof. A second receipt from the
+   same paying wallet to the same seller within two minutes of another is refused as a near-duplicate even with a new tx
+   hash. Zero-weight receipts are stored and shown to you with `weight: 0` and the reason, but do not count toward your
+   badge and can't confirm anyone's negative finding. Exchange and faucet wallets Lumi lists are ignored as funders.
+5. **Badge only.** Verified receipts earn a public contributor badge (`GET /v1/contrib/badge/<handle>`), optionally
+   with a count of verified contributions (one per unique seller per day; self-tests and duplicates do not count).
+   There are no credits, money, perks, rankings or rate-limit changes, and contributing never changes how any score is
+   computed.
 
 ## Quick start
 
@@ -125,7 +129,7 @@ node bin/lumi-scan.js setup                     # shows what is shared; choose t
 node bin/lumi-scan.js keygen                    # writes ~/.lumi-scanner-kit/contributor_key.json (mode 600) and prints the PUBLIC key
 node bin/lumi-scan.js prove-wallet --network xrpl:0           # signs a wallet-control proof locally (needs the wallet secret env below)
 # Send Lumi the public key, the wallet address(es) you pay from and one proof per wallet. Lumi issues a key_id: add it to
-# the key file as "key_id". Wallets registered without a proof earn nothing until you run `prove-wallet --submit`.
+# the key file as "key_id". Wallets registered without a proof do not count until you run `prove-wallet --submit`.
 
 node bin/lumi-scan.js quote https://seller.example/x402/data   # free: 402 quote, latency, price per chain
 node bin/lumi-scan.js wanted --limit 5                          # what to test next (server-chosen)
@@ -138,23 +142,22 @@ node bin/lumi-scan.js sharing on                               # tier 2 opt-in (
 node bin/lumi-scan.js report ... --submit                       # sends it to Lumi
 
 node bin/lumi-scan.js buy https://seller.example/x402/data      # dry run: shows what would be paid, against your caps
-node bin/lumi-scan.js me                                        # your own submissions, badges and credits
-node bin/lumi-scan.js credits                                   # free Lumi Check credit balance
+node bin/lumi-scan.js me                                        # your own submissions and badge
 node bin/lumi-scan.js share-demand on                           # opt in to aggregate demand stats (off by default)
 ```
 
 Outcomes: `delivered`, `no_data`, `empty_result`, `error_status`, `timeout`, `wrong_data`, `other`, `inconclusive`.
 
 Extra test data recorded with each receipt (all optional): latency, HTTP status, response size, response SHA-256,
-schema fingerprint (field names and types, not values), data freshness, quoted price per chain, facilitator and
-settlement time. Response bodies are never uploaded, only their hash and shape.
+schema fingerprint (field names and types, not values), data freshness, facilitator and settlement time. No prices
+or amounts. Response bodies are never uploaded, only their hash and shape.
 
 MCP: the `lumi-trades-mcp` branch build adds `lumi_scan_seller` (quote + dry-run plan) and `lumi_report_receipt`
 (passive report; set `LUMI_CONTRIB_KEY_FILE`).
 
 ## What you get back
 
-- Your own submissions, with their status, findings and free check credits (`lumi-scan me`, `lumi-scan credits`).
+- Your own submissions, with their status and findings, and your badge (`lumi-scan me`).
 - Normal Lumi API access.
 - **Not** the raw pooled database.
 

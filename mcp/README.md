@@ -24,7 +24,7 @@ use this package when you want paid tools to pay automatically from your own wal
 | `lumi_trust_feed` | free | – | Trust data feed plans (free key 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d) and licence terms |
 | `lumi_check` | free | `url?` `pay_to?` `amount_usd?` `network?` | **Lumi Check** before you pay any x402 seller: allow / warn / block with reasons, the seller's score and a link to its live report. Signed by Lumi and verified locally. Only origin + path of the URL is sent. Fail-open: warn if Lumi is unreachable within 2.5 s |
 | `lumi_scan_seller` | free | `url` | Fetch an x402 seller's 402 quote without paying, plus a dry-run test-buy plan against local caps |
-| `lumi_report_receipt` | free | `endpoint` `network` `tx_hash` … | Sign a receipt for a purchase you already made. `submit: true` is tier 2 sharing: off by default, needs `LUMI_SHARE_RECEIPTS=1` or `lumi-scan sharing on`. Verified receipts earn free Lumi Check credits (no cash) |
+| `lumi_report_receipt` | free | `endpoint` `network` `tx_hash` … | Sign a receipt for a purchase you already made. `submit: true` is tier 2 sharing: off by default, needs `LUMI_SHARE_RECEIPTS=1` or `lumi-scan sharing on`. Shares the payment's chain and transaction ID, which is public on-chain and linkable to the paying wallet. Verified receipts earn a public badge only |
 | `lumi_brief` | paid | $0.02 | Today's market brief (BTC, CoinMarketCap Fear & Greed, movers, key levels, yen, events, paper trades, news). `format: "md"` for markdown |
 | `lumi_signal` | paid | $0.01 | Buy/sell read for one coin (1h/4h/1d + indicators) |
 | `lumi_levels` | paid | $0.01 | Support/resistance, rule-based 7-day scenario levels (not forecasts), commentary for one coin |
@@ -101,8 +101,9 @@ What the kit shares: **nothing until the user says yes.** The `lumi-scan` CLI as
 results to help improve Lumi's public trust list? [Y/n]"). The MCP server cannot ask, so here sharing stays off and one hint is
 written to stderr; turn it on with `LUMI_CHECK_TELEMETRY=on` or `lumi-scan telemetry on`. **Tier 1** is only an anonymous delivery
 outcome after a paid call: seller host, delivered yes/no, a coarse status class and a random one-time token. No wallet, amount,
-tx hash, query string or stable ID. Sharing never changes any score. **Tier 2** (off by default) sends full signed receipts and is the only thing
-that earns credits. See the kit README.
+tx hash, query string or stable ID. Sharing never changes any score. **Tier 2** (off by default) sends full signed receipts.
+Each receipt shares the payment's chain and transaction ID (no amount or wallet field); a transaction ID is public on-chain and
+can be linked to the paying wallet. Contributors get a public badge only, nothing of monetary value. See the kit README.
 
 ## Configuration (environment)
 

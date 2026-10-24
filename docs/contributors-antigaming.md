@@ -1,7 +1,10 @@
-# Lumi Check contributors: score-gaming controls (scanner-kit-v0, draft)
+# Lumi Check contributors: score-gaming controls (draft)
 
-Status: implemented on the `scanner-kit-v0` branch, with tests. Not deployed. Migration `0022_contrib_antigaming.sql`
+Status: implemented on the `lumi-check-preview` branch, with tests. Not deployed. Migration `0022_contrib_antigaming.sql`
 is a draft and has not been applied to production D1. Applying it needs the owner's approval.
+
+Contributors are rewarded with a public badge only (no credits, money or perks), so these controls protect the
+scores and the badge counts, not a payout.
 
 ## 1. Wallet-control proof at registration
 
@@ -38,26 +41,26 @@ A wallet's `source` is its funder, or that funder's own source if the funder is 
 Ignored funders (`CONTRIB_FUNDER_IGNORE`, for example exchange hot wallets) never link wallets. When a wallet that
 earlier wallets named as their source is registered later, those earlier wallets are re-pointed to its source.
 
-**One cluster = one contributor for scoring and credits.** A receipt gets `weight 0` (`same_cluster`) when another key
+**One cluster = one contributor for scoring and badge counts.** A receipt gets `weight 0` (`same_cluster`) when another key
 whose wallets share its source already has a weighted receipt for the same seller (pay_to or domain) that UTC day.
 The existing per-endpoint caps already count funding sources rather than wallets. The owner can review clusters at
 `GET /v1/owner/contributors/clusters`, which lists sources shared by more than one key.
 
 ## 3. Seller-funded wallets
 
-A receipt gets `weight 0` (`seller_funded`) and earns no credits when the payer's funder or source is the seller's
+A receipt gets `weight 0` (`seller_funded`) and does not count toward a badge when the payer's funder or source is the seller's
 pay_to, or the pay_to's own first funder, or a registered wallet in the same cluster as that funder. Ignored funders
 are skipped.
 
 ## Zero weight
 
-`weight 0` receipts are stored as evidence and shown to the contributor with the reason. They don't count toward the
-leaderboard, credit lots or badges, and they never confirm, or get confirmed by, another contributor's negative.
+`weight 0` receipts are stored as evidence and shown to the contributor with the reason. They don't count toward
+badges or verified-contribution counts, and they never confirm, or get confirmed by, another contributor's negative.
 
 ## 4. Near-duplicates
 
-The tx-hash check stays. In addition, the same key, payer, pay_to and amount with ledger times within
-`near_dup_window_s` (120 s) returns `409 near_duplicate`. This applies to stored rows (using the `(key_id, day)` index)
+The tx-hash check stays. In addition, the same key, paying wallet and pay_to with ledger times within
+`near_dup_window_s` (120 s) returns `409 near_duplicate`. The amount is not used (and not stored). This applies to stored rows (using the `(key_id, day)` index)
 and to receipts still queued for the batch writer.
 
 ## Rate limits
@@ -65,7 +68,6 @@ and to receipts still queued for the batch writer.
 | Limiter | Where | Status |
 |---|---|---|
 | Contributor requests per key (`per_minute`, 10) | `authContributor` | Uses the **Workers Rate Limiting** binding `CONTRIB_RATE_LIMITER` when bound, shared across isolates in a location with no D1 rows. Otherwise falls back to the in-isolate map. The binding is commented out in `wrangler.toml` and needs the owner's approval and a deploy |
-| Perk checks per key per minute | `checkPerk` | In-isolate. A second ratelimit binding would be needed (same approval) |
 | Tier-1 outcome reports per IP (120/min) | `app.ts outcomeLimited` | In-isolate by design: the IP is never stored. A ratelimit binding keyed on a hashed IP would work too |
 | Free `/v1/check`, catalog, lookup, receipt | `trust/index.ts limited()` | Already durable (meta counters) |
 
@@ -76,4 +78,4 @@ contributors, and it adds a write to every read endpoint. The Rate Limiting bind
 ## Tier 1 never feeds scores
 
 Anonymous tier-1 outcome counters (`check_outcomes`, `check_outcome_daily`) have no contributor link and are never
-read by scoring, the leaderboard or credits. A test asserts this.
+read by scoring or badges. A test asserts this.

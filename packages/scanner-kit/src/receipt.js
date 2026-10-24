@@ -2,6 +2,10 @@ import { originPath } from "./origin.js";
 /**
  * Contributor receipt: AgenticRiskStandard `counterparty_delivery_receipt` v0.1 plus an `x_lumi_contrib` extension block.
  * The paying wallet signs `lumi-receipt:<network>:<tx_hash>:<receipt_hash>`; the hash covers the whole body incl. the extension.
+ *
+ * Data minimisation: the payment block holds only the chain and the transaction hash. No amount, asset or payer field:
+ * Lumi reads the public ledger to confirm the payment. Note that a transaction hash is public on-chain, so anyone can
+ * look it up and link it to the paying wallet.
  */
 import { canonicalJson, sha256Hex } from "./util.js";
 import { KIT_NAME, KIT_VERSION, CONTRIB_FORMAT, RECEIPT_TYPE, RECEIPT_VERSION, DEFAULT_API } from "./version.js";
@@ -15,7 +19,7 @@ export async function receiptHash(r) {
 }
 
 /**
- * @param p { endpoint, pay_to, network, asset, amount, issuer?, tx_hash, payer, ledger_result?, observed_at, http_status, outcome, latency_ms?, mode, measurements?, label? }
+ * @param p { endpoint, pay_to, network, tx_hash, observed_at, http_status, outcome, latency_ms?, mode, measurements?, label? }
  */
 export function buildReceiptBody(p, { api = DEFAULT_API, issuedAt = new Date().toISOString() } = {}) {
   if (!OUTCOMES.includes(p.outcome)) throw new Error("outcome must be one of " + OUTCOMES.join(", "));
@@ -31,10 +35,7 @@ export function buildReceiptBody(p, { api = DEFAULT_API, issuedAt = new Date().t
     issuer: { name: p.label ? `Lumi Check contributor (${String(p.label).slice(0, 40)})` : "Lumi Check contributor", methodology_url: `${api}/v1/trust/methodology`, methodology_version: "v0" },
     // origin + path only: query strings (which may carry the buyer's search terms) never leave the machine.
     seller: { endpoint: originPath(p.endpoint) ?? p.endpoint, domain, pay_to: p.pay_to },
-    payment: {
-      network: p.network, asset: p.asset, ...(p.issuer ? { issuer: p.issuer } : {}), amount: String(Number(p.amount)), tx_hash: p.tx_hash, payer: p.payer,
-      ledger_result: p.ledger_result ?? "tesSUCCESS",
-    },
+    payment: { network: p.network, tx_hash: p.tx_hash },
     delivery: {
       observed_at: p.observed_at, http_status: p.http_status ?? 0,
       data_returned: p.outcome === "inconclusive" ? null : p.outcome === "delivered",
@@ -44,11 +45,16 @@ export function buildReceiptBody(p, { api = DEFAULT_API, issuedAt = new Date().t
   };
 }
 
-/** Hash and sign with the paying wallet's signer (see signers.js). The signer must be the payer. */
-export async function signReceipt(body, signer) {
+/**
+ * Hash and sign with the paying wallet's signer (see signers.js). The signer must be the wallet that paid: pass the
+ * payer read from the ledger as `payer` to check it locally first (it is not written into the receipt).
+ */
+export async function signReceipt(body, signer, { payer } = {}) {
   if (signer.network !== body.payment.network) throw new Error("signer network differs from payment network");
-  const same = signer.network === "eip155:8453" ? signer.address.toLowerCase() === String(body.payment.payer).toLowerCase() : signer.address === body.payment.payer;
-  if (!same) throw new Error("signer is not the payer: only the wallet that paid can sign its receipt");
+  if (payer != null) {
+    const same = signer.network === "eip155:8453" ? signer.address.toLowerCase() === String(payer).toLowerCase() : signer.address === payer;
+    if (!same) throw new Error("signer is not the payer: only the wallet that paid can sign its receipt");
+  }
   const receipt_hash = await receiptHash(body);
   const message = receiptMessage(body.payment.network, body.payment.tx_hash, receipt_hash);
   const signature = await signer.sign(message);

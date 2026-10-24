@@ -28,7 +28,7 @@ export function amountUsdOf(req) {
   if (dec === undefined) return undefined;
   return Number(amt) / 10 ** dec;
 }
-/** Lumi's server accepts EVM, XRPL and Solana-style payTo; anything else is omitted rather than rejected. */
+/** Lumi's server accepts EVM, XRPL and base58-style payTo; anything else is omitted rather than rejected. */
 const PAYTO_OK = /^(0x[0-9a-fA-F]{40}|r[1-9A-HJ-NP-Za-km-z]{24,34}|[1-9A-HJ-NP-Za-km-z]{32,44})$/;
 const payToOf = (p) => (p && PAYTO_OK.test(String(p)) ? String(p) : undefined);
 
