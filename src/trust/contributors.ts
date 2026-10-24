@@ -13,6 +13,7 @@
  *     GET  /v1/contrib/me            own credits, caps left and own recent submissions
  *     POST /v1/contrib/me            { share_demand: boolean } (opt-in to aggregate-only demand stats)
  *     DELETE /v1/contrib/me          { confirm: "<own key_id>" } delete the account (see eraseAccount)
+ *     POST /v1/contrib/me/wallet-proof { address, key_type, public_key?, signature } prove control of a registered wallet
  *   Seller (signed with the payTo wallet):
  *     POST /v1/contrib/disputes      { tx_hash, reason, signer } holds a contributed finding for review
  *   Owner (Authorization: Bearer <OWNER_MCP_KEY>, same check as the other owner routes):
@@ -26,8 +27,13 @@
  *     POST /v1/owner/contributors/findings/{tx}       { action: "mark_published" } receipt cited in a published, dated test result
  *     POST /v1/owner/contributors/delete              { key_id | wallet, confirm: true, request_ref? } delete on an email request
  *     POST /v1/owner/contributors/reconcile           confirm unconfirmed negatives against Lumi's own re-buys
+ *     GET  /v1/owner/contributors/clusters            funding sources shared by more than one key
  *
- * D1: one row (+2 index entries) per accepted submission on its OWN daily counter `contrib_writes:<day>`
+ * Anti-gaming (docs/contributors-antigaming.md): wallet-control proof at issue (walletProofMessage), cached first-funder
+ * tracing (XRPL / Stellar / Base) with one-hop clusters, weight 0 for unproven / seller-funded / same-cluster receipts,
+ * near-duplicate refusal (payer + pay_to + amount within near_dup_window_s).
+ *
+ * D1: one row (+3 index entries) per accepted submission on its OWN daily counter `contrib_writes:<day>`
  * (CONTRIB_CAPS.write_budget_rows), separate from the catalog `writes:<day>` counter, so contributions never starve
  * ingest. With CONTRIB_QUEUE bound, inserts go through the lumi-contrib-writes queue and are flushed in one batch.
  * Rejected submissions write nothing. Credits are derived from the submission rows; there is no payout code.
@@ -72,7 +78,9 @@ export const DEFAULT_CAPS = {
   tx_max_age_days: 7,
   observed_skew_min: 60, // |delivery.observed_at - ledger time| allowed
   write_budget_rows: 5_000, // contributions-only D1 rows per UTC day
-  per_minute: 10, // in-isolate request limit per key (no D1 writes)
+  per_minute: 10, // per-key request limit: Workers Rate Limiting binding when bound (CONTRIB_RATE_LIMITER), else in-isolate
+  near_dup_window_s: 120, // same payer + seller + amount with ledger times this close = one purchase, whatever the tx hashes
+  funding_recheck_days: 7, // cached "no funder found" lookups are retried after this; found funders are kept
   new_wallet_days: 30,
   flag_min_receipts: 4, // anti-boost flag needs at least this many receipts on the endpoint in 7 days
   flag_max_sources: 2, // ... from at most this many funding sources, or
@@ -90,8 +98,8 @@ const iso = (t: number) => new Date(t).toISOString();
 const dayOf = (t: number) => iso(t).slice(0, 10);
 const monthStart = (t: number) => iso(t).slice(0, 7) + "-01";
 export const contribBudgetKey = (t: number) => "contrib_writes:" + dayOf(t);
-/** D1 rows written per accepted submission: the row + 2 secondary index entries. */
-export const ROWS_PER_SUBMISSION = 3;
+/** D1 rows written per accepted submission: the row + its secondary index entries (approximate, for the budget). */
+export const ROWS_PER_SUBMISSION = 4;
 
 export function cmpVersion(a: string, b: string): number {
   const pa = a.split(".").map((x) => parseInt(x, 10) || 0), pb = b.split(".").map((x) => parseInt(x, 10) || 0);
@@ -108,7 +116,27 @@ export interface ContributorKey {
   /** UTC day of the last accepted receipt or signed check (updated at most once per key per day). Accounts are kept while active. */
   last_active_day?: string | null;
 }
-export interface WalletRow { address: string; key_id: string; funder: string | null; funded_at: number | null; source: string }
+export interface WalletRow {
+  address: string; key_id: string; funder: string | null; funded_at: number | null; source: string;
+  /** A wallet-control signature was verified at registration (or later via /v1/contrib/me/wallet-proof). Unproven wallets earn zero weight. */
+  proven?: boolean;
+}
+/** Cached first-funder lookup (migration 0022 `wallet_funding`): found funders are kept, misses retried after funding_recheck_days. */
+export interface FundingRow { address: string; funder: string | null; funded_at: number | null; checked_at: number }
+/** Message a wallet signs to prove control at registration, bound to the contributor's ed25519 key. */
+export const walletProofMessage = (contributorPublicKeyHex: string, address: string) => `lumi-wallet-proof:v1:${contributorPublicKeyHex.toLowerCase()}:${address}`;
+export interface WalletProof { key_type?: string; public_key?: string; signature?: string }
+/** Verify a wallet-control proof with the same verifiers as seller disputes. */
+export function verifyWalletProof(contributorPublicKeyHex: string, address: string, pr: WalletProof | null | undefined): boolean {
+  if (!pr || typeof pr !== "object") return false;
+  const msg = walletProofMessage(contributorPublicKeyHex, address), sig = String(pr.signature ?? "");
+  try {
+    if (XRPL_ADDR_RE.test(address)) return pr.key_type === "ripple-keypairs" && verifyXrplSignature(msg, sig, String(pr.public_key ?? "")) && xrplAddressOf(String(pr.public_key ?? "")) === address;
+    if (EVM_ADDR_RE.test(address)) return pr.key_type === "eip191" && recoverEvmSigner(msg, sig) === address.toLowerCase();
+    if (STELLAR_ADDR_RE.test(address)) return pr.key_type === "stellar-ed25519" && verifyStellarSignature(msg, sig, address);
+  } catch { /* invalid */ }
+  return false;
+}
 export interface Submission {
   tx_hash: string; key_id: string; day: string; created_at: number; mode: "passive" | "test_buy"; kit_version: string | null;
   endpoint: string; endpoint_key: string; domain: string | null; network: string; asset: string; amount: string;
@@ -117,7 +145,17 @@ export interface Submission {
   credit_uusd: number; credit_note: string | null; dispute: string | null; metrics: string | null; receipt: string;
   /** Set by the owner when the receipt is cited in a published, dated test result (migration 0021). */
   published_at?: number | null;
+  /**
+   * Scoring weight (migration 0022): 1 = counts; 0 = stored for evidence but no leaderboard, credits or confirmations.
+   * weight_note says why: wallet_unproven, seller_funded (payer funded by the seller's pay_to or its cluster), same_cluster
+   * (another key in the same funding cluster already counted this seller today).
+   */
+  weight?: number; weight_note?: string | null;
 }
+/** Zero-weight reasons. */
+export type WeightNote = "wallet_unproven" | "seller_funded" | "same_cluster";
+/** True when a submission counts for scores and credits. */
+export const weighs = (s: { finding: Finding; dispute: string | null; weight?: number | null }) => (s.finding === "counted" || s.finding === "confirmed") && !s.dispute && s.weight !== 0;
 export interface EraseResult { found: boolean; submissions_deleted: number; submissions_anonymised: number; credit_spends_deleted: number; wallets_deleted: number }
 /** Placeholder key id left on anonymised submissions and in the key tombstone's place: no link to the deleted contributor. */
 export const DELETED_CONTRIBUTOR = "deleted";
@@ -161,6 +199,18 @@ export interface ContributorStore {
   /** Record activity (no-op if already recorded for that day or later). */
   touch(id: string, day: string): Promise<void>;
   counts(q: { key_id: string; endpoint_key: string; source: string; day: string; since_recent: string; since_month: string; tx_hash: string }): Promise<CapCounts>;
+  /** Near-duplicate purchase: this key, same payer + pay_to + amount, ledger time within windowMs (index: key_id, day). */
+  nearDup(q: { key_id: string; since_day: string; payer: string; pay_to: string; amount: string; ledger_ts: number; window_ms: number }): Promise<number>;
+  /** Weighted receipts for this seller (domain or pay_to) today from OTHER keys sharing the funding source (index: source, day). */
+  clusterSeller(q: { source: string; day: string; domain: string | null; pay_to: string; key_id: string }): Promise<number>;
+  /** Re-point wallets whose source was `from` (a wallet now known to be funded upstream) to `to`. */
+  resource(from: string, to: string): Promise<void>;
+  /** Mark a registered wallet as proven (wallet-control proof verified). */
+  setProven(address: string, key_id: string): Promise<boolean>;
+  getFunding(address: string): Promise<FundingRow | null>;
+  putFunding(r: FundingRow): Promise<void>;
+  /** Funding sources shared by wallets of more than one key (owner review). */
+  clusters(): Promise<{ source: string; keys: string[]; wallets: string[] }[]>;
   /** Apply queued writes in ONE batch; returns D1 rows written (for the contributions budget). */
   apply(ops: WriteOp[], budgetKey: string): Promise<number>;
   byTx(tx: string): Promise<Submission | null>;
@@ -174,7 +224,7 @@ export interface ContributorStore {
   /** Retention: delete submissions (incl. the stored receipt copy) older than `beforeDay`. Returns rows deleted. */
   purge(beforeDay: string): Promise<number>;
   /** Earn side of the check-credit ledger: this key's submissions since a day (seller, day, finding only). */
-  verifiedSince(key_id: string, sinceDay: string): Promise<Pick<Submission, "domain" | "pay_to" | "day" | "finding" | "dispute">[]>;
+  verifiedSince(key_id: string, sinceDay: string): Promise<Pick<Submission, "domain" | "pay_to" | "day" | "finding" | "dispute" | "weight">[]>;
   addSpend(row: CreditSpend): Promise<void>;
   deleteSpend(id: string): Promise<void>;
   spendsSince(key_id: string, sinceDay: string): Promise<CreditSpend[]>;
@@ -268,7 +318,23 @@ export class MemoryContributorStore implements ContributorStore {
     this.writes += n; return n;
   }
   spends = new Map<string, CreditSpend>();
-  async verifiedSince(id: string, d: string) { return [...this.subs.values()].filter((s) => s.key_id === id && s.day >= d).map(({ domain, pay_to, day, finding, dispute }) => ({ domain, pay_to, day, finding, dispute })); }
+  async verifiedSince(id: string, d: string) { return [...this.subs.values()].filter((s) => s.key_id === id && s.day >= d).map(({ domain, pay_to, day, finding, dispute, weight }) => ({ domain, pay_to, day, finding, dispute, weight })); }
+  funding = new Map<string, FundingRow>();
+  async nearDup(q: Parameters<ContributorStore["nearDup"]>[0]) {
+    return [...this.subs.values()].filter((s) => s.key_id === q.key_id && s.day >= q.since_day && s.payer === q.payer && s.pay_to === q.pay_to && s.amount === q.amount && s.ledger_ts != null && Math.abs(s.ledger_ts - q.ledger_ts) <= q.window_ms).length;
+  }
+  async clusterSeller(q: Parameters<ContributorStore["clusterSeller"]>[0]) {
+    return [...this.subs.values()].filter((s) => s.source === q.source && s.day === q.day && s.key_id !== q.key_id && s.weight !== 0 && (s.pay_to === q.pay_to || (!!q.domain && s.domain === q.domain))).length;
+  }
+  async resource(from: string, to: string) { for (const w of this.walletRows.values()) if (w.source === from && w.address !== to) { w.source = to; this.writes++; } }
+  async setProven(a: string, id: string) { const w = this.walletRows.get(a); if (!w || w.key_id !== id) return false; w.proven = true; this.writes++; return true; }
+  async getFunding(a: string) { const r = this.funding.get(a); return r ? { ...r } : null; }
+  async putFunding(r: FundingRow) { this.funding.set(r.address, { ...r }); this.writes++; }
+  async clusters() {
+    const by = new Map<string, { keys: Set<string>; wallets: string[] }>();
+    for (const w of this.walletRows.values()) { const e = by.get(w.source) ?? { keys: new Set(), wallets: [] }; e.keys.add(w.key_id); e.wallets.push(w.address); by.set(w.source, e); }
+    return [...by.entries()].filter(([, e]) => e.keys.size > 1).map(([source, e]) => ({ source, keys: [...e.keys], wallets: e.wallets }));
+  }
   async addSpend(r: CreditSpend) { this.spends.set(r.id, { ...r, alloc: r.alloc ? r.alloc.map((a) => ({ ...a })) : null }); this.writes++; }
   async deleteSpend(id: string) { this.spends.delete(id); this.writes++; }
   async spendsSince(id: string, d: string) { return [...this.spends.values()].filter((s) => s.key_id === id && s.day >= d).sort((a, b) => b.ts - a.ts).map((x) => ({ ...x, alloc: x.alloc ? x.alloc.map((a) => ({ ...a })) : null })); }
@@ -281,7 +347,7 @@ const ANON_FIELDS = { key_id: DELETED_CONTRIBUTOR, payer: "", source: "", new_wa
 function tombstone(id: string, k: ContributorKey, at: number, reason: string): ContributorKey {
   return { key_id: id, label: "", public_key: "", wallets: [], own_domains: [], daily_cap: null, share_demand: false, status: "deleted", forfeited: k.forfeited, created_at: k.created_at, revoked_at: at, revoke_reason: reason, last_active_day: null };
 }
-const SUB_COLS = "tx_hash, key_id, day, created_at, mode, kit_version, endpoint, endpoint_key, domain, network, asset, amount, pay_to, payer, source, new_wallet, receipt_hash, http_status, outcome, finding, wanted, demand_opt_in, ledger_ts, credit_uusd, credit_note, dispute, metrics, receipt";
+const SUB_COLS = "tx_hash, key_id, day, created_at, mode, kit_version, endpoint, endpoint_key, domain, network, asset, amount, pay_to, payer, source, new_wallet, receipt_hash, http_status, outcome, finding, wanted, demand_opt_in, ledger_ts, credit_uusd, credit_note, dispute, metrics, receipt, weight, weight_note";
 
 export class D1ContributorStore implements ContributorStore {
   constructor(private db: D1Like) {}
@@ -293,14 +359,14 @@ export class D1ContributorStore implements ContributorStore {
   async wallets(a: string[]) {
     const l = [...new Set(a)].slice(0, 50);
     if (!l.length) return [];
-    return (await this.db.prepare(`SELECT * FROM contributor_wallets WHERE address IN (${l.map((_, i) => `?${i + 1}`).join(",")})`).bind(...l).all<WalletRow>()).results ?? [];
+    return ((await this.db.prepare(`SELECT * FROM contributor_wallets WHERE address IN (${l.map((_, i) => `?${i + 1}`).join(",")})`).bind(...l).all<any>()).results ?? []).map((r: any) => ({ ...r, proven: !!r.proven }));
   }
   async issue(k: ContributorKey, ws: WalletRow[]) {
     await this.db.batch([
       this.db.prepare("INSERT INTO contributor_keys (key_id, label, public_key, wallets, own_domains, daily_cap, share_demand, status, forfeited, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,'active',0,?8)")
         .bind(k.key_id, k.label, k.public_key, JSON.stringify(k.wallets), JSON.stringify(k.own_domains), k.daily_cap, k.share_demand ? 1 : 0, k.created_at),
-      ...ws.map((w) => this.db.prepare("INSERT INTO contributor_wallets (address, key_id, funder, funded_at, source) VALUES (?1,?2,?3,?4,?5) ON CONFLICT(address) DO UPDATE SET key_id = excluded.key_id, funder = excluded.funder, funded_at = excluded.funded_at, source = excluded.source")
-        .bind(w.address, w.key_id, w.funder, w.funded_at, w.source)),
+      ...ws.map((w) => this.db.prepare("INSERT INTO contributor_wallets (address, key_id, funder, funded_at, source, proven) VALUES (?1,?2,?3,?4,?5,?6) ON CONFLICT(address) DO UPDATE SET key_id = excluded.key_id, funder = excluded.funder, funded_at = excluded.funded_at, source = excluded.source, proven = excluded.proven")
+        .bind(w.address, w.key_id, w.funder, w.funded_at, w.source, w.proven ? 1 : 0)),
     ]);
   }
   async revoke(id: string, at: number, reason: string, forfeit: boolean) {
@@ -357,7 +423,7 @@ export class D1ContributorStore implements ContributorStore {
       ? this.db.prepare(`INSERT OR IGNORE INTO contributor_submissions (${SUB_COLS}) VALUES (${SUB_COLS.split(",").map((_, i) => `?${i + 1}`).join(",")})`).bind(
         o.row.tx_hash, o.row.key_id, o.row.day, o.row.created_at, o.row.mode, o.row.kit_version, o.row.endpoint, o.row.endpoint_key, o.row.domain, o.row.network,
         o.row.asset, o.row.amount, o.row.pay_to, o.row.payer, o.row.source, o.row.new_wallet ? 1 : 0, o.row.receipt_hash, o.row.http_status, o.row.outcome,
-        o.row.finding, o.row.wanted ? 1 : 0, o.row.demand_opt_in ? 1 : 0, o.row.ledger_ts, o.row.credit_uusd, o.row.credit_note, o.row.dispute, o.row.metrics, o.row.receipt)
+        o.row.finding, o.row.wanted ? 1 : 0, o.row.demand_opt_in ? 1 : 0, o.row.ledger_ts, o.row.credit_uusd, o.row.credit_note, o.row.dispute, o.row.metrics, o.row.receipt, o.row.weight ?? 1, o.row.weight_note ?? null)
       : o.dispute !== undefined
         ? this.db.prepare("UPDATE contributor_submissions SET finding = ?2, dispute = ?3 WHERE tx_hash = ?1").bind(o.tx_hash, o.finding, o.dispute)
         : this.db.prepare("UPDATE contributor_submissions SET finding = ?2 WHERE tx_hash = ?1").bind(o.tx_hash, o.finding));
@@ -397,7 +463,37 @@ export class D1ContributorStore implements ContributorStore {
     return Number(r?.meta?.changes ?? 0);
   }
   async verifiedSince(id: string, d: string) {
-    return ((await this.db.prepare("SELECT domain, pay_to, day, finding, dispute FROM contributor_submissions WHERE key_id = ?1 AND day >= ?2").bind(id, d).all<any>()).results ?? []);
+    return ((await this.db.prepare("SELECT domain, pay_to, day, finding, dispute, weight FROM contributor_submissions WHERE key_id = ?1 AND day >= ?2").bind(id, d).all<any>()).results ?? []);
+  }
+  async nearDup(q: Parameters<ContributorStore["nearDup"]>[0]) {
+    // (key_id, day) index range, then a filter on that key's few rows: no table scan.
+    const r = await this.db.prepare("SELECT COUNT(*) n FROM contributor_submissions WHERE key_id = ?1 AND day >= ?2 AND payer = ?3 AND pay_to = ?4 AND amount = ?5 AND ledger_ts IS NOT NULL AND ABS(ledger_ts - ?6) <= ?7")
+      .bind(q.key_id, q.since_day, q.payer, q.pay_to, q.amount, q.ledger_ts, q.window_ms).first<any>();
+    return Number(r?.n ?? 0);
+  }
+  async clusterSeller(q: Parameters<ContributorStore["clusterSeller"]>[0]) {
+    const r = await this.db.prepare("SELECT COUNT(*) n FROM contributor_submissions WHERE source = ?1 AND day = ?2 AND key_id != ?5 AND weight != 0 AND (pay_to = ?4 OR (?3 IS NOT NULL AND domain = ?3))")
+      .bind(q.source, q.day, q.domain, q.pay_to, q.key_id).first<any>();
+    return Number(r?.n ?? 0);
+  }
+  async resource(from: string, to: string) { await this.db.prepare("UPDATE contributor_wallets SET source = ?2 WHERE source = ?1 AND address != ?2").bind(from, to).run(); }
+  async setProven(a: string, id: string) {
+    const r: any = await this.db.prepare("UPDATE contributor_wallets SET proven = 1 WHERE address = ?1 AND key_id = ?2").bind(a, id).run();
+    return (r?.meta?.changes ?? 1) > 0;
+  }
+  async getFunding(a: string) {
+    const r = await this.db.prepare("SELECT address, funder, funded_at, checked_at FROM wallet_funding WHERE address = ?1").bind(a).first<any>();
+    return r ? { address: r.address, funder: r.funder ?? null, funded_at: r.funded_at == null ? null : Number(r.funded_at), checked_at: Number(r.checked_at) } : null;
+  }
+  async putFunding(r: FundingRow) {
+    await this.db.prepare("INSERT INTO wallet_funding (address, funder, funded_at, checked_at) VALUES (?1,?2,?3,?4) ON CONFLICT(address) DO UPDATE SET funder = excluded.funder, funded_at = excluded.funded_at, checked_at = excluded.checked_at")
+      .bind(r.address, r.funder, r.funded_at, r.checked_at).run();
+  }
+  async clusters() {
+    const rows = (await this.db.prepare("SELECT source, key_id, address FROM contributor_wallets WHERE source IN (SELECT source FROM contributor_wallets GROUP BY source HAVING COUNT(DISTINCT key_id) > 1) LIMIT 2000").all<any>()).results ?? [];
+    const by = new Map<string, { keys: Set<string>; wallets: string[] }>();
+    for (const w of rows) { const e = by.get(w.source) ?? { keys: new Set(), wallets: [] }; e.keys.add(w.key_id); e.wallets.push(w.address); by.set(w.source, e); }
+    return [...by.entries()].map(([source, e]) => ({ source, keys: [...e.keys], wallets: e.wallets }));
   }
   async addSpend(r: CreditSpend) {
     await this.db.prepare("INSERT INTO contributor_credit_spends (id, key_id, ts, day, product, cost, ref, alloc) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)").bind(r.id, r.key_id, r.ts, r.day, r.product, r.cost, r.ref, r.alloc ? JSON.stringify(r.alloc) : null).run();
@@ -457,8 +553,31 @@ export function cleanMetrics(m: any): Record<string, unknown> | null {
 }
 
 /** Funding source: who funded this wallet (one hop through other contributor wallets); the wallet itself if unknown or ignored. */
-export async function fundingOf(f: typeof fetch, opts: { xrplRpc: string[]; stellarHorizon: string }, address: string): Promise<{ funder: string | null; funded_at: number | null }> {
+export const BASE_EXPLORER_API = "https://base.blockscout.com/api";
+export const BASE_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+/**
+ * First funder of a wallet. XRPL: the account's activating Payment (account_tx, forward, limit 1). Stellar: the
+ * create_account operation's funder. Base: the earliest incoming ETH or USDC transfer from an Etherscan-compatible
+ * explorer API (Blockscout by default; no key). Returns funder null when unknown or the lookup fails.
+ */
+export async function fundingOf(f: typeof fetch, opts: { xrplRpc: string[]; stellarHorizon: string; baseExplorer?: string }, address: string): Promise<{ funder: string | null; funded_at: number | null }> {
   try {
+    if (EVM_ADDR_RE.test(address)) {
+      const a = address.toLowerCase(), api = (opts.baseExplorer ?? BASE_EXPLORER_API).replace(/\/+$/, "");
+      const get = async (q: string) => {
+        const r = await f(`${api}?module=account&${q}&address=${a}&sort=asc&page=1&offset=10`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(10_000) });
+        if (!r.ok) return [];
+        const j: any = await r.json().catch(() => null);
+        return Array.isArray(j?.result) ? j.result : [];
+      };
+      const [txs, toks] = await Promise.all([get("action=txlist"), get(`action=tokentx&contractaddress=${BASE_USDC}`)]);
+      const inbound = [...txs.filter((t: any) => String(t?.to ?? "").toLowerCase() === a && String(t?.value ?? "0") !== "0" && String(t?.isError ?? "0") === "0"),
+        ...toks.filter((t: any) => String(t?.to ?? "").toLowerCase() === a)]
+        .map((t: any) => ({ from: String(t.from ?? "").toLowerCase(), ts: Number(t.timeStamp) * 1000 }))
+        .filter((t) => EVM_ADDR_RE.test(t.from) && t.from !== a && Number.isFinite(t.ts))
+        .sort((x, y) => x.ts - y.ts);
+      return inbound.length ? { funder: inbound[0].from, funded_at: inbound[0].ts } : { funder: null, funded_at: null };
+    }
     if (XRPL_ADDR_RE.test(address)) {
       for (const u of opts.xrplRpc) {
         const j = await rpc(f, u, { method: "account_tx", params: [{ account: address, forward: true, limit: 1, ledger_index_min: -1, ledger_index_max: -1, api_version: 2 }] }).catch(() => null);
@@ -479,7 +598,7 @@ export async function fundingOf(f: typeof fetch, opts: { xrplRpc: string[]; stel
       }
     }
   } catch { /* unknown */ }
-  return { funder: null, funded_at: null }; // Base: no cheap first-funder lookup; the wallet is its own source
+  return { funder: null, funded_at: null };
 }
 
 // ---------------------------------------------------------------- service
@@ -499,6 +618,10 @@ export interface ContributorDeps {
   self: { pay_to: string[]; domains: string[] };
   /** Funders ignored when grouping by funding source (exchange hot wallets, faucets). */
   ignoreFunders?: string[];
+  /** Etherscan-compatible explorer API for Base first-funder lookups (CONTRIB_BASE_EXPLORER_API). Default Blockscout. */
+  baseExplorer?: string;
+  /** Workers Rate Limiting binding (CONTRIB_RATE_LIMITER): durable-ish per-key limit across isolates, no D1 writes. */
+  rateLimiter?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   queue?: ContribQueue;
   log?: (e: Record<string, unknown>) => void;
   credits?: string; caps?: string; minKit?: string; retiredKits?: string;
@@ -579,6 +702,33 @@ export function createContributors(deps: ContributorDeps) {
   const pending = new Map<string, number>(); // queued tx hashes (dedupe until the batch lands)
   let pendingRows = 0;
   let wantedMemo: { at: number; list: WantedItem[] } | undefined;
+  const pendingPurchases = new Map<string, { ts: number; at: number }[]>(); // payer|pay_to|amount -> ledger times queued (near-dup until the batch lands)
+
+  /** First funder, cached in wallet_funding: found funders forever, misses re-checked after funding_recheck_days. */
+  async function funding(address: string): Promise<{ funder: string | null; funded_at: number | null }> {
+    const a = normWallet(address);
+    const c = await store.getFunding(a).catch(() => null);
+    if (c && (c.funder || now() - c.checked_at < CAPS.funding_recheck_days * DAY_MS)) return { funder: c.funder, funded_at: c.funded_at };
+    const f = await fundingOf(deps.fetch, { xrplRpc: deps.xrplRpc, stellarHorizon: horizon, baseExplorer: deps.baseExplorer }, a);
+    const funder = f.funder ? normWallet(f.funder) : null;
+    await store.putFunding({ address: a, funder, funded_at: f.funded_at, checked_at: now() }).catch(() => undefined);
+    return { funder, funded_at: f.funded_at };
+  }
+  /**
+   * Seller-funded: the payer was funded by the seller's pay_to, by the pay_to's own funder, or shares a funding source
+   * with it. Exchange/faucet funders in CONTRIB_FUNDER_IGNORE never link wallets.
+   */
+  async function sellerFunded(w: WalletRow | undefined, payer: string, payTo: string): Promise<boolean> {
+    const pf = w?.funder ?? (await funding(payer)).funder;
+    const ps = w?.source ?? payer;
+    const linked = (x: string | null | undefined) => !!x && !ignore.has(x);
+    if ((linked(pf) && pf === payTo) || (ps !== payer && ps === payTo)) return true;
+    const sf = (await funding(payTo)).funder;
+    if (!linked(sf)) return false;
+    if (pf === sf || ps === sf) return true;
+    const [sw] = await store.wallets([sf!]); // seller's funder is itself a registered wallet: same cluster
+    return !!sw && (sw.source === ps || sw.source === pf);
+  }
 
   // Scoped: CONTRIB_ADMIN_KEY when set (OWNER_MCP_KEY then does NOT open contributor admin), else OWNER_MCP_KEY (back-compat).
   const adminKey = deps.adminKey || deps.ownerKey;
@@ -621,6 +771,12 @@ export function createContributors(deps: ContributorDeps) {
     let good = false;
     try { good = ed25519.verify(b64(sig), new TextEncoder().encode(msg), hexBytes(key.public_key)); } catch { good = false; }
     if (!good) return fail(401, "bad_signature");
+    if (deps.rateLimiter) {
+      // Workers Rate Limiting binding: shared across isolates in a location, no D1 rows. Fail open to the in-isolate limiter.
+      const r = await deps.rateLimiter.limit({ key: "contrib:" + id }).catch(() => null);
+      if (r && !r.success) return fail(429, "rate_limited");
+      if (r) return { ok: true, key };
+    }
     const t = now(), m = minute.get(id);
     if (m && t - m.at < 60_000) { if (++m.n > CAPS.per_minute) return fail(429, "rate_limited"); } else minute.set(id, { at: t, n: 1 });
     return { ok: true, key };
@@ -827,34 +983,49 @@ export function createContributors(deps: ContributorDeps) {
     if (!led.ok) return err(led.status, led.error, led.status === 503 ? { retryable: true } : {});
     if (led.ts < t - CAPS.tx_max_age_days * DAY_MS) return err(422, "too_old");
     if (Math.abs(observed - led.ts) > CAPS.observed_skew_min * 60_000) return err(422, "observed_at_far_from_ledger");
+    // 4b. Near-duplicate purchase (same payer + seller + amount, ledger times within the window), stored or queued.
+    const win = CAPS.near_dup_window_s * 1000, pkey = `${payer}|${payTo}|${String(p.amount)}`;
+    for (const [k2, l] of pendingPurchases) { const f = l.filter((x) => now() - x.at < 10 * 60_000); if (f.length) pendingPurchases.set(k2, f); else pendingPurchases.delete(k2); }
+    if ((pendingPurchases.get(pkey) ?? []).some((x) => Math.abs(x.ts - led.ts) <= win)
+      || (await store.nearDup({ key_id: key.key_id, since_day: dayOf(led.ts - win - DAY_MS), payer, pay_to: payTo, amount: String(p.amount), ledger_ts: led.ts, window_ms: win })) > 0) {
+      return err(409, "near_duplicate", { window_s: CAPS.near_dup_window_s });
+    }
+    // 4c. Weight: unproven wallets, seller-funded payers and repeat receipts from one funding cluster count for nothing.
+    let weightNote: WeightNote | null = null;
+    if (!w?.proven) weightNote = "wallet_unproven";
+    else if (await sellerFunded(w, payer, payTo)) weightNote = "seller_funded";
+    else if ((await store.clusterSeller({ source, day, domain: hostOf(endpoint) || null, pay_to: payTo, key_id: key.key_id })) > 0) weightNote = "same_cluster";
+    const weight = weightNote ? 0 : 1;
     // 5. Findings: negatives wait for independent confirmation; boosted endpoints are held.
     const ops: WriteOp[] = [];
     const recent = await store.byEndpoint(ek, dayOf(t - 7 * DAY_MS));
     const flag = boostFlag([...recent, { source, new_wallet: newWallet }]);
     const negative = isNegative(r.delivery.outcome);
     let finding: Finding = negative ? "unconfirmed" : "counted";
-    if (negative) {
-      const other = recent.filter((s) => isNegative(s.outcome) && s.key_id !== key.key_id && s.source !== source && (s.finding === "unconfirmed" || s.finding === "confirmed"));
+    if (negative && weight) {
+      const other = recent.filter((s) => isNegative(s.outcome) && s.key_id !== key.key_id && s.source !== source && s.weight !== 0 && (s.finding === "unconfirmed" || s.finding === "confirmed"));
       if (other.length) { finding = "confirmed"; for (const s of other) if (s.finding === "unconfirmed") ops.push({ op: "finding", tx_hash: s.tx_hash, finding: "confirmed" }); }
       else if (await lumiRebuyNegative(endpoint, t)) finding = "confirmed";
     }
     if (flag) finding = "held";
     const wanted = await isWanted(endpoint);
     const payToListed = !k.listed || k.pay_tos.includes(payTo);
-    const cr = credit({ mode, network: p.network, wanted, repeat: c.key_ep_recent > 0, listed: k.listed, payToListed, monthSoFar: c.month_credit, forfeited: key.forfeited });
+    const cr0 = credit({ mode, network: p.network, wanted, repeat: c.key_ep_recent > 0, listed: k.listed, payToListed, monthSoFar: c.month_credit, forfeited: key.forfeited });
+    const cr = weight ? cr0 : { uusd: 0, note: weightNote };
     const metrics = cleanMetrics(ext.measurements);
     const row: Submission = {
       tx_hash: tx, key_id: key.key_id, day, created_at: t, mode, kit_version: String(ext.kit.version), endpoint, endpoint_key: ek, domain: hostOf(endpoint) || null,
       network: p.network, asset: String(p.asset), amount: String(p.amount), pay_to: payTo, payer, source, new_wallet: newWallet, receipt_hash: r.receipt_hash,
       http_status: Number.isInteger(r.delivery.http_status) ? r.delivery.http_status : null, outcome: String(r.delivery.outcome), finding, wanted,
       demand_opt_in: mode === "passive" && key.share_demand, ledger_ts: led.ts, credit_uusd: cr.uusd, credit_note: cr.note, dispute: null,
-      metrics: metrics ? JSON.stringify(metrics) : null, receipt: storedReceipt(r),
+      metrics: metrics ? JSON.stringify(metrics) : null, receipt: storedReceipt(r), weight, weight_note: weightNote,
     };
     ops.unshift({ op: "insert", row });
     ops.push({ op: "touch", key_id: key.key_id, day });
+    if (deps.queue) pendingPurchases.set(pkey, [...(pendingPurchases.get(pkey) ?? []), { ts: led.ts, at: now() }]);
     await write(ops);
     return json(202, {
-      accepted: true, queued: !!deps.queue, tx_hash: tx, finding,
+      accepted: true, queued: !!deps.queue, tx_hash: tx, finding, weight, ...(weightNote ? { weight_note: weightNote, counts: false } : {}),
       ...(creditsOn ? { credit_uusd: cr.uusd, credit_usd: cr.uusd / 1e6, credit_note: cr.note } : { rewards: "check_credits_badges_leaderboard", check_credits: { per_verified_receipt: perReceipt, rule: "one earning per seller per UTC day; credited once the finding is verified" } }),
       ...(flag ? { endpoint_flag: flag.flag } : {}),
       note: creditsOn
@@ -904,24 +1075,34 @@ export function createContributors(deps: ContributorDeps) {
       const ok = await store.getKey(w.key_id);
       if (ok && (ok.status === "active" || ok.forfeited)) return err(409, ok.forfeited ? "wallet_forfeited" : "wallet_registered_to_other_key", { wallet: w.address });
     }
+    // Wallet-control proof: each wallet signs walletProofMessage(public_key, address). Without one the key would let
+    // anyone list someone else's busy wallet. allow_unproven (owner, explicit) registers it with zero weight.
+    const proofs = b?.wallet_proofs && typeof b.wallet_proofs === "object" ? b.wallet_proofs : {};
+    const proven = new Map(wallets.map((a) => [a, verifyWalletProof(pk, a, proofs[a] ?? proofs[a.toLowerCase()])]));
+    const missing = wallets.filter((a) => !proven.get(a));
+    if (missing.length && b?.allow_unproven !== true) {
+      return err(400, "wallet_proof_required", { wallets: missing.map((a) => ({ address: a, message_to_sign: walletProofMessage(pk, a) })), hint: "lumi-scan prove-wallet --network <net> (signs with the wallet key locally). allow_unproven: true registers the wallet with zero weight." });
+    }
     const key_id = "lck_" + randomHex(8);
     const rows: WalletRow[] = [];
     for (const a of wallets) {
-      const f = b?.funders?.[a] ? { funder: normWallet(String(b.funders[a])), funded_at: null } : await fundingOf(deps.fetch, { xrplRpc: deps.xrplRpc, stellarHorizon: horizon }, a);
+      const f = b?.funders?.[a] ? { funder: normWallet(String(b.funders[a])), funded_at: null } : await funding(a);
       let source = a;
       if (f.funder && !ignore.has(f.funder)) {
         const [up] = await store.wallets([f.funder]);
-        source = up?.source ?? (wallets.includes(f.funder) ? f.funder : f.funder);
+        source = up?.source ?? rows.find((x) => x.address === f.funder)?.source ?? f.funder;
       }
-      rows.push({ address: a, key_id, funder: f.funder, funded_at: f.funded_at, source });
+      rows.push({ address: a, key_id, funder: f.funder, funded_at: f.funded_at, source, proven: proven.get(a) === true });
     }
+    // Wallets registered earlier with this one as their source now join its upstream cluster.
+    for (const w of rows) if (w.source !== w.address) await store.resource(w.address, w.source);
     const k: ContributorKey = {
       key_id, label, public_key: pk, wallets, own_domains: own, daily_cap: Number.isInteger(b?.daily_cap) ? b.daily_cap : null,
       share_demand: b?.share_demand === true, status: "active", forfeited: false, created_at: now(), revoked_at: null, revoke_reason: null,
     };
     await store.issue(k, rows);
     deps.log?.({ event: "contrib_key_issued", key_id });
-    return json(201, { ...k, funding: rows.map(({ address, funder, source }) => ({ address, funder, source })) }, noStore);
+    return json(201, { ...k, funding: rows.map(({ address, funder, source, proven: pv }) => ({ address, funder, source, proven: !!pv })), ...(missing.length ? { unproven_wallets: missing, note: "Unproven wallets are registered with zero weight until a proof is sent to /v1/contrib/me/wallet-proof." } : {}) }, noStore);
   }
 
   async function ownerRoutes(req: Request, path: string, raw: string): Promise<Response> {
@@ -941,6 +1122,9 @@ export function createContributors(deps: ContributorDeps) {
         rules: { credits_enabled: creditsOn, ...(creditsOn ? { credits: CREDITS } : {}), caps: CAPS, min_kit_version: minKit, retired_kit_versions: [...retired], formats: ACCEPTED_FORMATS, retention_days: CONTRIB_RETENTION_DAYS },
         note: creditsOn ? "Credits are API credits, not cash. There is no payout code." : "Cash bounties are disabled: rewards are free Lumi Check credits, badges, the leaderboard and perks. There is no payout code.",
       }, noStore);
+    }
+    if (path === "/v1/owner/contributors/clusters" && m === "GET") {
+      return json(200, { clusters: await store.clusters(), note: "Funding sources shared by wallets of more than one key. Receipts from one cluster earn once per seller per UTC day." }, noStore);
     }
     if (path === "/v1/owner/contributors/flags" && m === "GET") {
       const rows = await store.since(dayOf(now() - 7 * DAY_MS), 5000);
@@ -1070,6 +1254,14 @@ export function createContributors(deps: ContributorDeps) {
       if (b?.confirm !== key.key_id) return err(400, "confirm_key_id_required", { hint: "Send { confirm: \"<your key_id>\" } to delete this account. This cannot be undone." });
       return json(200, await eraseAccount(key.key_id, "contributor"), noStore);
     }
+    if (path === "/v1/contrib/me/wallet-proof" && req.method === "POST") {
+      let b: any; try { b = JSON.parse(raw); } catch { return err(400, "invalid_json"); }
+      const addr = normWallet(String(b?.address ?? ""));
+      if (!key.wallets.map(normWallet).includes(addr)) return err(403, "wallet_not_registered_to_key");
+      if (!verifyWalletProof(key.public_key, addr, b)) return err(401, "wallet_proof_invalid", { message_to_sign: walletProofMessage(key.public_key, addr) });
+      await store.setProven(addr, key.key_id);
+      return json(200, { address: addr, proven: true, note: "Receipts from this wallet count from now on. Earlier zero-weight receipts stay zero-weight." }, noStore);
+    }
     if (path === "/v1/contrib/me" && req.method === "POST") {
       let b: any; try { b = JSON.parse(raw); } catch { return err(400, "invalid_json"); }
       if (typeof b?.share_demand !== "boolean") return err(400, "share_demand_boolean_required");
@@ -1081,13 +1273,12 @@ export function createContributors(deps: ContributorDeps) {
 
   // ---------------------------------------------------- rewards: badges + leaderboard (no cash)
 
-  const VERIFIED: Finding[] = ["counted", "confirmed"];
   async function leaderboard() {
     const [rows, keys] = await Promise.all([store.since(dayOf(now() - CONTRIB_RETENTION_DAYS * DAY_MS), 50_000), store.listKeys()]);
     const active = new Set(keys.filter((k) => k.status === "active" && !k.forfeited).map((k) => k.key_id));
     const by = new Map<string, { seen: Set<string>; verified: number; confirmed: number; endpoints: Set<string> }>();
     for (const r of rows) {
-      if (!active.has(r.key_id) || !VERIFIED.includes(r.finding) || r.dispute) continue;
+      if (!active.has(r.key_id) || !weighs(r)) continue;
       const e = by.get(r.key_id) ?? { seen: new Set(), verified: 0, confirmed: 0, endpoints: new Set() };
       const slot = `${r.endpoint_key}:${r.day}`;
       if (!e.seen.has(slot)) { e.seen.add(slot); e.verified++; if (r.finding === "confirmed") e.confirmed++; e.endpoints.add(r.endpoint_key); }
@@ -1125,7 +1316,7 @@ export function createContributors(deps: ContributorDeps) {
     const [rows, spends] = await Promise.all([store.verifiedSince(key.key_id, since), store.spendsSince(key.key_id, since)]);
     const lots = new Map<string, { lot: string; day: string; value: number; used: number }>();
     if (!key.forfeited) for (const r of rows) {
-      if (!VERIFIED.includes(r.finding) || r.dispute || r.day < since) continue;
+      if (!weighs(r) || r.day < since) continue;
       const lot = `${(r.domain || r.pay_to || "?").toLowerCase()}:${r.day}`;
       if (!lots.has(lot)) lots.set(lot, { lot, day: r.day, value: perReceipt, used: 0 });
     }

@@ -14,6 +14,7 @@
  *   sharing on|off|status                       tier 2 full signed receipts (OFF by default; earns free check credits)
  *   credits | spend trust_check <url>           your free Lumi Check credits / spend one on a detailed check
  *   account delete [--confirm <key_id>]         delete your contributor account (asks you to type your key id)
+ *   prove-wallet --network N [--submit]         sign a wallet-control proof (send it with your registration, or --submit)
  * Env: LUMI_CHECK_TELEMETRY=off (tier 1 off), LUMI_SHARE_RECEIPTS=1 (tier 2 on), LUMI_KIT_CONFIG, LUMI_API, LUMI_KIT_KEY (contributor key file), LUMI_KIT_XRPL_SEED(_FILE), LUMI_KIT_STELLAR_SECRET(_FILE), LUMI_KIT_EVM_KEY(_FILE),
  *      LUMI_KIT_MAX_PER_BUY, LUMI_KIT_MAX_PER_DAY, LUMI_KIT_MAX_BUYS_PER_DAY.
  * Wallet secrets are read from env or a file and are never printed or sent anywhere.
@@ -75,6 +76,14 @@ async function main() {
   if (cmd === "check") {
     const lumi = kit.createLumiCheck({ api: process.env.LUMI_API });
     return out(await lumi.check({ url: pos[0], payTo: flag("pay-to"), amountUsd: flag("amount") ? Number(flag("amount")) : undefined, network: flag("network") }).then(({ receipt, ...r }) => r));
+  }
+  if (cmd === "prove-wallet") {
+    const network = flag("network");
+    if (!network) { out({ error: "network_required", hint: "--network xrpl:0 | eip155:8453 | stellar:pubnet" }); process.exitCode = 2; return; }
+    const k = kit.loadKey(keyPath());
+    const proof = await kit.walletProof(await signer(network), k.public_key);
+    if (has("submit")) return out(await client().proveWallet(proof));
+    return out({ proof, next: "Send this proof with your public key when you register (wallet_proofs), or run again with --submit once you have a key_id." });
   }
   if (cmd === "account" && pos[0] === "delete") {
     const c = client(), id = kit.loadKey(keyPath()).key_id;

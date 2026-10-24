@@ -199,3 +199,13 @@ test("lumi-scan account delete: non-interactive needs --confirm; a wrong key id 
   const b = run(["--confirm", "lck_ffffffffffffffff"]);
   assert.equal(b.code, 1); assert.match(b.err, /Cancelled/);
 });
+
+test("walletProof: wallet signs a message bound to the contributor key (EVM address lower-cased)", async () => {
+  const evm = await kit.signerFor("eip155:8453", "0x" + "22".repeat(32));
+  const p = await kit.walletProof(evm, PUB.toUpperCase());
+  assert.equal(p.address, evm.address.toLowerCase());
+  assert.equal(p.key_type, "eip191");
+  assert.equal(kit.walletProofMessage(PUB, evm.address), `lumi-wallet-proof:v1:${PUB}:${evm.address.toLowerCase()}`);
+  assert.match(p.signature, /^0x[0-9a-f]{130}$/);
+  assert.equal(JSON.stringify(p).includes("22".repeat(32)), false); // never the secret
+});

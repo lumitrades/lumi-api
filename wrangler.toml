@@ -170,3 +170,12 @@ PUBLIC_BASE_URL = ""   # empty = use the request origin (workers.dev / localhost
 EVM_NETWORK = "eip155:84532"                              # Base Sepolia
 EVM_PAY_TO = "0x5E617bac19912e6d212CB303ae84655E9E203532"
 EVM_FACILITATOR_URL = "https://x402.org/facilitator"      # x402.org public testnet facilitator
+
+# Contributor request rate limit (Lumi Check). NOT enabled: needs Bobby's approval and a deploy.
+# Workers Rate Limiting keeps per-key counters outside D1 (no row writes) and across isolates in a location.
+# Without it the limiter is per isolate (in memory), which is documented in docs/contributors-antigaming.md.
+# [[unsafe.bindings]]
+# name = "CONTRIB_RATE_LIMITER"
+# type = "ratelimit"
+# namespace_id = "1001"
+# simple = { limit = 10, period = 60 }
