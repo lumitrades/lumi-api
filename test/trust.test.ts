@@ -111,11 +111,15 @@ describe("trust: public reads", () => {
     expect(surf.samples.paid_test_buys).toBe(2);
     expect(surf.confidence).toBe("low");
     expect(surf.last_paid_observation).toMatchObject({ http_status: 502, data_returned: false });
-    expect(surf.last_paid_observation.tx_hash).toBeUndefined();
+    // Free: only the latest paid test-buy's hash per vendor (older hashes stay in the paid report).
+    expect(surf.last_paid_observation.tx_hash).toMatch(/^[0-9A-F]{64}$/);
+    expect(surf.last_paid_observation.explorer).toContain(surf.last_paid_observation.tx_hash);
     const scalp = d.vendors.find((v: any) => v.id === "scalpstream");
     expect(scalp.score).toBe(100);
     expect(scalp.last_paid_observation.data_returned).toBe(true);
-    expect(JSON.stringify(d)).not.toMatch(/"tx_hash"|"explorer"/);
+    const withObs = d.vendors.filter((v: any) => v.last_paid_observation);
+    expect((JSON.stringify(d).match(/"tx_hash"/g) ?? []).length).toBe(withObs.length);
+    for (const v of d.vendors) if (!v.last_paid_observation) expect(JSON.stringify(v)).not.toMatch(/"tx_hash"|"explorer"/);
     const text = JSON.stringify(d);
     expect(text).not.toMatch(/\b(scam|fraud|untrustworthy)\b/i);
     expect(text).not.toMatch(/ip_hash|excerpt/);

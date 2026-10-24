@@ -89,7 +89,7 @@ export const RECEIPT_FREE_LIMITS = { perMinute: 10, perDay: 100, globalPerDay: 5
 /** The precomputed vendors index is served while younger than this (rebuilt by the 30-minute cron and after trust writes). */
 export const VENDORS_INDEX_TTL_MS = 40 * 60_000;
 const VENDORS_MEMO_MS = 60_000;
-const VENDORS_KEY = "vendors_index_v2"; // v2: answer-only free shape (no tx evidence)
+const VENDORS_KEY = "vendors_index_v3"; // v3: free shape + latest test-buy tx_hash/explorer per vendor (v2 had no tx evidence)
 
 export interface Trust {
   handle(request: Request, path: string, base: string): Promise<Response | null>;
@@ -433,9 +433,17 @@ export const FREE_LIMITS = {
   lookup: { perMinute: 30, perDay: 300, globalPerDay: 60_000 },
 } as const;
 
-/** Free, answer-only view of a paid test-buy: outcome only; tx hash and explorer link are in the paid vendor report. */
+/** Free, answer-only view of a paid test-buy: outcome only; tx hashes and explorer links of the history are in the paid vendor report. */
 function obsFreeView(o: ObservationRow) {
   return { observed_at: iso(o.ts), endpoint: o.endpoint, network: o.network, http_status: o.http_status, data_returned: dataReturnedView(o), delivery: deliveryState(o), source: o.source === "lumi_buy" ? "Lumi paid buy (seeded)" : "Lumi daily test-buy" };
+}
+
+/**
+ * Free view of a vendor's LATEST paid test-buy only: the outcome plus its on-chain tx hash and explorer link, so anyone
+ * can check that one payment for free. Older hashes, signed receipts and the full history stay in the paid vendor report.
+ */
+function obsLatestFreeView(o: ObservationRow) {
+  return { ...obsFreeView(o), tx_hash: o.tx_hash, explorer: explorer(o.network, o.tx_hash) };
 }
 
 function obsView(o: ObservationRow) {
@@ -526,7 +534,7 @@ export function createTrust(deps: TrustDeps): Trust {
           score: g.score.value,
           confidence: g.score.confidence,
           samples: g.score.samples,
-          last_paid_observation: last ? obsFreeView(last) : null,
+          last_paid_observation: last ? obsLatestFreeView(last) : null,
           latest_probes: g.probes.latest.map(probeView),
           replies: g.replies.length,
           detail: `${base}/v1/trust/vendors/${v.id}`,
@@ -595,7 +603,7 @@ export function createTrust(deps: TrustDeps): Trust {
       score: { value: g.score.value, confidence: g.score.confidence, components: g.score.components, samples: g.score.samples },
       observations: g.obs.slice(0, 10).map(obsFreeView),
       observations_total: g.obs.length,
-      evidence: `Answer-only. Tx hashes, explorer links, latency stats and the full 90-day history are in the paid report: ${base}/v1/trust/vendors/${v.id}/report ($0.02).`,
+      evidence: `Answer-only. The latest test-buy's tx hash is free in last_paid_observation on ${base}/v1/trust/vendors. All other tx hashes, explorer links, latency stats, signed receipts and the full 90-day history are in the paid report: ${base}/v1/trust/vendors/${v.id}/report ($0.02).`,
       latest_probes: g.probes.latest.map(probeView),
       agent_reports: g.reports.slice(0, 10).map((r) => ({
         reported_at: iso(r.ts),
