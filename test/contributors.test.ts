@@ -565,7 +565,7 @@ describe("free Lumi Check credits (no cash)", () => {
     expect(purge.deleted).toBe(1);
     expect(await s.store.getKey(b.key_id)).not.toBeNull(); // the 90-day purge never removes accounts
     const r: any = await (await s.owner("GET", "/v1/owner/contributors/inactive")).json();
-    expect(r).toMatchObject({ active_window_days: 365, total_keys: 2, active: 1, action: expect.stringContaining("placeholder") });
+    expect(r).toMatchObject({ active_window_days: 365, total_keys: 2, active: 1, action: expect.stringContaining("nothing is deleted") });
     expect(r.inactive.map((x: any) => x.key_id)).toEqual([b.key_id]);
     expect((await s.store.getKey(b.key_id)).status).toBe("active"); // nothing revoked or deleted
     expect(s.store.keys.size).toBe(2);

@@ -646,8 +646,9 @@ export const CHECK_CREDIT_EXPIRY_DAYS = 90;
 /**
  * Contributor accounts (keys, wallets) are NOT purged at 90 days: they are kept while active. Active = not revoked and a
  * verified-or-pending receipt accepted, or a signed /v1/check made, within the last CONTRIB_ACTIVE_WINDOW_DAYS (a new key
- * counts from its creation). PLACEHOLDER definition, flagged for the owner. Inactive handling is a placeholder that only
- * lists keys (GET /v1/owner/contributors/inactive); it deletes, revokes or notifies nothing.
+ * counts from its creation). Definition approved by the owner (Oct 23 2026): activity in the last 365 days. Unused credits
+ * still expire after CHECK_CREDIT_EXPIRY_DAYS (90). What happens to an INACTIVE account is not decided yet, so the
+ * owner route (GET /v1/owner/contributors/inactive) only lists them; it deletes, revokes or notifies nothing.
  */
 export const CONTRIB_ACTIVE_WINDOW_DAYS = 365;
 /**
@@ -1396,11 +1397,11 @@ export function createContributors(deps: ContributorDeps) {
   const activeSince = () => dayOf(now() - CONTRIB_ACTIVE_WINDOW_DAYS * DAY_MS);
   const isActive = (k: ContributorKey) => k.status === "active" && (k.last_active_day ?? dayOf(k.created_at)) >= activeSince();
 
-  /** PLACEHOLDER (flagged for the owner): lists inactive keys only. Deletes, revokes and notifies nothing. Owner route only, never the cron. */
+  /** Lists inactive keys only (inactive handling not decided yet). Deletes, revokes and notifies nothing. Owner route only, never the cron. */
   async function inactiveReview() {
     const keys = await store.listKeys();
     const inactive = keys.filter((k) => k.status === "active" && !isActive(k)).map((k) => ({ key_id: k.key_id, last_active_day: k.last_active_day ?? null, created_day: dayOf(k.created_at) }));
-    return { kind: "contributor_inactive_review", active_window_days: CONTRIB_ACTIVE_WINDOW_DAYS, active_since: activeSince(), total_keys: keys.length, active: keys.filter(isActive).length, inactive, action: "none (placeholder: nothing is deleted, revoked or sent)" };
+    return { kind: "contributor_inactive_review", active_window_days: CONTRIB_ACTIVE_WINDOW_DAYS, active_since: activeSince(), total_keys: keys.length, active: keys.filter(isActive).length, inactive, action: "none (inactive handling not decided: nothing is deleted, revoked or sent)" };
   }
 
   /** Higher /v1/check rate limit for contributors with a verified receipt (signed request). null = not a contributor request. */

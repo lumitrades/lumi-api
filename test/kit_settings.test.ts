@@ -51,3 +51,12 @@ describe("Lumi Check credits (approved: receipt earns 5, check costs 1, report c
     expect(contrib({ checkCreditsPerReceipt: "-1", checkCreditPrices: "{\"trust_check\":0}" }).rules.check_credits).toMatchObject({ per_verified_receipt: 5, prices: { trust_check: 1, vendor_report: 10 } });
   });
 });
+
+describe("contributor activity (approved: active = activity in the last 365 days; credits still expire after 90)", () => {
+  it("exposes the approved windows", async () => {
+    const { CONTRIB_ACTIVE_WINDOW_DAYS, CONTRIB_RETENTION_DAYS } = await import("../src/trust/contributors");
+    expect(CONTRIB_ACTIVE_WINDOW_DAYS).toBe(365);
+    expect(CONTRIB_RETENTION_DAYS).toBe(90);
+    expect(contrib().rules).toMatchObject({ active_window_days: 365, retention_days: 90, check_credits: { expires_after_days: 90 } });
+  });
+});
