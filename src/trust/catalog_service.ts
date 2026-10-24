@@ -49,6 +49,8 @@ export interface CatalogDeps {
   isOwner(request: Request): Promise<boolean>;
   /** Lumi's own test-buys of the curated XRPL vendor list since `since` (trust store observations). */
   curatedBuys?: (since: number) => Promise<CuratedBuy[]>;
+  /** Max sellers per UTC day that trust checks (free or paid) can move to the front of the Base test-buy queue. Default 5. */
+  priorityDailyCap?: number;
   /** Free evidence (payTo census, Base forward index, vet402 import, buy queue). Optional: off when unset. */
   evidence?: EvidenceStore;
   /** Public Base RPCs, rotated (getLogs for the forward index). */
@@ -150,22 +152,38 @@ export const FREE_LOOKUP_ENTRIES = 5;
  * Kept as a safety net against runaway jobs, not as a quota.
  */
 export const WRITE_BUDGET = { ingest: 200_000, probe: 200_000, evidence: 200_000 };
-/** A paid trust/check result worth a test-buy: exact listing, no Lumi purchase in 30 days, and a suspicious signal. */
-export function buyCandidate(body: any, exact: any, t = Date.now()) {
+/**
+ * A trust check result (free or paid: the same rule for both, payment never changes the order) worth a priority test-buy:
+ * exact listing, paid on Base, no conclusive Lumi purchase of the listing ever, and a warning signal. The seller-level
+ * "never test-bought" check (any listing on the same host) runs in queueBuy.
+ */
+export function buyCandidate(body: any, exact: any, _t = Date.now()) {
   const e = exact?.catalog?.entries?.[0];
   if (!e || exact?.self || !body?.matched?.exact) return null;
   if ((body?.reasons ?? []).some((r: any) => r?.code === "sanctioned_address")) return null; // never queue a test-buy of an OFAC-listed payTo
-  // Inconclusive buys (Lumi-side, delivery unknown) do not count as a recent purchase: the listing may be retested.
-  const last = (e.purchases ?? []).find((p: any) => p?.delivery !== "inconclusive" && p?.data_returned !== null && !(p?.data_returned === false && (p?.http_status == null || p?.http_status === 0)));
-  if (last && Date.parse(last.at) > t - 30 * 86_400_000) return null;
+  // Inconclusive buys (Lumi-side, delivery unknown) do not count as a purchase: the listing may be retested.
+  if ((e.purchases ?? []).some(conclusivePurchase)) return null;
   const reasons: string[] = (body.reasons ?? []).map((r: any) => String(r.code)).filter((c: string) => BUY_SIGNALS.includes(c));
   if (!reasons.length) return null;
   const nets: string[] = (e.pay_to ?? []).map((p: any) => String(p.network));
+  // Only the Base test-buy routine reads this queue; other chains would only use up the daily cap.
+  if (!nets.includes(BASE_NET)) return null;
   const price = Number(e.listed_price_usd);
-  return { resource: String(e.resource), network: nets.includes(BASE_NET) ? BASE_NET : nets[0] ?? BASE_NET, price_usd: Number.isFinite(price) ? price : null, reasons };
+  return { resource: String(e.resource), network: BASE_NET, price_usd: Number.isFinite(price) ? price : null, reasons };
 }
-/** Paid trust/check signals that queue a resource for the daily test-buy routine (never bought inline). */
-export const BUY_SIGNALS = ["last_quote_invalid", "quote_pays_unlisted_address", "quoted_price_differs", "unreliable_quotes", "pay_to_mismatch", "young_domain", "no_organic_payers", "no_bazaar_usage", "vet402_l0_fail"];
+const conclusivePurchase = (p: any) =>
+  !!p && !p.inconclusive && p.delivery !== "inconclusive" && p.data_returned !== null && !(p.data_returned === false && (p.http_status == null || p.http_status === 0));
+/** Default daily cap on sellers moved to the front of the Base test-buy queue by checks (env TRUST_PRIORITY_DAILY_CAP). */
+export const PRIORITY_DAILY_CAP = 5;
+/** A seller can move up through checks at most once per this many days (the public /trust-policy/ text says once per 30 days). */
+export const PRIORITY_SELLER_DAYS = 30;
+export type PriorityResult = { queued: boolean; reason: "queued" | "duplicate_30d" | "cap_reached" | "already_test_bought" | "bad_resource" | "evidence_off" };
+/**
+ * Trust check (free or paid) signals that queue a resource for the daily test-buy routine (never bought inline).
+ * Objective only, from Lumi's own records and public data, so the result does not depend on who ran the check.
+ * pay_to_mismatch is left out on purpose: it compares a payTo the caller enters, so anyone could trigger it.
+ */
+export const BUY_SIGNALS = ["last_quote_invalid", "quote_pays_unlisted_address", "quoted_price_differs", "unreliable_quotes", "young_domain", "no_organic_payers", "no_bazaar_usage", "vet402_l0_fail"];
 const PER_HOST = 3;
 /** CDP discovery rate-limits bursts (HTTP 429 seen from Workers): one page per 10 s. */
 const INGEST_SPACING_S = 10;
@@ -511,12 +529,25 @@ export function createCatalog(deps: CatalogDeps) {
     return new Map(v.map((r) => [r.resource_key, vet402View(r, free)]));
   }
 
-  /** Paid trust/check: queue the resource for the daily test-buy routine when the signals warrant it (never bought inline). */
-  async function queueBuy(c: { resource: string; network: string; price_usd: number | null; reasons: string[] }) {
-    if (!deps.evidence) return false;
-    await deps.evidence.enqueueBuy(c, now());
-    await store.addCounter(dayKey(now()), 2);
-    return true;
+  /**
+   * Any trust check (free lookup, free trial, paid trust/check): queue the resource for the daily Base test-buy routine
+   * (never bought inline). One path for every caller, so free and paid checks have identical queue effects. Abuse limits:
+   * one slot per seller host per PRIORITY_SELLER_DAYS (30) days (repeat checks add nothing, not even hits), at most `priorityDailyCap` sellers
+   * per day, and never for a seller Lumi has already test-bought (conclusively, on any of its listings).
+   */
+  async function queueBuy(c: { resource: string; network: string; price_usd: number | null; reasons: string[] }): Promise<PriorityResult> {
+    if (!deps.evidence) return { queued: false, reason: "evidence_off" };
+    let seller: string;
+    try { seller = normalizeDomain(new URL(c.resource).hostname); } catch { return { queued: false, reason: "bad_resource" }; }
+    if (!seller) return { queued: false, reason: "bad_resource" };
+    if ((await store.buysByDomain(seller, 10)).some(conclusivePurchase)) return { queued: false, reason: "already_test_bought" };
+    const t = now();
+    const cap = Math.max(0, Math.floor(deps.priorityDailyCap ?? PRIORITY_DAILY_CAP));
+    const claim = await deps.evidence.claimPriority(iso(t).slice(0, 10), seller, c.resource, cap, t, t - PRIORITY_SELLER_DAYS * 86_400_000);
+    if (claim !== "claimed") return { queued: false, reason: claim === "duplicate" ? "duplicate_30d" : "cap_reached" };
+    await deps.evidence.enqueueBuy(c, t);
+    await store.addCounter(dayKey(t), 3);
+    return { queued: true, reason: "queued" };
   }
 
   async function evidenceStatus() {

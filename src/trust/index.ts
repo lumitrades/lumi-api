@@ -68,6 +68,8 @@ export interface TrustDeps {
   stellarHorizon?: string;
   /** Adds disclosure fields (seller monitoring = commercial relationship) to lookup docs. Never changes scores. */
   annotate?: (doc: Record<string, unknown>, payTos: string[]) => Promise<Record<string, unknown>>;
+  /** A free lookup was served (after rate limits): the same test-buy priority signal as a paid trust/check. Never changes the answer. */
+  onFreeCheck?: (q: LookupQuery, base: string) => Promise<unknown>;
 }
 
 /** Every payTo-looking string under `pay_to` keys of a lookup doc (catalog entries + curated vendors). */
@@ -92,7 +94,7 @@ const VENDORS_MEMO_MS = 60_000;
 const VENDORS_KEY = "vendors_index_v4"; // v4: + opt-in payment_attempts; v3: latest test-buy tx_hash/explorer per vendor
 
 export interface Trust {
-  handle(request: Request, path: string, base: string): Promise<Response | null>;
+  handle(request: Request, path: string, base: string, ctx?: { waitUntil(p: Promise<unknown>): void }): Promise<Response | null>;
   runProbes(): Promise<{ probes: number; ok: number }>;
   vendorsDoc(base: string): Promise<Record<string, unknown>>;
   vendorDoc(id: string, base: string): Promise<Record<string, unknown> | null>;
@@ -1341,14 +1343,14 @@ export function createTrust(deps: TrustDeps): Trust {
     return null;
   }
 
-  async function handle(request: Request, path: string, base: string): Promise<Response | null> {
-    const r = await handleInner(request, path, base);
+  async function handle(request: Request, path: string, base: string, ctx?: { waitUntil(p: Promise<unknown>): void }): Promise<Response | null> {
+    const r = await handleInner(request, path, base, ctx);
     // A successful trust write (verified report/observation/reply, manual probe) can change scores: drop the index.
     if (r && request.method === "POST" && r.status < 300 && TRUST_POST_PATHS.includes(path)) await invalidateVendorsIndex();
     return r;
   }
 
-  async function handleInner(request: Request, path: string, base: string): Promise<Response | null> {
+  async function handleInner(request: Request, path: string, base: string, ctx?: { waitUntil(p: Promise<unknown>): void }): Promise<Response | null> {
     const method = request.method;
     if (deps.catalog && path.startsWith("/v1/trust/catalog")) {
       if ((method === "GET" || method === "HEAD") && path === "/v1/trust/catalog") {
@@ -1373,7 +1375,12 @@ export function createTrust(deps: TrustDeps): Trust {
           if (q.domain) q.domain = q.domain.replace(/^https?:\/\//i, "").split(/[/?#]/)[0].replace(/:\d+$/, "").toLowerCase();
           const lim = await limited("lookup", await ipHash(request), FREE_LIMITS.lookup.perMinute, FREE_LIMITS.lookup.perDay, FREE_LIMITS.lookup.globalPerDay);
           if (lim) return lim;
-          return json(200, await lookup(q, base, { free: true }), { "Cache-Control": "public, max-age=300" });
+          const doc = await lookup(q, base, { free: true });
+          if (deps.onFreeCheck) {
+            const p = deps.onFreeCheck(q, base).catch((e) => deps.log({ event: "buy_queue_error", source: "free_lookup", error: String(e) }));
+            if (ctx) ctx.waitUntil(p); else await p;
+          }
+          return json(200, doc, { "Cache-Control": "public, max-age=300" });
         }
         const v = await cachedVendorsDoc(base);
         return json(200, v.doc, { "Cache-Control": "public, max-age=120", "X-Lumi-Cache": v.cache });
