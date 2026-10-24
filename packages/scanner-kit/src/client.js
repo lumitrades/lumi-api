@@ -28,12 +28,10 @@ export function createLumiClient({ api = DEFAULT_API, keyId, privateKey, fetchIm
       if (cfg.share_receipts !== true) return { status: 0, sent: false, error: "sharing_off", detail: SHARING_OFF_ERROR };
       return call("POST", "/v1/contrib/submissions", { mode, receipt });
     },
-    credits: () => call("GET", "/v1/contrib/credits"),
-    spendCredits: (product, input) => call("POST", "/v1/contrib/credits/spend", { product, input }),
     wanted: (o = {}) => call("GET", "/v1/contrib/wanted" + (o.network || o.limit ? "?" + new URLSearchParams({ ...(o.network ? { network: o.network } : {}), ...(o.limit ? { limit: String(o.limit) } : {}) }) : "")),
     me: () => call("GET", "/v1/contrib/me"),
     shareDemand: (v) => call("POST", "/v1/contrib/me", { share_demand: !!v }),
-    /** Prove control of a registered wallet (proof from walletProof()); unproven wallets earn zero weight. */
+    /** Prove control of a registered wallet (proof from walletProof()); unproven wallets get zero weight. */
     proveWallet: (proof) => call("POST", "/v1/contrib/me/wallet-proof", proof),
     /** Delete this contributor account (cannot be undone). `confirm` must equal this key's id. */
     async deleteAccount(confirm) {

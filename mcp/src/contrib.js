@@ -85,7 +85,8 @@ export function registerContribTools(server, settings, { env = process.env, fetc
         "Passive contribution: builds a counterparty_delivery_receipt for an x402 purchase you already made (tx looked up on-ledger), signed by the paying wallet. " +
         "With submit=true it is sent to Lumi signed with your contributor key (LUMI_CONTRIB_KEY_FILE); Lumi verifies it on-ledger before it counts. " +
         "Submitting is tier 2 receipt sharing: OFF by default, so submit=true sends nothing until you opt in (LUMI_SHARE_RECEIPTS=1 or `lumi-scan sharing on`). " +
-        "Verified receipts earn free Lumi Check credits (not cash). No new spend. Self-tests (your own endpoints or wallets) are rejected.",
+        "A receipt shares the payment's chain and transaction ID (tx hash), no amount or wallet field; a transaction ID is public on-chain and can be linked to the paying wallet. " +
+        "Verified receipts earn a public contributor badge only (nothing of monetary value). No new spend. Self-tests (your own endpoints or wallets) are rejected.",
       inputSchema: {
         endpoint: z.string().url().describe("The x402 resource URL you paid"),
         network: z.enum(NETWORKS).describe("Chain of the payment"),

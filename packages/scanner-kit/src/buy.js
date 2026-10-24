@@ -68,8 +68,8 @@ export async function testBuy(o) {
   }
   return {
     ok: true, dry_run: false, tx_hash: paid.tx, payer: paid.payer, plan, http_status: status, outcome,
-    measurements: { ...m, latency_ms: paid.latency_ms, http_status: status, quote_latency_ms: q.quote_latency_ms, facilitator, settlement_ms: Date.now() - t0,
-      quotes: q.quotes.map(({ network, asset, amount, pay_to, scheme }) => ({ network, asset, amount, pay_to, scheme })) },
+    // No prices, amounts or addresses in measurements: a contributed receipt carries only the chain and tx hash of the payment.
+    measurements: { ...m, latency_ms: paid.latency_ms, http_status: status, quote_latency_ms: q.quote_latency_ms, facilitator, settlement_ms: Date.now() - t0 },
     observed_at: new Date().toISOString(),
   };
 }

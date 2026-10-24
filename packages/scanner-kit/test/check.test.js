@@ -171,7 +171,16 @@ test("receipts carry origin + path only", async () => {
 });
 
 test("disclosure names both tiers and all three off switches", () => {
-  for (const s of ["nothing is sent until you say yes", "Tier 1 (OFF until you say yes)", "Tier 2 (OFF by default", "lumi-scan telemetry on|off", "LUMI_CHECK_TELEMETRY=on|off", "\"telemetry\": true|false", "never changes any score", "No cash"]) assert.ok(kit.DISCLOSURE.includes(s), s);
+  for (const s of ["nothing is sent until you say yes", "Tier 1 (OFF until you say yes)", "Tier 2 (OFF by default", "lumi-scan telemetry on|off", "LUMI_CHECK_TELEMETRY=on|off", "\"telemetry\": true|false", "never changes any score", "public badge only, nothing of monetary value", "transaction ID", "link it to the wallet"]) assert.ok(kit.DISCLOSURE.includes(s), s);
+  assert.doesNotMatch(kit.DISCLOSURE, /credit|leaderboard|bount|perk|Solana/i);
+});
+
+test("tier 2 notice says a public, wallet-linkable transaction ID is shared and the reward is a badge only", () => {
+  assert.match(kit.TIER2_NOTICE, /transaction ID \(tx hash\) and chain/);
+  assert.match(kit.TIER2_NOTICE, /anyone can look it up on the blockchain and link it to the wallet that paid/);
+  assert.match(kit.TIER2_NOTICE, /badge/);
+  assert.match(kit.TIER2_NOTICE, /Nothing of monetary value/);
+  assert.doesNotMatch(kit.TIER2_NOTICE + kit.ACCOUNT_DELETE_NOTICE, /credit|leaderboard|bount|perk/i);
 });
 
 test("account delete: the client refuses without the matching key id and sends a signed DELETE when confirmed", async () => {

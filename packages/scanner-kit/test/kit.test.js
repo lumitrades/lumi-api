@@ -13,9 +13,10 @@ test("canonical JSON is key-order independent", () => {
   assert.equal(kit.canonicalJson({ b: 1, a: [{ d: 2, c: 3 }] }), '{"a":[{"c":3,"d":2}],"b":1}');
 });
 
-test("receipt: built, hashed and signed by the payer wallet", async () => {
+test("receipt: built, hashed and signed by the payer wallet; payment block is chain + tx hash only", async () => {
   const signer = await kit.signerFor("xrpl:0", seed);
   const body = kit.buildReceiptBody({ endpoint: "https://x.example/a", network: "xrpl:0", tx_hash: "AB".repeat(32), payer: signer.address, pay_to: "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe", amount: "0.001", asset: "RLUSD", observed_at: "2026-10-23T12:00:00Z", http_status: 200, outcome: "delivered", mode: "passive", measurements: { latency_ms: 5 } });
+  assert.deepEqual(body.payment, { network: "xrpl:0", tx_hash: "AB".repeat(32) }); // amount, asset and payer are dropped even if passed
   assert.equal(body.type, "counterparty_delivery_receipt");
   assert.equal(body.version, "ars-evidence/0.1");
   assert.equal(body.x_lumi_contrib.kit.version, kit.KIT_VERSION);
@@ -25,9 +26,11 @@ test("receipt: built, hashed and signed by the payer wallet", async () => {
   // tampering changes the hash
   const t = structuredClone(body); t.delivery.outcome = "no_data";
   assert.notEqual(await kit.receiptHash(t), r.receipt_hash);
-  // only the payer may sign
+  // only the payer may sign: checked locally against the ledger's payer (which is not written into the receipt)
   const other = await kit.signerFor("xrpl:0", generateSeed({ entropy: new Uint8Array(16).fill(4) }));
-  await assert.rejects(() => kit.signReceipt(body, other));
+  await assert.rejects(() => kit.signReceipt(body, other, { payer: signer.address }));
+  const ok = await kit.signReceipt(body, signer, { payer: signer.address });
+  assert.equal(ok.receipt_hash, r.receipt_hash);
   assert.throws(() => kit.buildReceiptBody({ endpoint: "https://x.example/a", mode: "passive", outcome: "great" }));
 });
 
