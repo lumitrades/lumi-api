@@ -306,7 +306,14 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     now,
     ownerKey: env.OWNER_MCP_KEY,
     adminKey: env.CONTRIB_ADMIN_KEY,
-    creditsEnabled: env.CONTRIB_CREDITS_ENABLED === "true",
+    creditsEnabled: env.CONTRIB_CASH_BOUNTIES_ENABLED === "true",
+    checkCreditsPerReceipt: env.CONTRIB_CHECK_CREDITS_PER_RECEIPT,
+    checkCreditPrices: env.CONTRIB_CHECK_CREDIT_PRICES,
+    // Free Lumi Check credits buy the same body as the x402 route. onPaid (Lumi's own follow-up test-buy) is NOT run for credits.
+    redeem: async (product, input, base) => {
+      const p = product === "trust_check" ? await prepareTrustCheck(new URLSearchParams(input).toString(), base) : await prepareVendorReport(String(input.vendor_id ?? input.id ?? ""), base);
+      return p.ok ? { ok: true as const, body: p.body } : { ok: false as const, status: p.status, error: p.error };
+    },
     // Contributed receipts are mainnet-only (xrpl:0), whatever network this deployment sells on.
     xrplRpc: split(env.XRPL_RPC_URLS).length && config.network === "xrpl:0" ? split(env.XRPL_RPC_URLS) : DEFAULT_XRPL_RPC["xrpl:0"],
     baseRpc,
@@ -380,6 +387,18 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     return { verdict: trustVerdict(input, exact, dom, base) as Record<string, any>, exact, host };
   }
 
+  /** payTo-only verdict (MCP tool payments): who is this address, per the catalog and Lumi's curated vendors. */
+  async function payToVerdict(input: { payTo: string; amountUsd?: number; network?: string }, base: string) {
+    const doc = (await trust.lookup({ payTo: input.payTo } as LookupQuery, base, { free: true })) as any;
+    const first = doc?.catalog?.entries?.[0]?.resource as string | undefined;
+    const cur = doc?.curated?.[0]?.id as string | undefined;
+    let host: string | null = cur ?? null;
+    if (!host && first) { try { host = new URL(first).hostname.toLowerCase(); } catch { host = null; } }
+    const verdict = trustVerdict({ url: first ?? "", ...input } as any, doc, null, base) as Record<string, any>;
+    if (verdict.matched) verdict.matched.exact = false;
+    return { verdict, exact: doc, host };
+  }
+
   async function freeCheck(request: Request, url: URL, base: string): Promise<Response> {
     const noStore = { "Cache-Control": "no-store" };
     const sp = url.searchParams;
@@ -389,21 +408,26 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const amountRaw = sp.get("amount")?.trim();
     const amountUsd = amountRaw ? Number(amountRaw.replace(/^\$/, "")) : undefined;
     const bad = (detail: string) => json(400, { error: "invalid_query", detail, example: `${base}/v1/check?url=https://api.example.com/v1/data&payTo=0x...&amount=0.01` }, noStore);
-    if (!clean) return bad("url is required: the absolute http(s) x402 resource URL you are about to pay (query strings are ignored).");
-    const lerr = lookupError({ url: clean, ...(payTo ? { payTo } : {}) }, { url: true, payTo: payTo !== undefined }, "check");
+    // payTo-only checks exist for MCP tool payments, whose resource is mcp://tool/<name> rather than an http(s) URL.
+    if (!clean && !(payTo && !raw)) return bad("url is required (or payTo alone for MCP tool payments): the absolute http(s) x402 resource URL you are about to pay (query strings are ignored).");
+    const lerr = lookupError({ ...(clean ? { url: clean } : {}), ...(payTo ? { payTo } : {}) }, { url: !!clean, payTo: payTo !== undefined }, "check");
     if (lerr) return json(400, lerr, noStore);
     if (amountRaw && !(amountUsd !== undefined && Number.isFinite(amountUsd) && amountUsd >= 0 && amountUsd < 1e6)) return bad("amount must be a USD number, e.g. 0.01.");
-    const limit = await trust.freeLimit(request, "lookup");
+    // Contributors with a verified receipt (signed request) get a higher per-key limit instead of the anonymous IP limit.
+    const perk = await contributors.checkPerk(request);
+    if (perk && !perk.ok) return perk.res;
+    const limit = perk ? null : await trust.freeLimit(request, "lookup");
     if (limit) return limit;
     const network = sp.get("network")?.slice(0, 40) || undefined;
-    const { verdict, host } = await checkVerdict({ url: clean, payTo, amountUsd, network }, base, true);
-    const score = scoreView(await liveScore(host), verdict.matched?.tier);
-    const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict, score, link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: false });
+    const { verdict, host } = clean ? await checkVerdict({ url: clean, payTo, amountUsd, network }, base, true) : await payToVerdict({ payTo: payTo!, amountUsd, network }, base);
+    const score = host ? scoreView(await liveScore(host), verdict.matched?.tier) : null;
+    const link = host ? `${base}/trust/v/${encodeURIComponent(host)}` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(payTo!)}`;
+    const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict, score, link, paid: false });
     const t = now();
     const receipt = await signResponse("lumi_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
     return json(200, {
       kind: "lumi_check", ...payload, receipt,
-      detail: `${base}/v1/trust/check?url=${encodeURIComponent(clean)} (x402, adds reason details and next steps)`,
+      detail: clean ? `${base}/v1/trust/check?url=${encodeURIComponent(clean)} (x402, adds reason details and next steps)` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(payTo!)}`,
       note: "Free pre-pay check. Paying Lumi (checks, monitoring, reports) never changes a score, tier, ranking or badge. Only origin + path of the URL is used; nothing about the query is stored.",
     }, noStore);
   }
