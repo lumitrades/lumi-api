@@ -30,13 +30,13 @@ client.onBeforePaymentCreation(x402BeforePaymentHook(lumi));           // { bloc
 // MCP client (@x402/mcp): tool payments are checked by payTo
 mcpClient.onPaymentRequired(mcpOnPaymentRequiredHook(lumi));
 
-// Optional: one tier-1 delivery outcome per paid call (see "What is shared")
+// Optional: one tier-1 delivery outcome per paid call, only once the user has said yes (see "What is shared")
 const paidFetch = withOutcomeReporting(wrapFetchWithPayment(fetch, client), lumi);
 ```
 
 CLI: `lumi-scan check https://seller.example/x402/data --pay-to 0x... --amount 0.01`.
 
-**Fail mode (defaults pending the owner's approval):** `fail_mode: "open"` with `timeout_ms: 2500`. If Lumi is slow,
+**Fail mode (defaults pending owner approval):** `fail_mode: "open"` with `timeout_ms: 2500`. If Lumi is slow,
 unreachable, or returns a verdict whose signature does not verify, the result is `warn` (`lumi_unreachable` /
 `lumi_unverified`) and the payment goes ahead. Set `"fail_mode": "closed"` in the config (or `failMode: "closed"`) to
 block instead. The detailed paid check (`/v1/trust/check`, x402) adds reason details and a signed `lumi_receipt`.
@@ -46,14 +46,28 @@ Verify any Lumi-signed response yourself: `verifyLumiSigned(response, { publicKe
 
 ## What is shared
 
-You are shown this at first run and in `lumi-scan setup`.
+**Nothing is shared until you say yes.** Right after your first `lumi-scan check` has printed its result, the CLI asks
+once (Enter means yes):
+
+```text
+Shares only the seller's host, delivered yes/no and status class after paid calls. No wallet addresses, amounts, tx hashes or URL paths. Turn off any time: lumi-scan telemetry off
+Share your results to help improve Lumi's public trust list? [Y/n]
+```
+
+- Your answer is saved on your machine in `~/.lumi-scanner-kit/config.json` (`"telemetry": true|false` and
+  `"share_answered_at"`; `LUMI_KIT_CONFIG` changes the path) and the question never shows again.
+- Change it any time: `lumi-scan telemetry on` / `lumi-scan telemetry off`, env `LUMI_CHECK_TELEMETRY=on|off`, or edit
+  `"telemetry"` in the config. `lumi-scan setup` shows the full disclosure and asks again.
+- Runs where the kit cannot ask (no terminal, CI, `LUMI_NO_PROMPT=1`, the MCP server, or the library used from code)
+  never assume yes: sharing stays off and one hint on how to turn it on is printed to stderr.
+- Your answer only controls what is shared. It never changes a check, a verdict or how any score is computed.
 
 | | Default | What is sent | Earns |
 |---|---|---|---|
-| **Tier 1: delivery outcomes** | **ON** | After each paid check: seller host (or Lumi vendor id), delivered yes/no, coarse status class (`2xx`/`4xx`/`5xx`/`timeout`), and a fresh random token per report. **No** wallet address, amount, tx hash, URL path or query, payload, or stable ID. | nothing |
+| **Tier 1: delivery outcomes ("share your results")** | **OFF until you say yes** | After each paid call: seller host (or Lumi vendor id), delivered yes/no, coarse status class (`2xx`/`4xx`/`5xx`/`timeout`), and a fresh random token per report. **No** wallet address, amount, tx hash, URL path or query, payload, or stable ID. | nothing |
 | **Tier 2: signed receipts** | **OFF** (opt-in) | Full signed delivery receipts (below). Nothing is sent unless you turn it on. | free Lumi Check credits |
 
-- Tier 1 off (any one): `lumi-scan telemetry off`, env `LUMI_CHECK_TELEMETRY=off`, or `"telemetry": false` in
+- Tier 1 on/off (any one): `lumi-scan telemetry on|off`, env `LUMI_CHECK_TELEMETRY=on|off`, or `"telemetry": true|false` in
   `~/.lumi-scanner-kit/config.json`.
 - Tier 2 on/off: `lumi-scan sharing on|off`, `"share_receipts": true|false`, or env `LUMI_SHARE_RECEIPTS=1|0`.
 - Env always wins over the config file. `lumi-scan telemetry status` / `sharing status` show the effective setting.
@@ -106,6 +120,7 @@ You are shown this at first run and in `lumi-scan setup`.
 
 ```bash
 cd packages/scanner-kit && npm install          # Node >= 20
+node bin/lumi-scan.js check https://seller.example/x402/data   # free check; after the first one, asks once whether to share results
 node bin/lumi-scan.js setup                     # shows what is shared; choose tier 1 / tier 2
 node bin/lumi-scan.js keygen                    # writes ~/.lumi-scanner-kit/contributor_key.json (mode 600) and prints the PUBLIC key
 node bin/lumi-scan.js prove-wallet --network xrpl:0           # signs a wallet-control proof locally (needs the wallet secret env below)

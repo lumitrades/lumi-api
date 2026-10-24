@@ -1,9 +1,11 @@
 /**
- * Tier 1: anonymous delivery outcome (ON by default; see config.js for the off switches).
+ * Tier 1: anonymous delivery outcome. OFF until the user says yes (one-time question after the first CLI check, or
+ * `lumi-scan telemetry on`, "telemetry": true, LUMI_CHECK_TELEMETRY=on); see config.js and first_run.js.
  * The payload is built from an allow-list, so nothing else can ride along.
  */
 import { randomBytes } from "node:crypto";
 import { loadConfig } from "./config.js";
+import { hintOnce } from "./first_run.js";
 import { kitHeader, DEFAULT_API } from "./version.js";
 
 export const OUTCOME_FIELDS = Object.freeze(["v", "subject", "delivered", "status_class", "token"]);
@@ -35,11 +37,15 @@ export function buildOutcome({ target, delivered, status } = {}) {
 
 /**
  * Send one tier-1 outcome. Returns { sent: false, reason } when telemetry is off or the input has no valid subject.
+ * Code can never be asked the question, so while it is unanswered nothing is sent and one hint is printed per process.
  * Never throws and never blocks a payment: short timeout, errors swallowed.
  */
 export async function reportOutcome(o, { api = DEFAULT_API, fetchImpl = fetch, config, configPath, env, timeoutMs = 2000 } = {}) {
   const cfg = config ?? loadConfig(configPath, env);
-  if (cfg.telemetry !== true) return { sent: false, reason: "telemetry_off" };
+  if (cfg.telemetry !== true) {
+    if (cfg.share_answered === false) hintOnce(cfg); // loaded from file and still unanswered (a config object passed in code is a choice)
+    return { sent: false, reason: "telemetry_off" };
+  }
   const body = buildOutcome(o);
   if (!body) return { sent: false, reason: "no_valid_subject" };
   try {

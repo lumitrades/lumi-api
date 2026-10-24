@@ -8,14 +8,15 @@
  *                                               passive: receipt for a purchase you already made
  *   buy <url> [--network N] [--live] [--submit] optional capped test-buy (dry run unless --live)
  *   me | share-demand on|off                    your standing / opt in to aggregate-only demand stats
- *   check <url> [--pay-to X --amount 0.01 --network N]   free signed pre-pay check (allow / warn / block)
+ *   check <url> [--pay-to X --amount 0.01 --network N]   free signed pre-pay check (allow / warn / block); after the
+ *                                               FIRST check, asks once: "Share your results ...? [Y/n]" (terminal only)
  *   setup [--sharing on|off] [--telemetry on|off] show what is shared, then save your choices
- *   telemetry on|off|status                     tier 1 anonymous delivery outcomes (ON by default)
+ *   telemetry on|off|status                     tier 1 anonymous delivery outcomes ("share your results"; OFF until you say yes)
  *   sharing on|off|status                       tier 2 full signed receipts (OFF by default; earns free check credits)
  *   credits | spend trust_check <url>           your free Lumi Check credits / spend one on a detailed check
  *   account delete [--confirm <key_id>]         delete your contributor account (asks you to type your key id)
  *   prove-wallet --network N [--submit]         sign a wallet-control proof (send it with your registration, or --submit)
- * Env: LUMI_CHECK_TELEMETRY=off (tier 1 off), LUMI_SHARE_RECEIPTS=1 (tier 2 on), LUMI_KIT_CONFIG, LUMI_API, LUMI_KIT_KEY (contributor key file), LUMI_KIT_XRPL_SEED(_FILE), LUMI_KIT_STELLAR_SECRET(_FILE), LUMI_KIT_EVM_KEY(_FILE),
+ * Env: LUMI_CHECK_TELEMETRY=on|off (tier 1; overrides the saved answer, and the question is not asked), LUMI_NO_PROMPT=1 (never ask), LUMI_SHARE_RECEIPTS=1 (tier 2 on), LUMI_KIT_CONFIG, LUMI_API, LUMI_KIT_KEY (contributor key file), LUMI_KIT_XRPL_SEED(_FILE), LUMI_KIT_STELLAR_SECRET(_FILE), LUMI_KIT_EVM_KEY(_FILE),
  *      LUMI_KIT_MAX_PER_BUY, LUMI_KIT_MAX_PER_DAY, LUMI_KIT_MAX_BUYS_PER_DAY.
  * Wallet secrets are read from env or a file and are never printed or sent anywhere.
  */
@@ -34,14 +35,7 @@ const client = () => { const k = kit.loadKey(keyPath()); if (!k.key_id) throw ne
 const signer = async (network) => kit.signerFor(network, await kit.secretFromEnv(network));
 
 async function main() {
-  // First run: show the plain-language sharing disclosure once (stderr, so JSON output stays clean) and save defaults.
-  if (cmd && cmd !== "setup") {
-    const cfg = kit.loadConfig();
-    if (cfg.first_run) {
-      console.error(kit.DISCLOSURE + "\n(Shown once. Review any time with `lumi-scan setup`.)\n");
-      kit.saveConfig({});
-    }
-  }
+  // Sharing is OFF until the user says yes. The one-time question comes right AFTER the first check's result (see `check`).
   const onOff = (v) => (v === "on" ? true : v === "off" ? false : undefined);
   if (cmd === "setup") {
     console.error(kit.DISCLOSURE + "\n");
@@ -52,12 +46,13 @@ async function main() {
     if (t === undefined && sh === undefined && process.stdin.isTTY) {
       const { createInterface } = await import("node:readline/promises");
       const rl = createInterface({ input: process.stdin, output: process.stderr });
-      const a1 = (await rl.question("Keep tier 1 anonymous delivery outcomes ON? [Y/n] ")).trim().toLowerCase();
+      const a1 = (await rl.question(kit.renderShareQuestion({ color: !process.env.NO_COLOR }).trimStart())).trim().toLowerCase();
       const a2 = (await rl.question("Turn ON tier 2 full signed receipts (earns free check credits)? [y/N] ")).trim().toLowerCase();
       rl.close();
-      patch.telemetry = !(a1 === "n" || a1 === "no");
+      patch.telemetry = kit.parseShareAnswer(a1) !== false;
       patch.share_receipts = a2 === "y" || a2 === "yes";
     }
+    if (patch.telemetry !== undefined) Object.assign(patch, { share_answered_at: new Date().toISOString(), share_answered_via: "setup" });
     const saved = kit.saveConfig(patch);
     const eff = kit.loadConfig();
     return out({ saved: kit.defaultConfigPath(), telemetry: eff.telemetry, share_receipts: eff.share_receipts, fail_mode: saved.fail_mode, timeout_ms: saved.timeout_ms,
@@ -66,16 +61,23 @@ async function main() {
   if (cmd === "telemetry" || cmd === "sharing") {
     const key = cmd === "telemetry" ? "telemetry" : "share_receipts";
     const v = onOff(pos[0]);
-    if (v !== undefined) kit.saveConfig({ [key]: v });
+    if (v !== undefined) {
+      if (cmd === "telemetry") kit.recordShareChoice(v, { via: "command" }); // an explicit choice: the first-check question will not be asked
+      else kit.saveConfig({ [key]: v });
+    }
     const eff = kit.loadConfig();
     const envName = cmd === "telemetry" ? "LUMI_CHECK_TELEMETRY" : "LUMI_SHARE_RECEIPTS";
     return out({ [key]: eff[key], tier: cmd === "telemetry" ? 1 : 2, config: kit.defaultConfigPath(),
+      ...(cmd === "telemetry" ? { answered: eff.share_answered, source: eff.telemetry_source } : {}),
       ...(v !== undefined && eff[key] !== v ? { note: `${envName} is set and overrides the saved file.` } : {}),
       what: cmd === "telemetry" ? "seller host + delivered yes/no + status class, fresh random token; nothing else" : "full signed delivery receipts (earns free Lumi Check credits)" });
   }
   if (cmd === "check") {
     const lumi = kit.createLumiCheck({ api: process.env.LUMI_API });
-    return out(await lumi.check({ url: pos[0], payTo: flag("pay-to"), amountUsd: flag("amount") ? Number(flag("amount")) : undefined, network: flag("network") }).then(({ receipt, ...r }) => r));
+    out(await lumi.check({ url: pos[0], payTo: flag("pay-to"), amountUsd: flag("amount") ? Number(flag("amount")) : undefined, network: flag("network") }).then(({ receipt, ...r }) => r));
+    // The result is on screen; now (first check only) ask the one-time sharing question. No terminal: stay off, one hint.
+    await kit.maybeAskToShare();
+    return;
   }
   if (cmd === "prove-wallet") {
     const network = flag("network");

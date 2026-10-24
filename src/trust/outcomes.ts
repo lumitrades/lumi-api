@@ -1,5 +1,5 @@
 /**
- * Lumi Check tier-1 delivery outcomes (ON by default in the kit, one off switch): anonymous, aggregate-only.
+ * Lumi Check tier-1 delivery outcomes (OFF in the kit until the user says yes to a one-time question): anonymous, aggregate-only.
  *
  * Accepted body (anything else is rejected, so a client cannot leak more than this by accident):
  *   { v: 1, subject: "<seller host>" | "vendor:<id>", delivered: boolean, status_class?: "2xx"|"3xx"|"4xx"|"5xx"|"timeout"|"network", token?: "<random, per event>" }

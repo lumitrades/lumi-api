@@ -50,9 +50,13 @@ name or badges. Those remain Lumi's, and nothing here or in the license grants r
 
 ## 5. Sharing tiers
 
-- **Tier 1 (on by default):** after each check, the kit sends an anonymous delivery outcome: seller host (or Lumi vendor
-  id), delivered yes/no, and a coarse status class. No wallet address, amount, tx hash, URL path or query, payload, or
-  stable identifier. Turn it off with `lumi-scan telemetry off`, `LUMI_CHECK_TELEMETRY=off`, or `"telemetry": false`.
+- **Tier 1 (off until you say yes):** nothing is sent before you agree. After your first check, the CLI asks once:
+  "Share your results to help improve Lumi's public trust list? [Y/n]". If you say yes, after each paid call the kit
+  sends an anonymous delivery outcome: seller host (or Lumi vendor id), delivered yes/no, and a coarse status class. No
+  wallet address, amount, tx hash, URL path or query, payload, or stable identifier. Your answer is stored only on your
+  machine. Runs where the kit cannot ask (no terminal, CI, MCP server, code) stay off. Change it any time with
+  `lumi-scan telemetry on|off`, `LUMI_CHECK_TELEMETRY=on|off`, or `"telemetry": true|false`. Sharing never changes how
+  any score is computed.
 - **Tier 2 (off by default, opt-in):** full signed receipts. Nothing is sent unless you turn it on (`lumi-scan sharing on`).
 - **Retention.** Raw data (tier-1 outcome counters and tier-2 submissions, including the stored receipt copy) is kept for
   90 days, then deleted. A raw tier-1 day is deleted only after it has been summarised. The summaries, one row per seller
