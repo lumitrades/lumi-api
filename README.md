@@ -327,6 +327,8 @@ Settle latency was about 6 to 7 s per paid call, including XRPL validation. Full
 | `INVOICE_SECRET` | secret, required on mainnet (startup refuses without it) |
 | `PRIVATE_NAMES` | optional secret: comma-separated names scrubbed from paid responses (`npx wrangler secret put PRIVATE_NAMES`) |
 | `OWNER_MCP_KEY` | optional secret (32+ chars): operator key for the remote MCP endpoint; paid tools return data free (`npx wrangler secret put OWNER_MCP_KEY`) |
+| `LUMI_CHECK_SIGNING_KEY` | Lumi Check secret (scanner-kit-v0): Ed25519 seed that signs check answers, receipts and badge verdicts; its public key is pinned in the clients. Set at deploy time (`npx wrangler secret put LUMI_CHECK_SIGNING_KEY`). See [docs/lumi-check-keys.md](docs/lumi-check-keys.md) |
+| `CONTRIB_ADMIN_KEY` | Lumi Check secret (scanner-kit-v0): separate admin credential for the contributor owner routes, never the signing key (falls back to `OWNER_MCP_KEY`). Set at deploy time (`npx wrangler secret put CONTRIB_ADMIN_KEY`) |
 | `EVM_NETWORK` | `eip155:8453` (Base mainnet; testnet env uses `eip155:84532`, Base Sepolia) |
 | `EVM_PAY_TO` | `0x5E617bac19912e6d212CB303ae84655E9E203532` (Lumi's Base receiving address; address only). Unset = no Base option |
 | `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET` | secrets (`npx wrangler secret put ...`): Coinbase CDP Secret API Key (Ed25519). With both set, Base USDC verifies and settles through the CDP facilitator |
