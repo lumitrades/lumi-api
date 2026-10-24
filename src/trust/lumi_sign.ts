@@ -104,7 +104,7 @@ export function keysDoc(key: SigningKey | null, base: string) {
         "ed25519 verify(base64 signer.signature, utf8 signer.message, hex signer.public_key); the public key must be one listed here.",
         "Reject when expires_at is in the past (badges and checks are short-lived on purpose).",
       ],
-      helper: "lumi-scanner-kit: verifyLumiSigned(response, { publicKeys }) (Apache-2.0).",
+      helper: "lumi-check (npm): verifyLumiSigned(response, { publicKeys }) (Apache-2.0).",
       endpoint: `${base}/v1/check/keys`,
     },
     note: "A dedicated signing key, not a wallet: it cannot move funds. Lumi's test-buy receipts stay signed by the paying wallet (RECEIPT_FORMAT).",

@@ -113,9 +113,9 @@ mcpClient.onPaymentRequired(mcpHook);           // @x402/mcp: returns { abort: t
 const v = await lumi.check({ url, payTo, amountUsd: 0.01 }); // { decision, reasons, score, link, verified }
 ```
 
-Defaults (pending owner approval): **fail-open** (a timeout or an unverifiable answer gives `warn`, payment goes ahead) and a
+Defaults: **fail-open** (a timeout or an unverifiable answer gives `warn`, payment goes ahead) and a
 **2.5 s timeout**. Set `failMode: "closed"` to block instead. Paying Lumi never changes any seller's score, tier, ranking or badge.
-The adapters come from `lumi-scanner-kit` (Apache-2.0); scoring and verification stay on Lumi's servers.
+The adapters come from `lumi-check` on npm (Apache-2.0); scoring and verification stay on Lumi's servers.
 
 What the kit shares: **nothing until the user says yes.** The `lumi-scan` CLI asks once, after the first check ("Share your
 results to help improve Lumi's public trust list? [Y/n]"). The MCP server cannot ask, so here sharing stays off and one hint is
