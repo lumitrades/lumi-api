@@ -44,7 +44,7 @@ import { lookupError } from "./trust/index";
 import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
 import { signingSecretSeparate } from "./trust/lumi_keys";
 import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
-import { curatedByHost } from "./trust/badge";
+import { curatedByHost, badgeDocs } from "./trust/badge";
 import type { LookupQuery } from "./trust/catalog";
 import { D1LiveStore, MemoryLiveStore, refreshLive, isFresh, LIVE_UNIVERSE, LIVE_MAX_AGE_MS, LIVE_CYCLE_MS, type LiveStore } from "./live";
 import { mcpServerCard, agentsJson } from "./wellknown";
@@ -812,6 +812,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (request.method === "GET" || request.method === "HEAD") {
       if (path === "/v1/check") return freeCheck(request, url, base);
       if (path === "/v1/check/keys" || path === "/.well-known/lumi-keys.json") return json(200, keysDoc(await signKey(), base, { secretReused }), { "Cache-Control": "public, max-age=3600" });
+      if (path === "/v1/badge") return json(200, badgeDocs(base, badgeThresholds(env)), { "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" });
       const eb = /^\/v1\/badge\/([^/]{1,200})\.(json|svg)$/.exec(path);
       if (eb) { const k = safeDecode(eb[1]); if (k) return earnedBadge(k, eb[2] as "json" | "svg", base); }
     }
@@ -1335,7 +1336,7 @@ export function prefersHtml(accept: string | null | undefined): boolean {
 
 /** API sitemap: the human and machine-readable entry points (paid routes are listed in /openapi.json, not here). */
 export function sitemapXml(base: string): string {
-  const paths = ["/", "/llms.txt", "/skill.md", "/openapi.json", "/.well-known/x402", "/.well-known/agent-card.json", "/.well-known/mcp/server-card.json", "/.well-known/agents.json", "/v1/samples", "/v1/coins", "/v1/trust/vendors", "/v1/trust/methodology", "/v1/trust/catalog", "/badge", "/v1/monitor", "/v1/monitor/sellers", "/v1/monitor/corrections", "/v1/feed", "/v1/feed/license"];
+  const paths = ["/", "/llms.txt", "/skill.md", "/openapi.json", "/.well-known/x402", "/.well-known/agent-card.json", "/.well-known/mcp/server-card.json", "/.well-known/agents.json", "/v1/samples", "/v1/coins", "/v1/trust/vendors", "/v1/trust/methodology", "/v1/trust/catalog", "/v1/badge", "/v1/monitor", "/v1/monitor/sellers", "/v1/monitor/corrections", "/v1/feed", "/v1/feed/license"];
   const day = new Date().toISOString().slice(0, 10);
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
     paths.map((p) => `  <url><loc>${base}${p}</loc><lastmod>${day}</lastmod><changefreq>daily</changefreq></url>`).join("\n") +
