@@ -71,7 +71,8 @@ export interface EvidenceStore {
    * "claimed" when this is the seller's first signal today and fewer than `cap` sellers were claimed today; "duplicate"
    * when the seller already has today's slot; "cap_reached" when the day's cap is used up. Atomic on D1.
    */
-  claimPriority(day: string, seller: string, resource: string, cap: number, t: number): Promise<PriorityClaim>;
+  /** Claim a priority slot: "duplicate" if the seller already has a slot after `since` (now minus 30 days) (once per seller per 30 days). */
+  claimPriority(day: string, seller: string, resource: string, cap: number, t: number, since: number): Promise<PriorityClaim>;
   existingResources(urls: string[]): Promise<string[]>;
   evmPayTos(): Promise<string[]>;
   xrplPayTos(): Promise<string[]>;
@@ -136,8 +137,8 @@ export class MemoryEvidenceStore implements EvidenceStore {
     const ex = this.queue.get(resource); if (!ex) return false; ex.status = status; ex.note = note; ex.updated_at = t; return true;
   }
   priority = new Map<string, { day: string; seller: string; resource: string; at: number }>();
-  async claimPriority(day: string, seller: string, resource: string, cap: number, t: number): Promise<PriorityClaim> {
-    if (this.priority.has(`${day}|${seller}`)) return "duplicate";
+  async claimPriority(day: string, seller: string, resource: string, cap: number, t: number, since: number): Promise<PriorityClaim> {
+    if ([...this.priority.values()].some((p) => p.seller === seller && p.at > since)) return "duplicate";
     if ([...this.priority.values()].filter((p) => p.day === day).length >= cap) return "cap_reached";
     this.priority.set(`${day}|${seller}`, { day, seller, resource, at: t });
     return "claimed";
@@ -241,15 +242,17 @@ export class D1EvidenceStore implements EvidenceStore {
     const r = await this.db.prepare("UPDATE buy_queue SET status = ?2, note = ?3, updated_at = ?4 WHERE resource = ?1 RETURNING resource").bind(resource, status, note, t).first();
     return !!r;
   }
-  async claimPriority(day: string, seller: string, resource: string, cap: number, t: number): Promise<PriorityClaim> {
-    // One statement: the cap count and the insert run together (D1 serialises writes), so concurrent checks cannot overshoot.
+  async claimPriority(day: string, seller: string, resource: string, cap: number, t: number, since: number): Promise<PriorityClaim> {
+    // One statement: the cap count, the 30-day seller check and the insert run together (D1 serialises writes), so
+    // concurrent checks cannot overshoot either limit.
     const r = await this.db.prepare(
       `INSERT INTO buy_priority (day, seller, resource, at) SELECT ?1, ?2, ?3, ?4
        WHERE (SELECT COUNT(*) FROM buy_priority WHERE day = ?1) < ?5
+         AND NOT EXISTS (SELECT 1 FROM buy_priority WHERE seller = ?2 AND at > ?6)
        ON CONFLICT(day, seller) DO NOTHING RETURNING seller`,
-    ).bind(day, seller, resource, t, cap).first();
+    ).bind(day, seller, resource, t, cap, since).first();
     if (r) return "claimed";
-    const ex = await this.db.prepare("SELECT seller FROM buy_priority WHERE day = ?1 AND seller = ?2").bind(day, seller).first();
+    const ex = await this.db.prepare("SELECT seller FROM buy_priority WHERE seller = ?1 AND at > ?2 LIMIT 1").bind(seller, since).first();
     return ex ? "duplicate" : "cap_reached";
   }
   async existingResources(urls: string[]) {

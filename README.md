@@ -415,9 +415,10 @@ and never printed.
 
 **Who jumps the queue (free and paid checks are identical).** Any Lumi check of an exact listing, free
 (`GET /v1/trust/vendors?url=…`, the `/v1/trust/check` free trial) or paid (`/v1/trust/check`), sends the same signal: if the verdict
-finds warning signs and the listing is a Base seller (host) Lumi has never conclusively test-bought, it is added to the buy queue
+finds one of the objective signals in `BUY_SIGNALS` (from Lumi's own records and public data only; `pay_to_mismatch`
+is excluded because it depends on the payTo the caller enters, so who ran the check never matters) and the listing is a Base seller (host) Lumi has never conclusively test-bought, it is added to the buy queue
 (`GET /v1/trust/catalog/buy-queue`), which `catalog_buys.ts --daily` puts first on the next day's Base list. Limits, the same for both:
-one slot per seller per UTC day (repeat checks add nothing), at most `TRUST_PRIORITY_DAILY_CAP` sellers per UTC day (default 5,
+one slot per seller per 30 days (`PRIORITY_SELLER_DAYS`; repeat checks add nothing), at most `TRUST_PRIORITY_DAILY_CAP` sellers per UTC day (default 5,
 `0` = off; D1 table `buy_priority`, migration `0022`). An unpaid 402 quote never queues. Paying Lumi never changes this order.
 
 ## Sales ledger (owner-only)

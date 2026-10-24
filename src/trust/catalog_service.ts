@@ -171,9 +171,15 @@ const conclusivePurchase = (p: any) =>
   !!p && !p.inconclusive && p.delivery !== "inconclusive" && p.data_returned !== null && !(p.data_returned === false && (p.http_status == null || p.http_status === 0));
 /** Default daily cap on sellers moved to the front of the Base test-buy queue by checks (env TRUST_PRIORITY_DAILY_CAP). */
 export const PRIORITY_DAILY_CAP = 5;
-export type PriorityResult = { queued: boolean; reason: "queued" | "duplicate_today" | "cap_reached" | "already_test_bought" | "bad_resource" | "evidence_off" };
-/** Trust check (free or paid) signals that queue a resource for the daily test-buy routine (never bought inline). */
-export const BUY_SIGNALS = ["last_quote_invalid", "quote_pays_unlisted_address", "quoted_price_differs", "unreliable_quotes", "pay_to_mismatch", "young_domain", "no_organic_payers", "no_bazaar_usage", "vet402_l0_fail"];
+/** A seller can move up through checks at most once per this many days (the public /trust-policy/ text says once per 30 days). */
+export const PRIORITY_SELLER_DAYS = 30;
+export type PriorityResult = { queued: boolean; reason: "queued" | "duplicate_30d" | "cap_reached" | "already_test_bought" | "bad_resource" | "evidence_off" };
+/**
+ * Trust check (free or paid) signals that queue a resource for the daily test-buy routine (never bought inline).
+ * Objective only, from Lumi's own records and public data, so the result does not depend on who ran the check.
+ * pay_to_mismatch is left out on purpose: it compares a payTo the caller enters, so anyone could trigger it.
+ */
+export const BUY_SIGNALS = ["last_quote_invalid", "quote_pays_unlisted_address", "quoted_price_differs", "unreliable_quotes", "young_domain", "no_organic_payers", "no_bazaar_usage", "vet402_l0_fail"];
 const PER_HOST = 3;
 /** CDP discovery rate-limits bursts (HTTP 429 seen from Workers): one page per 10 s. */
 const INGEST_SPACING_S = 10;
@@ -522,7 +528,7 @@ export function createCatalog(deps: CatalogDeps) {
   /**
    * Any trust check (free lookup, free trial, paid trust/check): queue the resource for the daily Base test-buy routine
    * (never bought inline). One path for every caller, so free and paid checks have identical queue effects. Abuse limits:
-   * one slot per seller host per UTC day (repeat checks add nothing, not even hits), at most `priorityDailyCap` sellers
+   * one slot per seller host per PRIORITY_SELLER_DAYS (30) days (repeat checks add nothing, not even hits), at most `priorityDailyCap` sellers
    * per day, and never for a seller Lumi has already test-bought (conclusively, on any of its listings).
    */
   async function queueBuy(c: { resource: string; network: string; price_usd: number | null; reasons: string[] }): Promise<PriorityResult> {
@@ -533,8 +539,8 @@ export function createCatalog(deps: CatalogDeps) {
     if ((await store.buysByDomain(seller, 10)).some(conclusivePurchase)) return { queued: false, reason: "already_test_bought" };
     const t = now();
     const cap = Math.max(0, Math.floor(deps.priorityDailyCap ?? PRIORITY_DAILY_CAP));
-    const claim = await deps.evidence.claimPriority(iso(t).slice(0, 10), seller, c.resource, cap, t);
-    if (claim !== "claimed") return { queued: false, reason: claim === "duplicate" ? "duplicate_today" : "cap_reached" };
+    const claim = await deps.evidence.claimPriority(iso(t).slice(0, 10), seller, c.resource, cap, t, t - PRIORITY_SELLER_DAYS * 86_400_000);
+    if (claim !== "claimed") return { queued: false, reason: claim === "duplicate" ? "duplicate_30d" : "cap_reached" };
     await deps.evidence.enqueueBuy(c, t);
     await store.addCounter(dayKey(t), 3);
     return { queued: true, reason: "queued" };
