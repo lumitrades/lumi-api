@@ -2,7 +2,7 @@
 import type { Config } from "../config";
 import { dropsToXrp } from "../config";
 import { usdToDrops } from "../pricing";
-import { FEED_LIMITS, MONITOR_LIMITS, PLANS, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TIERS, WATCH_TRIAL, type PlanId } from "./plans";
+import { FEED_LIMITS, MONITOR_LIMITS, PLANS, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TIERS, WATCH_TRIAL, WATCH_PRO_BUYS, WATCH_TRIAL_END, type PlanId } from "./plans";
 
 export const PLAN_ORDER: PlanId[] = ["watch", "watch_plus", "watch_pro", "audit", "monitor", "monitor_plus", "feed", "feed_pro", "feed_credits"];
 
@@ -66,7 +66,7 @@ export const COMMERCE_FREE_ENDPOINTS = [
   { method: "POST", path: "/v1/monitor/enroll", summary: "Enrol endpoints for monitoring (signature-proven payTo; each endpoint quote-checked, ≤ $0.10 per test-buy)" },
   { method: "POST", path: "/v1/monitor/free", summary: `Free Watch tier (management token): ${WATCH_FREE.endpoints} endpoint, a daily quote check, no test-buys, no badge; status page labelled "${WATCH_FREE.label}"` },
   { method: "GET", path: "/v1/monitor/trial/challenge?pay_to=&domain=", summary: `Challenge for the one-per-seller ${WATCH_TRIAL.days}-day Watch Plus trial: proves control of the domain (well-known file or DNS TXT) and the payTo (signature)` },
-  { method: "POST", path: "/v1/monitor/trial", summary: `Start the Watch Plus trial (no card, never auto-converts, test-buys capped at $${WATCH_TRIAL.capUsd} total; read-only after it ends unless the seller pays)` },
+  { method: "POST", path: "/v1/monitor/trial", summary: `Start the Watch Plus trial (no card, never auto-converts, test-buys capped at $${WATCH_TRIAL.capUsd} total. ${WATCH_TRIAL_END})` },
   { method: "GET", path: "/v1/monitor/status/{id}", summary: "Public seller status page (also .json): uptime from quote probes, test-buy outcomes, tier label" },
   { method: "GET", path: "/v1/monitor/sellers", summary: "Monitored sellers (each pays Lumi for monitoring; disclosed)" },
   { method: "GET", path: "/v1/monitor/sellers/{id}", summary: "Public seller entry: disclosure, plan status, test-buy outcomes, findings with seller replies" },
@@ -151,12 +151,12 @@ export function commerceSkillMd(base: string): string {
 
 Docs: \`GET ${base}/v1/monitor\`. Plans priced **per endpoint per 30 days**, paid via x402 (XRPL XRP/RLUSD/USDC or Base USDC), no auto-renew, terms stack:
 - **Watch** ${m("watch")}/endpoint: hourly quote checks, a weekly test-buy (≤ $${WATCH_TIERS.watch.maxBuyUsd} per buy), alerts, status page and badge.
-- **Watch Plus** ${m("watch_plus")}/endpoint: quote checks every 15-30 min, a daily test-buy (≤ $${WATCH_TIERS.watch_plus.maxBuyUsd}) rotating across chains, schema and p95-latency alerts, 90-day history.
-- **Watch Pro** ${m("watch_pro")}/endpoint: quote checks every 15 min, daily test-buys on up to 3 chains, a monthly report signed by Lumi's wallet.
+- **Watch Plus** ${m("watch_plus")}/endpoint: quote checks every 30 min, a daily test-buy (≤ $${WATCH_TIERS.watch_plus.maxBuyUsd}) rotating across chains, schema and p95-latency alerts, 90-day history.
+- **Watch Pro** ${m("watch_pro")}/endpoint: quote checks every 15 min, ${WATCH_PRO_BUYS}, a monthly report signed by Lumi's wallet.
 - ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints: -${WATCH_DISCOUNTS.volume * 100}%. Prepay ${WATCH_DISCOUNTS.prepayTerms} terms: -${WATCH_DISCOUNTS.prepay * 100}%. Discounts do not stack: only the larger applies.
 - **Audit** ${m("audit")} one-off: a test-buy of every listed endpoint, full report signed by Lumi's XRPL wallet.
 - **Free Watch**: $0, ${WATCH_FREE.endpoints} endpoint, a daily quote check, no test-buys, no badge (\`POST /v1/monitor/free\`).
-- **${WATCH_TRIAL.days}-day Watch Plus trial**: one per seller (prove the domain and the payTo wallet), test-buys capped at $${WATCH_TRIAL.capUsd} total, no card, never auto-converts; read-only after it ends unless you pay.
+- **${WATCH_TRIAL.days}-day Watch Plus trial**: one per seller (prove the domain and the payTo wallet), test-buys capped at $${WATCH_TRIAL.capUsd} total, no card, never auto-converts. ${WATCH_TRIAL_END}
 - Legacy plans **Monitor** (\`monitor\`, ${m("monitor")}/30 days) and **Monitor Plus** (\`monitor_plus\`, ${m("monitor_plus")}/30 days) stay valid and are grandfathered: existing terms run to their end and renewals still work. New sellers should pick a Watch tier.
 
 Steps: \`GET /v1/monitor/challenge?pay_to=<payTo>\` → sign it with the payTo wallet (XRPL: ripple-keypairs; Base: EIP-191) → \`POST /v1/monitor/enroll\` with endpoints and a webhook URL and/or email → pay \`GET /v1/monitor/subscribe/{watch|watch_plus|watch_pro|audit}?enrollment=<id>&endpoints=<N>&terms=<1|3>\`. Each test-buy is capped at $${MONITOR_LIMITS.maxBuyUsd} (Watch: $${WATCH_TIERS.watch.maxBuyUsd}); test-buys never exceed ${MONITOR_LIMITS.budgetShare * 100}% of the fee. Public status page: \`/v1/monitor/status/<id>\`. Alerts: paid but no/invalid data, 5xx/timeouts, payTo change, price change, schema change, recovery. Paying never changes a score; seller-funded tests are labelled; findings can be replied to, not removed; the badge (\`/v1/monitor/badge/<id>.svg\`) is removed automatically on failure or lapse; corrections: \`/v1/monitor/corrections\`.

@@ -1,7 +1,7 @@
 /** Free, human- and agent-facing documents: index, skill.md, discovery manifests, OpenAPI. */
 
 import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPriceTable, planResources } from "./commerce/discovery";
-import { WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL } from "./commerce/plans";
+import { WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
 import { EXPLORERS, dropsToXrp } from "./config";
 import { PAID_ENDPOINTS, priceTable, EXAMPLE_COIN } from "./catalog";
@@ -1081,7 +1081,7 @@ ${rows}</tbody></table></div>
 <div class="tbl"><table><thead><tr><th>Plan</th><th>USD</th><th>What you get</th></tr></thead><tbody>
 ${planPriceTable(base).filter((p) => p.path.startsWith("/v1/monitor")).map((p) => `<tr><td><code>GET ${esc(p.path)}</code></td><td>$${esc(p.price_usd)}${p.per ? " per endpoint" : ""}${p.term_days ? ` / ${p.term_days} days` : " one-off"}${p.legacy ? " (legacy, grandfathered)" : ""}</td><td>${esc(p.summary)}</td></tr>`).join("\n")}
 <tr><td><code>POST /v1/monitor/free</code></td><td>$0</td><td>Free Watch: ${WATCH_FREE.endpoints} endpoint, a daily quote check, no test-buys, no badge (status page labelled &ldquo;${esc(WATCH_FREE.label)}&rdquo;).</td></tr>
-<tr><td><code>POST /v1/monitor/trial</code></td><td>$0</td><td>${WATCH_TRIAL.days}-day Watch Plus trial, one per seller (prove the domain and the payTo wallet), test-buys capped at $${WATCH_TRIAL.capUsd} in total, no card, never auto-converts; read-only after it ends unless you pay.</td></tr></tbody></table></div>
+<tr><td><code>POST /v1/monitor/trial</code></td><td>$0</td><td>${WATCH_TRIAL.days}-day Watch Plus trial, one per seller (prove the domain and the payTo wallet), test-buys capped at $${WATCH_TRIAL.capUsd} in total, no card, never auto-converts. ${WATCH_TRIAL_END}</td></tr></tbody></table></div>
 <p class="note">Prove your payTo with a signature, enrol endpoints (test-buys capped at $0.05 each on Watch and $0.10 on Watch Plus / Pro, seller-funded and labelled so, never more than half the fee), pay over x402 per endpoint (${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}%); no auto-renew. Status page: <code>/v1/monitor/status/&lt;id&gt;</code>. Paying never changes a score; findings can be replied to, not removed; the badge is removed automatically if a test fails or the plan lapses. <a href="${esc(base)}/v1/monitor">How it works</a> &middot; <a href="${esc(base)}/v1/monitor/sellers">Monitored sellers</a> &middot; <a href="${esc(base)}/v1/monitor/corrections">Corrections</a></p>
 <h2 id="feed">For facilitators, wallets and frameworks: trust data feed</h2>
 <div class="tbl"><table><thead><tr><th>Plan</th><th>USD</th><th>What you get</th></tr></thead><tbody>

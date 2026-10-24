@@ -7,7 +7,7 @@ import { canonicalJson, json, requirePayment, assetLabel, paymentRequiredRespons
 import { verifyXrplSignature, xrplAddressOf } from "../trust/verify";
 import { explorerFor } from "../trust/catalog";
 import { sendPlainEmail } from "../sales";
-import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, type PlanId, type WatchTier } from "./plans";
+import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, type PlanId, type WatchTier } from "./plans";
 import { MONITOR_METHODOLOGY, MONITOR_SAFEGUARDS, MONITOR_TERMS } from "./policy";
 import { makeChallenge, verifyProof } from "./proof";
 import { NO_STORE, acceptAsset, acceptUsd, bad, bearer, parse402, readJson, safeEmail, safeHttpsUrl, type CommerceDeps, type WaitUntil } from "./common";
@@ -485,7 +485,7 @@ export function createMonitor(deps: CommerceDeps) {
       domain: e.domain,
       ...(e.is_test ? { test: true } : {}),
       tier: st.top?.plan ?? null, tier_label: tierLabel(st.top?.plan),
-      ...(st.frozen ? { frozen: true, frozen_at: iso(st.freezeAt!), frozen_note: "The free trial ended: history and status are read-only from that date. Nothing was charged; pay a plan to resume." } : {}),
+      ...(st.frozen ? { frozen: true, frozen_at: iso(st.freezeAt!), frozen_note: `${WATCH_TRIAL_END} Pay a plan to resume.` } : {}),
       status_page: `${base}/v1/monitor/status/${e.id}`,
       commercial_relationship: relationshipView(e, plans, base),
       badge: { ...badgeJson(e, badge), svg: `${base}/v1/monitor/badge/${e.id}.svg`, json: `${base}/v1/monitor/badge/${e.id}.json` },
@@ -500,10 +500,10 @@ export function createMonitor(deps: CommerceDeps) {
     }, { "Cache-Control": "public, max-age=60" });
   }
 
-  const badgeLabel = (e: Enrollment, plan: string) => (e.is_test ? TEST_BADGE_LABEL : plan === "watch_plus_trial" ? "Monitored by Lumi (trial)" : "Monitored by Lumi");
+  const badgeLabel = (e: Enrollment, plan: string) => (e.is_test ? TEST_BADGE_LABEL : plan === "watch_plus_trial" ? TRIAL_BADGE_LABEL : PAID_BADGE_LABEL);
 
   function badgeJson(e: Enrollment, b: ReturnType<typeof badgeStatus>) {
-    if (b.ok) return { status: "monitored", label: badgeLabel(e, b.plan.plan), last_test: iso(b.last_test), result: b.result, plan: b.plan.plan, ...(b.plan.plan === "watch_plus_trial" ? { trial: true } : {}), ...(e.is_test ? { test: true } : {}) };
+    if (b.ok) return { status: "monitored", label: badgeLabel(e, b.plan.plan), paid: !e.is_test && !UNPAID.has(b.plan.plan), last_test: iso(b.last_test), result: b.result, plan: b.plan.plan, ...(b.plan.plan === "watch_plus_trial" ? { trial: true } : {}), ...(e.is_test ? { test: true } : {}) };
     return { status: "removed", label: "Lumi monitoring", reason: b.reason, reason_text: REASON_TEXT[b.reason], ...("last_test" in b && b.last_test ? { last_test: iso(b.last_test) } : {}) };
   }
 
@@ -619,7 +619,7 @@ export function createMonitor(deps: CommerceDeps) {
         const mine = runs.filter((r) => r.endpoint === ep.url);
         const last = mine[0];
         if (tier) {
-          // Watch tiers / trial: cadence per tier; Plus rotates chains, Pro buys on up to 3 chains each time.
+          // Watch tiers / trial: cadence per tier; Plus rotates chains, Pro: daily buys on up to 3 chains, limited by the test-buy budget.
           const chains = buyChains(ep, e, tier.maxBuyUsd);
           const primary: EndpointChain = { network: e.network, pay_to: e.pay_to, usd: ep.price_usd == null ? null : Number(ep.price_usd), asset: ep.asset, proven: true };
           let pick: { chain: EndpointChain; done: RunRow[] }[] = [];
@@ -844,7 +844,7 @@ export function createMonitor(deps: CommerceDeps) {
       const f: FindingRow = p.plan === "watch_plus_trial"
         ? remind
           ? { enrollment_id: e.id, endpoint: null, ts: t, kind: "renewal_due", detail: `Your ${name} ends ${iso(p.ends_at)}. It never converts and nothing will be charged. To keep monitoring, pay a plan: ${renewUrl}. Otherwise history and the status page become read-only.`, run_id: null, delivered: null }
-          : { enrollment_id: e.id, endpoint: null, ts: t, kind: "trial_ended", detail: `Your ${name} ended ${iso(p.ends_at)}: no charge was made. History and the status page are now read-only (frozen). Resume any time with a paid plan: ${renewUrl}.`, run_id: null, delivered: null }
+          : { enrollment_id: e.id, endpoint: null, ts: t, kind: "trial_ended", detail: `Your ${name} ended ${iso(p.ends_at)}: nothing was charged, checks and test-buys stopped, the Monitored badge was removed, and history and the status page are now read-only (frozen). Resume any time with a paid plan: ${renewUrl}.`, run_id: null, delivered: null }
         : remind
           ? { enrollment_id: e.id, endpoint: null, ts: t, kind: "renewal_due", detail: `${name} ends ${iso(p.ends_at)}. No auto-renew: renew ${p.plan === "watch_free" ? "free at" : "by paying again at"} ${renewUrl}${p.plan === "watch_free" ? "" : "."}`, run_id: null, delivered: null }
           : { enrollment_id: e.id, endpoint: null, ts: t, kind: "plan_lapsed", detail: `${name} ended ${iso(p.ends_at)}; monitoring stopped${p.plan === "watch_free" ? "" : " and the badge was removed"}. Renew: ${renewUrl}.`, run_id: null, delivered: null };
@@ -1100,20 +1100,22 @@ export function createMonitor(deps: CommerceDeps) {
     const order = ["Not delivering", "Degraded", "No recent data", "Operational"];
     const overall = eps.length ? order.find((o) => eps.some((x) => x.status === o))! : "No recent data";
     const freeOnly = st.top?.plan === "watch_free";
+    // An ended trial is not monitored: never show a stale "Operational" (legal review 3-M1).
+    const frozenStatus = st.frozen ? `Trial ended ${iso(st.freezeAt!)!.slice(0, 10)}, not monitored` : "";
     const body = {
       kind: "lumi_monitor_status", enrollment_id: e.id, pay_to: e.pay_to, network: e.network, domain: e.domain, ...(e.is_test ? { test: true } : {}),
-      status: overall, tier: st.top?.plan ?? null, tier_label: freeOnly ? WATCH_FREE.label : tierLabel(st.top?.plan), history_days: histDays,
-      ...(st.frozen ? { frozen: true, frozen_at: iso(st.freezeAt!), frozen_note: "Free trial ended: read-only, no charge. Data stops at the trial end." } : {}),
+      status: st.frozen ? frozenStatus : overall, tier: st.top?.plan ?? null, tier_label: freeOnly ? WATCH_FREE.label : tierLabel(st.top?.plan), history_days: histDays,
+      ...(st.frozen ? { frozen: true, frozen_at: iso(st.freezeAt!), frozen_note: `${WATCH_TRIAL_END} Data stops at the trial end.`, last_status_before_end: overall } : {}),
       ...(!st.top && !st.frozen ? { note: "No active plan: showing the last period." } : {}),
       endpoints: eps, seller_page: `${base}/v1/monitor/sellers/${e.id}`, disclosure: relationshipView(e, plans, base).disclosure,
       independence: "Monitoring and payment never change Lumi's scores, tiers, rankings or Tested-by-Lumi results.", as_of: iso(ref),
     };
     const hdr = { "Cache-Control": "public, max-age=300" };
     if (fmt === "json") return json(200, body, hdr);
-    const row = (x: (typeof eps)[number]) => `<tr><td>${esc(x.url)}</td><td>${esc(x.status)}</td><td>${x.quote_uptime ?? "–"}${x.quote_uptime == null ? "" : "%"}</td><td>${x.p95_ms ?? "–"}</td><td>${x.last_test_buy ? esc(`${x.last_test_buy.outcome} ${x.last_test_buy.at}`) : "–"}</td></tr>`;
+    const row = (x: (typeof eps)[number]) => `<tr><td>${esc(x.url)}</td><td>${esc(st.frozen ? `${x.status} at trial end` : x.status)}</td><td>${x.quote_uptime ?? "–"}${x.quote_uptime == null ? "" : "%"}</td><td>${x.p95_ms ?? "–"}</td><td>${x.last_test_buy ? esc(`${x.last_test_buy.outcome} ${x.last_test_buy.at}`) : "–"}</td></tr>`;
     const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Status: ${esc(e.domain ?? e.pay_to)} — Lumi</title>` +
       `<style>body{font:15px system-ui,sans-serif;max-width:860px;margin:2rem auto;padding:0 1rem;color:#111}table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid #ddd;padding:.4rem;text-align:left;font-size:13px}.s{font-size:1.4rem;font-weight:600}.m{color:#555}</style></head><body>` +
-      `<h1>${esc(e.domain ?? e.pay_to)}</h1><p class="s">${esc(overall)}</p><p class="m">${esc(String(body.tier_label))}${st.frozen ? ` · read-only since ${esc(String(iso(st.freezeAt!)))} (trial ended, no charge)` : ""} · last ${histDays} days</p>` +
+      `<h1>${esc(e.domain ?? e.pay_to)}</h1><p class="s">${esc(st.frozen ? frozenStatus : overall)}</p><p class="m">${esc(String(body.tier_label))}${st.frozen ? ` · read-only since ${esc(String(iso(st.freezeAt!)))} (trial ended, no charge)` : ""} · last ${histDays} days</p>` +
       `<table><thead><tr><th>Endpoint</th><th>Status</th><th>Quote uptime</th><th>p95 ms</th><th>Last test-buy</th></tr></thead><tbody>${eps.map(row).join("")}</tbody></table>` +
       `<p class="m">${esc(body.disclosure)} ${esc(body.independence)}</p><p class="m"><a href="${esc(body.seller_page)}">Seller page</a> · <a href="${esc(`${base}/v1/monitor/status/${e.id}.json`)}">JSON</a></p></body></html>`;
     return new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", ...hdr } });
