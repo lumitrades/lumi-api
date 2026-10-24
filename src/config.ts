@@ -63,9 +63,12 @@ export interface Env {
   PRIVATE_NAMES?: string;
   /** Owner access key for the remote MCP endpoint (/mcp): paid tools return data free. `wrangler secret put OWNER_MCP_KEY`. */
   OWNER_MCP_KEY?: string;
-  /** Lumi Check v0: ed25519 seed (64 hex) that signs check responses and badge verdicts. Not a wallet key. `wrangler secret put LUMI_CHECK_SIGNING_KEY`. Unset = unsigned (signature null). */
+  /** Lumi Check v0: ed25519 seed (64 hex) that signs check responses and badge verdicts. Not a wallet key and not an admin credential (must differ from CONTRIB_ADMIN_KEY / OWNER_MCP_KEY). Its PUBLIC key must be pinned in src/trust/lumi_keys.ts. Set at deploy time with `wrangler secret put LUMI_CHECK_SIGNING_KEY` (docs/lumi-check-keys.md). Unset = unsigned (signature null). */
   LUMI_CHECK_SIGNING_KEY?: string;
-  /** Lumi Check v0: scoped key for the owner contributor routes (/v1/owner/contributors*). Falls back to OWNER_MCP_KEY when unset. */
+  /** Tested-by-Lumi badge thresholds. Defaults (approved): score 80 and 3 conclusive paid Lumi test-buys. */
+  BADGE_MIN_SCORE?: string;
+  BADGE_MIN_PAID_TESTS?: string;
+  /** Lumi Check v0: separate admin credential for the owner contributor routes (/v1/owner/contributors*); never the signing key. Falls back to OWNER_MCP_KEY when unset. Set at deploy time with `wrangler secret put CONTRIB_ADMIN_KEY`. */
   CONTRIB_ADMIN_KEY?: string;
   /** Public base URL used in docs/discovery (e.g. https://api.lumitrades.io). */
   PUBLIC_BASE_URL?: string;

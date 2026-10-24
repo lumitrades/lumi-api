@@ -104,8 +104,8 @@ test("sharing never changes the check: the request to Lumi is identical with sha
   const seen = [];
   const f = async (u, init) => { seen.push({ u: String(u), h: JSON.stringify(init?.headers ?? {}) }); return new Response("{}", { status: 503 }); };
   const args = { url: "https://s.example/x?q=1", payTo: "0x1111111111111111111111111111111111111111", amountUsd: 0.01, network: "eip155:8453" };
-  await kit.createLumiCheck({ fetchImpl: f, publicKeys: ["00"], config: { telemetry: true } }).check(args);
-  await kit.createLumiCheck({ fetchImpl: f, publicKeys: ["00"], config: { telemetry: false } }).check(args);
+  await kit.createLumiCheck({ fetchImpl: f, publicKeys: ["00".repeat(32)], config: { telemetry: true } }).check(args);
+  await kit.createLumiCheck({ fetchImpl: f, publicKeys: ["00".repeat(32)], config: { telemetry: false } }).check(args);
   assert.equal(seen.length, 2); assert.deepEqual(seen[0], seen[1]);
 });
 

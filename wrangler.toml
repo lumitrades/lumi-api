@@ -3,6 +3,7 @@
 #   Testnet staging (workers.dev):            npx wrangler deploy --env testnet
 #   Local:                                    npx wrangler dev --env testnet   (or `npm start` for plain Node)
 # Secrets (never in this file):               npx wrangler secret put INVOICE_SECRET [--env testnet]
+#   Lumi Check (at deploy time, two different secrets): LUMI_CHECK_SIGNING_KEY, CONTRIB_ADMIN_KEY (docs/lumi-check-keys.md)
 
 name = "lumi-api"
 main = "src/index.ts"

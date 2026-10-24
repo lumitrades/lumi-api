@@ -45,60 +45,39 @@ describe("badge helpers", () => {
   });
 });
 
-describe("GET /badge/{key}.svg", () => {
-  it("delivered vendor: green, latest date, chain", async () => {
+const page = async (app: any, key: string) => (await get(app, `/trust/v/${key}`)).text();
+
+describe("result page summary (/trust/v/{key})", () => {
+  it("delivered vendor: latest date and chain", async () => {
     const { app } = mkApp();
-    const r = await get(app, "/badge/printmoneylab.svg");
+    const r = await get(app, "/trust/v/printmoneylab");
     expect(r.status).toBe(200);
-    expect(r.headers.get("Content-Type")).toContain("image/svg+xml");
     expect(r.headers.get("Cache-Control")).toBe(BADGE_CACHE_CONTROL);
-    expect(r.headers.get("X-Lumi-Badge")).toBe("delivered");
-    const svg = await r.text();
-    expect(svg).toContain("Tested by Lumi");
-    expect(svg).toContain(`delivered · ${usDate(NOW - D)} · XRPL`);
-    expect(svg).toContain("#2e8540");
-    expect(svg).toContain("not an endorsement or guarantee");
-    expect(svg).not.toMatch(/<script|onload|href=/i);
+    expect(await r.text()).toMatch(new RegExp(`Latest paid test-buy: <strong class="v delivered">delivered</strong> on ${usDate(NOW - D)} \\(XRPL\\)`));
   });
-  it("not delivered vendor is red", async () => {
-    const svg = await (await get(mkApp().app, "/badge/cryptobuddy.svg")).text();
-    expect(svg).toContain("not delivered ·");
-    expect(svg).toContain("#c62828");
+  it("not delivered vendor", async () => {
+    expect(await page(mkApp().app, "cryptobuddy")).toContain('class="v not_delivered"');
   });
-  it("host key: catalog buys (Base) and inconclusive (gray)", async () => {
+  it("host key: catalog buys (Base) and inconclusive", async () => {
     const { app } = mkApp();
-    expect(await (await get(app, "/badge/1gateway.dev.svg")).text()).toContain(`delivered · ${usDate(NOW - 5 * D)} · Base`);
-    const inc = await get(app, "/badge/alpha.example.com.svg");
-    expect(inc.headers.get("X-Lumi-Badge")).toBe("inconclusive");
-    expect(await inc.text()).toContain("#7a7a7a");
+    expect(await page(app, "1gateway.dev")).toContain(`on ${usDate(NOW - 5 * D)} (Base)`);
+    expect(await page(app, "alpha.example.com")).toContain('class="v inconclusive"');
   });
   it("host of a curated vendor endpoint maps to that vendor", async () => {
-    const r = await get(mkApp().app, "/badge/api.printmoneylab.com.svg");
-    expect(r.headers.get("X-Lumi-Badge")).toBe("delivered");
+    expect(await page(mkApp().app, "api.printmoneylab.com")).toContain('class="v delivered"');
   });
-  it("unknown keys say not yet tested; invalid keys render a neutral badge without lookups", async () => {
+  it("unknown keys say not yet tested; invalid keys are a 400 without lookups; Lumi itself is never scored", async () => {
     const { app } = mkApp();
-    for (const k of ["not-a-real-vendor", "nothing.example.org"]) {
-      const r = await get(app, `/badge/${k}.svg`);
-      expect(r.status).toBe(200);
-      expect(r.headers.get("X-Lumi-Badge")).toBe("not_tested");
-      expect(await r.text()).toContain("not yet tested");
-    }
-    const bad = await get(app, "/badge/%2A.svg");
-    expect(bad.status).toBe(200);
-    expect(await bad.text()).toContain("invalid key");
-    expect((await get(app, "/badge/%2A.json")).status).toBe(400);
-  });
-  it("Lumi's own domains are never scored", async () => {
-    const r = await get(mkApp().app, "/badge/api.lumitrades.io.svg");
-    expect(await r.text()).toContain("self, not tested");
+    for (const k of ["not-a-real-vendor", "nothing.example.org"]) expect(await page(app, k)).toContain("Not yet tested");
+    expect((await get(app, "/trust/v/%2A")).status).toBe(400);
+    expect(await page(app, "api.lumitrades.io")).toContain("Lumi does not test or score its own API.");
   });
   it("HEAD works; non-GET is refused", async () => {
     const { app } = mkApp();
-    const h = await get(app, "/badge/printmoneylab.svg", { method: "HEAD" });
+    const h = await get(app, "/trust/v/printmoneylab", { method: "HEAD" });
     expect(h.status).toBe(200);
     expect(await h.text()).toBe("");
-    expect((await app.badge(new Request("https://api.lumitrades.io/badge/printmoneylab.svg", { method: "POST" })))!.status).toBe(405);
+    expect((await app.badge(new Request("https://api.lumitrades.io/trust/v/printmoneylab", { method: "POST" })))!.status).toBe(405);
   });
   it("escapes everything it renders", () => {
     const svg = badgeSvg({ key: "x", kind: "unknown", name: "<x>", vendor_id: null, homepage: null, verdict: "not_tested", verdict_text: "", latest: null, chain: null, tests: [], pay_tos: [] });
@@ -107,18 +86,54 @@ describe("GET /badge/{key}.svg", () => {
   });
 });
 
-describe("JSON + result page", () => {
-  it("JSON gives one vendor's summary with embed snippets, no tx hashes", async () => {
-    const j = await (await get(mkApp().app, "/badge/printmoneylab.json")).json();
-    expect(j.verdict).toBe("delivered");
-    expect(j.tests).toHaveLength(2);
-    expect(j.tests[0].verdict).toBe("delivered");
-    expect(JSON.stringify(j)).not.toMatch(/tx_hash|printmoneylab\d{10}/);
-    expect(j.embed.markdown).toBe("[![Tested by Lumi: latest dated x402 test-buy result](https://api.lumitrades.io/badge/printmoneylab.svg)](https://api.lumitrades.io/trust/v/printmoneylab)");
-    expect(j.disclaimer).toMatch(/not an endorsement/);
-    expect(j.disclaimer).toMatch(/Paying Lumi never changes a result/);
-    expect(j.right_to_reply.email).toBe("hello@lumitrades.io");
+describe("legacy /badge retired: 301 to the signed /v1/badge route", () => {
+  it("redirects svg, json and docs, keeping the query string", async () => {
+    const { app } = mkApp();
+    for (const [from, to] of [
+      ["/badge/printmoneylab.svg", "/v1/badge/printmoneylab.svg"],
+      ["/badge/printmoneylab.svg?style=flat&v=2", "/v1/badge/printmoneylab.svg?style=flat&v=2"],
+      ["/badge/api.example.com.JSON?x=1", "/v1/badge/api.example.com.json?x=1"],
+      ["/badge", "/v1/badge"],
+      ["/badge/?ref=readme", "/v1/badge?ref=readme"],
+    ]) {
+      const r = await get(app, from);
+      expect(r.status, from).toBe(301);
+      expect(r.headers.get("Location")).toBe(`https://api.lumitrades.io${to}`);
+    }
+    const long = await get(app, `/badge/printmoneylab.svg?q=${"a".repeat(2000)}`);
+    expect(long.headers.get("Location")).toBe("https://api.lumitrades.io/v1/badge/printmoneylab.svg");
+    expect((await get(app, "/badge/printmoneylab.svg", { method: "HEAD" })).status).toBe(301);
+    expect((await app.badge(new Request("https://api.lumitrades.io/badge/x.svg", { method: "POST" })))!.status).toBe(405);
   });
+  it("the worker redirects before the edge cache (query kept) and the target serves the signed badge", async () => {
+    const r = await worker.fetch(new Request("https://api.lumitrades.io/badge/printmoneylab.svg?cb=7"), ENV as any, { waitUntil: () => {} });
+    expect(r.status).toBe(301);
+    expect(r.headers.get("Location")).toBe("https://api.lumitrades.io/v1/badge/printmoneylab.svg?cb=7");
+    const { app } = mkApp();
+    const svg = await get(app, "/v1/badge/printmoneylab.svg?cb=7");
+    expect(svg.status).toBe(200);
+    expect(svg.headers.get("Content-Type")).toContain("image/svg+xml");
+    const j = await (await get(app, "/v1/badge/printmoneylab.json")).json();
+    expect(j.kind).toBe("tested_badge_verdict");
+    expect(j.threshold).toMatchObject({ min_score: 80, min_paid_test_buys: 3 });
+    expect(j.signed).toBeDefined();
+  });
+  it("GET /v1/badge documents the signed badge; embeds and the result page point at /v1/badge", async () => {
+    const { app } = mkApp();
+    const d = await (await get(app, "/v1/badge")).json();
+    expect(d.kind).toBe("lumi_badge_docs");
+    expect(d.endpoints.svg).toBe("https://api.lumitrades.io/v1/badge/{key}.svg");
+    expect(d.threshold).toEqual({ min_score: 80, min_paid_test_buys: 3, latest_test_buy: "delivered" });
+    expect(d.legacy).toMatch(/301/);
+    expect(d.example.markdown).toBe("[![Tested by Lumi (live score, earned only)](https://api.lumitrades.io/v1/badge/printmoneylab.svg)](https://api.lumitrades.io/trust/v/printmoneylab)");
+    expect(JSON.stringify(d)).not.toContain("cryptobuddy");
+    const h = await page(app, "printmoneylab");
+    expect(h).toContain("/v1/badge/printmoneylab.svg");
+    expect(h).not.toMatch(/api\.lumitrades\.io\/badge/);
+  });
+});
+
+describe("result page", () => {
   it("result page shows dated tests, how-it-works, right to reply, disclaimer", async () => {
     const r = await get(mkApp().app, "/trust/v/printmoneylab");
     expect(r.status).toBe(200);
@@ -129,19 +144,15 @@ describe("JSON + result page", () => {
     expect(h).toContain("https://lumitrades.io/how-it-works/");
     expect(h).toContain("hello@lumitrades.io");
     expect(h).toContain("not an endorsement");
-    expect(h).toContain("/badge/printmoneylab.svg");
+    expect(h).toContain("Paying Lumi never changes a result");
     expect(h).toContain("not delivered");
+    expect(h).not.toMatch(/tx_hash|printmoneylab\d{10}/);
     const un = await (await get(mkApp().app, "/trust/v/nothing.example.org")).text();
     expect(un).toContain("Not yet tested");
     expect(un).toContain("noindex");
   });
-  it("there is no listing or wildcard: /badge is static docs, /trust/v needs a key", async () => {
-    const { app } = mkApp();
-    const d = await (await get(app, "/badge")).json();
-    expect(d.kind).toBe("lumi_badge_docs");
-    expect(JSON.stringify(d)).not.toContain("cryptobuddy");
-    expect((await get(app, "/trust/v")).status).not.toBe(200);
-    expect((await get(app, "/badge/%25.svg")).status).toBe(200);
+  it("there is no listing or wildcard: /trust/v needs a key", async () => {
+    expect((await get(mkApp().app, "/trust/v")).status).not.toBe(200);
   });
   it("caps tests per key at 10", async () => {
     const trustStore = new MemoryTrustStore(Array.from({ length: 30 }, (_, i) => obs("printmoneylab", NOW - i * 1000)));
@@ -194,7 +205,7 @@ describe("D1 budget: badge paths never write", () => {
     const env = { ...ENV, XRP_PRICING: "live", TRUST_DB: db };
     const waits: Promise<unknown>[] = [];
     const ctx = { waitUntil: (p: Promise<unknown>) => { waits.push(p); } };
-    const paths = ["/badge/printmoneylab.svg", "/badge/PrintMoneyLab.svg?v=1", "/badge/printmoneylab.svg?cb=2", "/trust/v/printmoneylab", "/badge/printmoneylab.json", "/badge/api.example.com.svg", "/badge/api.example.com.svg"];
+    const paths = ["/trust/v/printmoneylab", "/trust/v/PrintMoneyLab?v=1", "/trust/v/printmoneylab/?cb=2", "/trust/v/api.example.com", "/trust/v/api.example.com"];
     for (const p of paths) {
       const r = await worker.fetch(new Request(`https://api.lumitrades.io${p}`), env as any, ctx);
       expect(r.status).toBe(200);
@@ -202,10 +213,13 @@ describe("D1 budget: badge paths never write", () => {
     }
     const writes = sql.filter((q) => !/^\s*SELECT/i.test(q));
     expect(writes).toEqual([]);
-    // printmoneylab svg once, page once, json once (+ read-only disclosure lookups), example host once.
-    expect(sql.filter((q) => q.includes("FROM observations")).length).toBe(1); // in-isolate memo shares the vendor summary
+    // printmoneylab page once (+ read-only disclosure lookups), example host once; legacy /badge never touches D1.
+    expect(sql.filter((q) => q.includes("FROM observations")).length).toBe(1);
     expect(sql.filter((q) => q.includes("FROM catalog_buys")).length).toBe(1);
-    expect(store.size).toBe(4);
-    expect(badgeCacheKey(new URL("https://api.lumitrades.io/badge/X.svg/?a=1"))).toBe("https://api.lumitrades.io/badge/x.svg");
+    expect(store.size).toBe(2);
+    expect(badgeCacheKey(new URL("https://api.lumitrades.io/trust/v/X/?a=1"))).toBe("https://api.lumitrades.io/trust/v/x");
+    const n = sql.length;
+    expect((await worker.fetch(new Request("https://api.lumitrades.io/badge/printmoneylab.svg?v=1"), env as any, ctx)).status).toBe(301);
+    expect(sql.length).toBe(n);
   });
 });

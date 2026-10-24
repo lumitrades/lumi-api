@@ -2,7 +2,7 @@
 import { createApp, type App } from "./app";
 import type { Env } from "./config";
 import type { CatalogJob } from "./trust/catalog_service";
-import { BADGE_PATH_RE } from "./trust/badge";
+import { BADGE_PATH_RE, legacyBadgeRedirect } from "./trust/badge";
 
 /** Must match the one-minute entry in wrangler.toml [triggers] crons. */
 const LIVE_CRON = "* * * * *";
@@ -80,7 +80,12 @@ async function serveBadge(request: Request, env: Env, ctx: { waitUntil(p: Promis
 export default {
   async fetch(request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
     const url = new URL(request.url);
-    if ((request.method === "GET" || request.method === "HEAD") && BADGE_PATH_RE.test(url.pathname)) return serveBadge(request, env, ctx, url);
+    if (request.method === "GET" || request.method === "HEAD") {
+      // Legacy /badge: 301 to the signed /v1/badge route, query kept (before serveBadge, whose cache key drops the query).
+      const legacy = legacyBadgeRedirect(url);
+      if (legacy) return legacy;
+      if (BADGE_PATH_RE.test(url.pathname)) return serveBadge(request, env, ctx, url);
+    }
     const cache = request.method === "GET" && !request.headers.has("Authorization") && EDGE_CACHED.test(url.pathname) ? edgeCache() : undefined;
     if (cache) {
       const hit = await cache.match(request).catch(() => undefined);

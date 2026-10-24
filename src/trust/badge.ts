@@ -1,10 +1,9 @@
 /**
  * "Tested by Lumi" badge for x402 sellers (owner-approved Oct 23 2026).
  *
- *   GET /badge/{key}.svg   shields-style SVG: "Tested by Lumi | <latest verdict> · MM-DD-YYYY · <chain>"
- *   GET /badge/{key}.json  the same one-vendor summary as JSON (+ embed snippets)
- *   GET /trust/v/{key}     public result page the badge links to
- *   GET /badge             how to use it (static)
+ *   GET /trust/v/{key}     public result page (latest dated test-buys) the badge links to
+ *   GET /badge, /badge/{key}.svg|.json   RETIRED (approved Oct 23 2026): 301 to the signed, earned-only badge
+ *                          GET /v1/badge (docs) and /v1/badge/{key}.svg|.json (app.ts), query string kept.
  *
  * key = a curated vendor id (e.g. printmoneylab) or the exact host of the service (e.g. api.example.com).
  *
@@ -32,7 +31,24 @@ const MEMO_MS = 10 * 60_000;
 const MEMO_MAX = 256;
 
 /** Paths served by the badge handler (index.ts edge-caches exactly these). */
-export const BADGE_PATH_RE = /^\/(?:badge(?:\/[^/]{1,300}\.(?:svg|json))?|trust\/v\/[^/]{1,300})\/?$/i;
+export const BADGE_PATH_RE = /^\/trust\/v\/[^/]{1,300}\/?$/i;
+
+/** Legacy badge paths, retired with a 301 to the signed /v1/badge route. */
+export const LEGACY_BADGE_RE = /^\/badge(?:\/([^/]{1,300})\.(svg|json))?\/?$/i;
+/** Longest query string carried over by the legacy redirect; a longer one is dropped rather than echoed. */
+export const LEGACY_BADGE_MAX_QUERY = 1024;
+
+/** 301 from /badge[/{key}.svg|.json] to /v1/badge[/{key}.svg|.json] on the same origin, keeping the query; else null. */
+export function legacyBadgeRedirect(url: URL): Response | null {
+  const m = LEGACY_BADGE_RE.exec(url.pathname);
+  if (!m) return null;
+  const path = m[1] ? `/v1/badge/${m[1]}.${m[2].toLowerCase()}` : "/v1/badge";
+  const q = url.search.length > 1 && url.search.length <= LEGACY_BADGE_MAX_QUERY + 1 ? url.search : "";
+  return new Response(null, {
+    status: 301,
+    headers: { Location: `${url.origin}${path}${q}`, "Cache-Control": "public, max-age=86400", "Access-Control-Allow-Origin": "*", "X-Lumi-Deprecated": "legacy /badge retired; use /v1/badge" },
+  });
+}
 
 const VENDOR_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const HOST_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$/;
@@ -211,21 +227,19 @@ export function createBadges(deps: BadgeDeps) {
     return s;
   }
 
-  /** Handles /badge, /badge/{key}.svg|.json and /trust/v/{key}; null for any other path. GET/HEAD only. */
+  /** Handles /trust/v/{key} (and the legacy /badge redirects); null for any other path. GET/HEAD only. */
   async function handle(request: Request, base: string): Promise<Response | null> {
     const url = new URL(request.url);
+    const legacy = LEGACY_BADGE_RE.test(url.pathname);
     const path = url.pathname.replace(/\/+$/, "") || "/";
-    if (!BADGE_PATH_RE.test(path)) return null;
+    if (!legacy && !BADGE_PATH_RE.test(path)) return null;
     const head = request.method === "HEAD";
     if (request.method !== "GET" && !head) return text(405, "GET only.", "text/plain; charset=utf-8", { Allow: "GET, HEAD, OPTIONS", "Cache-Control": "no-store" }, head);
-    if (/^\/badge$/i.test(path)) return jsonRes(200, badgeDocs(base), head);
-    const bm = path.match(/^\/badge\/([^/]+)\.(svg|json)$/i);
-    const pm = path.match(/^\/trust\/v\/([^/]+)$/i);
-    const raw = (bm ?? pm)![1];
+    if (legacy) return legacyBadgeRedirect(url);
+    const raw = path.match(/^\/trust\/v\/([^/]+)$/i)![1];
     const key = normalizeKey(raw);
     if (!key) {
-      if (bm && bm[2].toLowerCase() === "svg") return text(200, badgeSvg(invalidSummary(raw)), SVG_TYPE, SVG_HEADERS, head);
-      return jsonRes(400, { error: "invalid_key", detail: "key must be a Lumi vendor id (e.g. printmoneylab) or the exact host of your x402 service (e.g. api.example.com).", docs: `${base}/badge` }, head);
+      return jsonRes(400, { error: "invalid_key", detail: "key must be a Lumi vendor id (e.g. printmoneylab) or the exact host of your x402 service (e.g. api.example.com).", docs: `${base}/v1/badge` }, head);
     }
     let s: BadgeSummary;
     try {
@@ -234,9 +248,7 @@ export function createBadges(deps: BadgeDeps) {
       deps.log?.({ event: "badge_error", error: String(e).slice(0, 200) });
       return text(503, "Lumi badge data is temporarily unavailable.", "text/plain; charset=utf-8", { "Cache-Control": "no-store", "Retry-After": "300" }, head);
     }
-    if (bm && bm[2].toLowerCase() === "svg") return text(200, badgeSvg(s), SVG_TYPE, { ...SVG_HEADERS, "X-Lumi-Badge": s.verdict }, head);
     const rel = deps.relationships && s.pay_tos.length ? await deps.relationships(s.pay_tos).catch(() => []) : [];
-    if (bm) return jsonRes(200, badgeDoc(s, base, rel), head);
     return text(200, badgePage(s, base, rel), "text/html; charset=utf-8", { "Cache-Control": BADGE_CACHE_CONTROL, "Content-Security-Policy": "default-src 'none'; img-src 'self' https://api.lumitrades.io; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'", "X-Content-Type-Options": "nosniff", "Access-Control-Allow-Origin": "*", "Referrer-Policy": "no-referrer-when-downgrade" }, head);
   }
 
@@ -244,14 +256,6 @@ export function createBadges(deps: BadgeDeps) {
 }
 
 // ---------------------------------------------------------------- rendering
-
-const SVG_TYPE = "image/svg+xml; charset=utf-8";
-const SVG_HEADERS: Record<string, string> = {
-  "Cache-Control": BADGE_CACHE_CONTROL,
-  "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
-  "X-Content-Type-Options": "nosniff",
-  "Access-Control-Allow-Origin": "*",
-};
 
 function text(status: number, body: string, type: string, headers: Record<string, string>, head: boolean): Response {
   return new Response(head ? null : body, { status, headers: { "Content-Type": type, ...headers } });
@@ -262,10 +266,6 @@ function jsonRes(status: number, body: unknown, head: boolean): Response {
 
 export function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-}
-
-function invalidSummary(raw: string): BadgeSummary {
-  return { key: raw.slice(0, 40), kind: "invalid", name: "", vendor_id: null, homepage: null, verdict: "not_tested", verdict_text: "invalid key", latest: null, chain: null, tests: [], pay_tos: [] };
 }
 
 /** Right-hand text of the badge. */
@@ -293,6 +293,7 @@ function textWidth(t: string): number {
 
 export const BADGE_LABEL = "Tested by Lumi";
 
+/** Legacy latest-verdict badge renderer. No longer routed (legacy /badge now 301s to the signed /v1/badge). */
 export function badgeSvg(s: BadgeSummary): string {
   const label = BADGE_LABEL;
   const msg = badgeMessage(s);
@@ -323,13 +324,13 @@ export function badgeSvg(s: BadgeSummary): string {
 
 export function embedSnippets(key: string, base: string) {
   const k = encodeURIComponent(key);
-  const img = `${base}/badge/${k}.svg`;
+  const img = `${base}/v1/badge/${k}.svg`;
   const page = `${base}/trust/v/${k}`;
-  const alt = "Tested by Lumi: latest dated x402 test-buy result";
+  const alt = "Tested by Lumi (live score, earned only)";
   return {
     badge: img,
     page,
-    json: `${base}/badge/${k}.json`,
+    json: `${base}/v1/badge/${k}.json`,
     markdown: `[![${alt}](${img})](${page})`,
     html: `<a href="${page}"><img src="${img}" alt="${alt}" height="20"></a>`,
     rst: `.. image:: ${img}\n   :target: ${page}\n   :alt: ${alt}`,
@@ -337,50 +338,28 @@ export function embedSnippets(key: string, base: string) {
 }
 
 export const BADGE_DISCLAIMER =
-  "Factual test evidence, not an endorsement, rating or guarantee. The badge shows the verdict and date of Lumi's latest stored paid test-buy of this service (delivered = the paid response contained data; not delivered = the seller answered without usable data; inconclusive = Lumi never saw a response, a Lumi-side outcome not counted against the seller). Past results do not predict future ones. Paying Lumi never changes a result.";
+  "Factual test evidence, not an endorsement, rating or guarantee. The badge is earned only (live score and paid test-buy thresholds, never sold) and is removed automatically when the seller drops below them. The result page lists Lumi's latest stored paid test-buys of this service (delivered = the paid response contained data; not delivered = the seller answered without usable data; inconclusive = Lumi never saw a response, a Lumi-side outcome not counted against the seller). Past results do not predict future ones. Paying Lumi never changes a result.";
 
 function rightToReply(key: string) {
   return { email: CONTACT_EMAIL, note: `Sellers can reply to or dispute any result: email ${CONTACT_EMAIL} (mention badge key ${key}), or sign a reply with a listed pay-to key via POST /v1/trust/replies. Verified replies are shown with your entry; corrections are logged publicly.` };
 }
 
-export function badgeDoc(s: BadgeSummary, base: string, rel: Record<string, unknown>[] = []) {
-  return {
-    kind: "lumi_badge",
-    key: s.key,
-    match: s.kind,
-    name: s.name,
-    vendor_id: s.vendor_id,
-    label: BADGE_LABEL,
-    message: badgeMessage(s),
-    verdict: s.verdict,
-    latest_test: s.latest,
-    chain: s.chain,
-    tests: s.tests,
-    tests_shown: s.tests.length,
-    note: s.latest ? "Newest first, at most 10. Answer-only: tx hashes and signed receipts are in the paid vendor report / trust check." : s.kind === "self" ? "Lumi does not test or score its own API." : "Lumi has no stored test result for this key. Keys are a Lumi vendor id or the exact host of the service.",
-    ...(rel.length ? { commercial_relationship: rel, commercial_note: "This seller pays Lumi for monitoring. That never changes a result." } : {}),
-    embed: embedSnippets(s.key, base),
-    how_lumi_tests: HOW_IT_WORKS,
-    methodology: `${base}/v1/trust/methodology`,
-    right_to_reply: rightToReply(s.key),
-    disclaimer: BADGE_DISCLAIMER,
-    cache: `Cached up to ${BADGE_MAX_AGE / 60} minutes.`,
-  };
-}
-
-export function badgeDocs(base: string) {
+/** GET /v1/badge: how the signed, earned-only "Tested by Lumi" badge works. Thresholds come from badgeThresholds(env). */
+export function badgeDocs(base: string, th: { minScore: number; minPaidTests: number }) {
   return {
     kind: "lumi_badge_docs",
-    summary: "Free 'Tested by Lumi' badge for x402 sellers: the verdict and date (MM-DD-YYYY, UTC) of Lumi's latest stored paid test-buy, plus the chain (XRPL, Base or Stellar). Not yet tested = no stored result.",
+    summary: `Free, signed, earned-only 'Tested by Lumi' badge for x402 sellers. Shown only while the seller's live Lumi score is at least ${th.minScore} with at least ${th.minPaidTests} conclusive paid test-buys and the latest test-buy delivered; otherwise the SVG says 'no badge' (or 'not scored'). Never sold.`,
     endpoints: {
-      svg: `${base}/badge/{key}.svg`,
-      json: `${base}/badge/{key}.json`,
+      svg: `${base}/v1/badge/{key}.svg`,
+      json: `${base}/v1/badge/{key}.json`,
       page: `${base}/trust/v/{key}`,
+      keys: `${base}/v1/check/keys`,
     },
-    key: "A Lumi vendor id (e.g. printmoneylab, from GET /v1/trust/vendors) or the exact host of your x402 service (e.g. api.example.com, the host of the resource URL Lumi bought). One key = one seller's summary; there is no listing or search here.",
-    verdicts: { delivered: "green", not_delivered: "red", inconclusive: "gray (Lumi-side, not counted against the seller)", not_tested: "neutral" },
+    key: "A Lumi vendor id (e.g. printmoneylab, from GET /v1/trust/vendors) or the exact host of a curated vendor's x402 service. One key = one seller; there is no listing or search here.",
+    threshold: { min_score: th.minScore, min_paid_test_buys: th.minPaidTests, latest_test_buy: "delivered" },
+    signature: "The .json verdict carries a Lumi-signed object (Ed25519, kind tested_badge, short expires_at). Verify it against Lumi's pinned public keys (lumi-scanner-kit verifyLumiSigned); a copied image proves nothing.",
+    legacy: "GET /badge and /badge/{key}.svg|.json are retired: they answer 301 to these routes (query string kept).",
     example: embedSnippets("printmoneylab", base),
-    cache: `Edge-cached ${BADGE_MAX_AGE / 60} minutes; a new test shows up within the hour.`,
     how_lumi_tests: HOW_IT_WORKS,
     right_to_reply: rightToReply("{key}"),
     disclaimer: BADGE_DISCLAIMER,
@@ -401,12 +380,12 @@ export function badgePage(s: BadgeSummary, base: string, rel: Record<string, unk
   const relHtml = rel.length ? `<div class="card disc"><strong>Commercial relationship:</strong> this seller pays Lumi for monitoring. That never changes a result.</div>` : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}: Tested by Lumi</title><meta name="description" content="${esc(`Lumi's dated paid test-buy results for ${title}. Factual test evidence, not an endorsement.`)}">
-<link rel="alternate" type="application/json" href="${esc(e.json)}"><meta name="robots" content="${s.latest ? "index" : "noindex"},follow"><style>${PAGE_CSS}</style></head>
+<meta name="robots" content="${s.latest ? "index" : "noindex"},follow"><style>${PAGE_CSS}</style></head>
 <body><main>
 <p class="muted"><a href="https://lumitrades.io/">Lumi Trades</a> &middot; x402 test results</p>
 <h1>${esc(title)}</h1>
 <p class="muted">Key <code>${esc(s.key)}</code>${s.homepage ? ` &middot; <a href="${esc(s.homepage)}" rel="nofollow noopener">${esc(s.homepage)}</a>` : ""}</p>
-<p><img src="${esc(e.badge)}" alt="${esc(`Tested by Lumi: ${badgeMessage(s)}`)}" height="20"></p>
+<p><img src="${esc(e.badge)}" alt="${esc("Tested by Lumi badge (shown only when earned)")}" height="20"></p>
 <div class="card"><p style="margin:0">${status}</p></div>
 ${relHtml}
 ${s.tests.length ? `<h2>Latest dated tests</h2><table><thead><tr><th>Date (UTC)</th><th>Endpoint</th><th>Chain</th><th>Verdict</th><th>HTTP</th></tr></thead><tbody>${rows}</tbody></table>
@@ -419,7 +398,7 @@ ${s.tests.length ? `<h2>Latest dated tests</h2><table><thead><tr><th>Date (UTC)<
 <p class="muted">Markdown / README.md</p><pre>${esc(e.markdown)}</pre>
 <p class="muted">HTML</p><pre>${esc(e.html)}</pre>
 <p class="muted">reStructuredText / README.rst</p><pre>${esc(e.rst)}</pre>
-<p class="muted">JSON: <a href="${esc(e.json)}">${esc(e.json)}</a> &middot; Badge docs: <a href="${esc(base)}/badge">${esc(base)}/badge</a></p>
+<p class="muted">Signed badge verdict (JSON): <a href="${esc(e.json)}">${esc(e.json)}</a> &middot; Badge docs: <a href="${esc(base)}/v1/badge">${esc(base)}/v1/badge</a></p>
 <div class="card disc"><strong>Disclaimer.</strong> ${esc(BADGE_DISCLAIMER)}</div>
 <p class="muted">Updated within the hour of each new test. Dates are UTC.</p>
 </main></body></html>`;

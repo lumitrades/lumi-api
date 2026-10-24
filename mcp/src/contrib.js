@@ -7,6 +7,7 @@
  */
 import { z } from "zod";
 import { join } from "node:path";
+import { pinnedPublicKeys } from "./lumi_keys.js";
 
 export async function loadKit() {
   try {
@@ -29,14 +30,29 @@ async function secretFor(kit, settings, network, env) {
 /** Kit config location: LUMI_KIT_CONFIG, else <LUMI_KIT_HOME>/config.json, else ~/.lumi-scanner-kit/config.json. */
 const configPathOf = (env) => env.LUMI_KIT_CONFIG || (env.LUMI_KIT_HOME ? join(env.LUMI_KIT_HOME, "config.json") : undefined);
 
-export function registerContribTools(server, settings, { env = process.env, fetchImpl, kitLoader = loadKit, stderr } = {}) {
+/**
+ * Accept a paid trust/check `lumi_receipt` only when it is signed by a pinned Lumi key. Verified: adds
+ * lumi_receipt_verified { ok, key_id }. Anything else: the receipt is removed and lumi_receipt_rejected { error, detail }
+ * says why (lumi_untrusted_key, lumi_retired_key, lumi_bad_signature, ...). The rest of the paid body is kept.
+ */
+export async function checkLumiReceipt(body, { kitLoader = loadKit, publicKeys = pinnedPublicKeys(), now = Date.now() } = {}) {
+  if (!body || typeof body !== "object" || !body.lumi_receipt) return body;
+  const { lumi_receipt, ...rest } = body;
+  let v;
+  try { v = (await kitLoader()).verifyLumiSigned(lumi_receipt, { publicKeys, now }); } catch { v = { ok: false, error: "lumi_kit_unavailable", detail: "lumi-check is not installed, so the receipt could not be verified." }; }
+  if (v.ok) return { ...body, lumi_receipt_verified: { ok: true, key_id: v.key_id } };
+  return { ...rest, lumi_receipt: null, lumi_receipt_rejected: { error: v.error ?? "lumi_bad_signature", detail: v.detail ?? `Signature did not verify (${(v.errors ?? []).join(", ")}).`, key_id: lumi_receipt?.signer?.key_id ?? null } };
+}
+
+/** publicKeys: code-only override of the pinned keys (tests, self-hosted Lumi). Never read from env or config files. */
+export function registerContribTools(server, settings, { env = process.env, fetchImpl, kitLoader = loadKit, stderr, publicKeys = pinnedPublicKeys() } = {}) {
   server.registerTool(
     "lumi_check",
     {
       title: "Lumi Check: should I pay this x402 seller? (free)",
       description:
         "Free. Call before paying an x402 seller. Returns allow / warn / block with reasons, the seller's current Lumi score and a link to the live report card. " +
-        "The verdict is signed by Lumi and verified locally. Only the URL's origin + path is sent. For MCP tool payments pass pay_to alone. " +
+        "The verdict is signed by Lumi and verified locally against the Lumi keys pinned in this package (other keys are rejected). Only the URL's origin + path is sent. For MCP tool payments pass pay_to alone. " +
         "If Lumi cannot be reached within 2.5 s the answer is warn (fail-open). Paying Lumi never changes a score, tier, ranking or badge.",
       inputSchema: {
         url: z.string().max(500).optional().describe("The x402 resource URL you are about to pay"),
@@ -47,7 +63,7 @@ export function registerContribTools(server, settings, { env = process.env, fetc
     },
     async ({ url, pay_to, amount_usd, network }) => {
       const kit = await kitLoader();
-      const lumi = kit.createLumiCheck({ api: env.LUMI_CHECK_API || settings.apiUrl, fetchImpl, configPath: configPathOf(env), env });
+      const lumi = kit.createLumiCheck({ api: env.LUMI_CHECK_API || settings.apiUrl, fetchImpl, configPath: configPathOf(env), env, publicKeys });
       const { receipt, ...r } = await lumi.check({ url, payTo: pay_to, amountUsd: amount_usd, network });
       // An MCP server cannot ask the one-time sharing question, so sharing stays off: one hint on stderr per process
       // (stdout is the MCP channel), only while unanswered. Nothing is shared and the tool result is unchanged.

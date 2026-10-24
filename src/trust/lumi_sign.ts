@@ -5,12 +5,14 @@
  * object without receipt_hash and signer), so isSignedObject() keeps every response transform away from it.
  * Signer: a dedicated ed25519 key held by the Worker as the secret LUMI_CHECK_SIGNING_KEY (64 hex, a 32-byte seed).
  * It is NOT a wallet key: it cannot move funds and only attests "Lumi said this at this time".
- * Signed message: `lumi-signed:<kind>:<receipt_hash>`. Public key(s): GET /v1/check/keys and /.well-known/lumi-keys.json.
+ * Signed message: `lumi-signed:<kind>:<receipt_hash>`. Public key(s): pinned in ./lumi_keys.ts and in the clients; also listed
+ * (informational only, clients do not fetch them) at GET /v1/check/keys and /.well-known/lumi-keys.json.
  * When the secret is unset the response still carries the same object with signer.signature = null (unsigned_reason).
  */
 import { ed25519 } from "@noble/curves/ed25519";
 import { canonicalJson } from "./receipts";
 import { sha256Hex } from "./verify";
+import { LUMI_SIGNING_KEYS, pinnedKey } from "./lumi_keys";
 
 export const SIGNED_TYPE = "lumi_signed_response";
 export const SIGNED_VERSION = "0.1";
@@ -92,19 +94,26 @@ export async function verifySignedResponse(r: any, opts: { trusted?: string[]; n
   return { ok: errors.length === 0, errors, expired };
 }
 
-export function keysDoc(key: SigningKey | null, base: string) {
+export function keysDoc(key: SigningKey | null, base: string, opts: { secretReused?: boolean } = {}) {
+  const use = ["lumi_check", "trust_check", "tested_badge"];
+  const configured = key ? pinnedKey(key.public_key) : null;
+  const keys = [
+    ...(key ? [{ key_id: key.key_id, key_type: SIGNED_KEY_TYPE, alg: "ed25519", public_key: key.public_key, use, pinned: !!configured, status: configured?.status ?? "not_pinned", signing: true }] : []),
+    ...LUMI_SIGNING_KEYS.filter((k) => k.public_key !== key?.public_key).map((k) => ({ key_id: k.key_id, key_type: SIGNED_KEY_TYPE, alg: "ed25519", public_key: k.public_key, use, pinned: true, status: k.status, signing: false })),
+  ];
   return {
     kind: "lumi_signing_keys",
-    keys: key ? [{ key_id: key.key_id, key_type: SIGNED_KEY_TYPE, alg: "ed25519", public_key: key.public_key, use: ["lumi_check", "trust_check", "tested_badge"] }] : [],
-    status: key ? "active" : "signing_key_not_configured",
+    keys,
+    status: opts.secretReused ? "signing_key_reused_as_admin_key" : !key ? "signing_key_not_configured" : configured && configured.status !== "retired" ? "active" : "configured_key_not_pinned",
+    pinning: "lumi-scanner-kit and lumi-trades-mcp ship these public keys (rotation list: active, next, retired) and reject any other key with lumi_untrusted_key. They never fetch this document to decide trust.",
     verify: {
       steps: [
         "receipt_hash = sha256 hex of the canonical JSON (sorted keys, no whitespace) of the object without receipt_hash and signer.",
         "signer.message must equal `lumi-signed:<kind>:<receipt_hash>`.",
-        "ed25519 verify(base64 signer.signature, utf8 signer.message, hex signer.public_key); the public key must be one listed here.",
+        "ed25519 verify(base64 signer.signature, utf8 signer.message, hex signer.public_key); the public key must be a pinned, non-retired Lumi key.",
         "Reject when expires_at is in the past (badges and checks are short-lived on purpose).",
       ],
-      helper: "lumi-check (npm): verifyLumiSigned(response, { publicKeys }) (Apache-2.0).",
+      helper: "lumi-check (npm): verifyLumiSigned(response, { publicKeys }) with the pinned keys listed here (Apache-2.0).",
       endpoint: `${base}/v1/check/keys`,
     },
     note: "A dedicated signing key, not a wallet: it cannot move funds. Lumi's test-buy receipts stay signed by the paying wallet (RECEIPT_FORMAT).",
