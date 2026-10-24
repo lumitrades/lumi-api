@@ -1,5 +1,5 @@
 /**
- * Lumi Scanner Kit v0, server side: contributor keys, contributed receipts, caps and credits.
+ * Lumi Check v0, server side: contributor keys, contributed receipts, caps and credits.
  * DRAFT on branch scanner-kit-v0. Not deployed.
  *
  * The open kit (packages/scanner-kit) only checks quotes, optionally makes capped test-buys, signs receipts with the
@@ -412,7 +412,7 @@ export function createContributors(deps: ContributorDeps) {
     if (!/^lck_[0-9a-f]{16}$/.test(id) || !/^\d{13}$/.test(ts) || !sig) return fail(401, "contributor_signature_required");
     if (Math.abs(now() - Number(ts)) > 5 * 60_000) return fail(401, "timestamp_out_of_window");
     const kv = kitCheck(req.headers.get("Lumi-Kit"));
-    if (kv) return { ok: false, res: err(426, kv, { min_kit_version: minKit, hint: "Update the Lumi Scanner Kit." }) };
+    if (kv) return { ok: false, res: err(426, kv, { min_kit_version: minKit, hint: "Update Lumi Check." }) };
     const key = await store.getKey(id); // read every time: revocation is instant
     if (!key) return fail(401, "unknown_key");
     if (key.status !== "active") return fail(403, "key_revoked");

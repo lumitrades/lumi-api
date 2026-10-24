@@ -12,7 +12,7 @@ extension block, `x_lumi_contrib`. ARS consumers can ignore it, but it is covere
   "version": "ars-evidence/0.1",
   "receipt_id": "contrib-xrpl-<tx_hash>",
   "issued_at": "2026-10-23T21:00:00.000Z",
-  "issuer": { "name": "Lumi Scanner Kit contributor", "methodology_url": "https://api.lumitrades.io/v1/trust/methodology", "methodology_version": "v0" },
+  "issuer": { "name": "Lumi Check contributor", "methodology_url": "https://api.lumitrades.io/v1/trust/methodology", "methodology_version": "v0" },
   "seller": { "endpoint": "https://seller.example/x402/data", "domain": "seller.example", "pay_to": "r..." },
   "payment": { "network": "xrpl:0", "asset": "RLUSD", "issuer": "rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De", "amount": "0.001",
                "tx_hash": "<64 hex>", "payer": "r...", "ledger_result": "tesSUCCESS" },

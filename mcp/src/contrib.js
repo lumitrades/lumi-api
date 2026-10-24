@@ -1,5 +1,5 @@
 /**
- * Scanner Kit tools (branch scanner-kit-v0, unpublished): lumi_scan_seller (free quote + dry-run plan) and
+ * Lumi Check tools (branch scanner-kit-v0, unpublished): lumi_scan_seller (free quote + dry-run plan) and
  * lumi_report_receipt (passive: sign a receipt for a purchase you already made, optionally submit it).
  * The kit is loaded lazily: the published package would depend on lumi-scanner-kit; in the repo it is ../../packages/scanner-kit.
  * Never returns or logs wallet secrets or the contributor private key.
@@ -28,7 +28,7 @@ export function registerContribTools(server, settings, { env = process.env, fetc
   server.registerTool(
     "lumi_scan_seller",
     {
-      title: "Lumi Scanner Kit: scan an x402 seller (free, dry-run)",
+      title: "Lumi Check: scan an x402 seller (free, dry-run)",
       description:
         "Free. Fetches an x402 seller's 402 quote without paying and returns latency, HTTP status and the quoted price per chain, plus a dry-run test-buy plan checked " +
         "against the kit's local caps (default 0.01 per buy, 0.05 per day per asset). Nothing is signed or paid from this tool. " +
@@ -50,7 +50,7 @@ export function registerContribTools(server, settings, { env = process.env, fetc
   server.registerTool(
     "lumi_report_receipt",
     {
-      title: "Lumi Scanner Kit: report a purchase you already made (passive)",
+      title: "Lumi Check: report a purchase you already made (passive)",
       description:
         "Passive contribution: builds a counterparty_delivery_receipt for an x402 purchase you already made (tx looked up on-ledger), signed by the paying wallet. " +
         "With submit=true it is sent to Lumi signed with your contributor key (LUMI_CONTRIB_KEY_FILE); Lumi verifies it on-ledger before it counts. " +

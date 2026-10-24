@@ -1,4 +1,4 @@
-# Lumi Scanner Kit: Contributor Terms (DRAFT, not in effect)
+# Lumi Check: Contributor Terms (DRAFT, not in effect)
 
 > **DRAFT for review. Not legal advice and not yet offered to anyone.** v0 is a private dry run with Lumi's own
 > agents (Lumi and Lumi Scout) as the first two contributors.

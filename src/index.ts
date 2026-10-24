@@ -109,7 +109,7 @@ export default {
   /** Queue consumer (lumi-trust-jobs, batch size 1): one catalog ingest page or one quote-check slice per invocation. */
   async queue(batch: { queue?: string; messages: { body: CatalogJob; ack(): void; retry(o?: { delaySeconds?: number }): void }[] }, env: Env): Promise<void> {
     const a = appFor(env);
-    // Scanner-kit contributions (lumi-contrib-writes): the whole batch lands in ONE D1 batch, on its own write budget.
+    // Lumi Check contributions (lumi-contrib-writes): the whole batch lands in ONE D1 batch, on its own write budget.
     if (batch.queue === CONTRIB_QUEUE_NAME || (batch.messages[0]?.body as any)?.kind === "contrib_write") {
       try {
         await a.contribQueue(batch.messages.map((m) => m.body));

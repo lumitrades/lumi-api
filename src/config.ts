@@ -113,7 +113,7 @@ export interface Env {
   TRUST_BUYER_STELLAR?: string;
   /** Cloudflare Queue producer for catalog ingest / quote-check jobs (Workers Free: fan-out keeps each invocation small). */
   TRUST_QUEUE?: { sendBatch(messages: { body: unknown }[]): Promise<unknown> };
-  /** Scanner-kit contributions write queue (lumi-contrib-writes). Absent = writes inline. */
+  /** Lumi Check contributions write queue (lumi-contrib-writes). Absent = writes inline. */
   CONTRIB_QUEUE?: { send(body: unknown): Promise<unknown> };
   /** JSON overrides for contributor credit weights / caps (see src/trust/contributors.ts DEFAULT_CREDITS / DEFAULT_CAPS). */
   CONTRIB_CREDITS?: string;

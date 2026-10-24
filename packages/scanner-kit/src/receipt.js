@@ -27,7 +27,7 @@ export function buildReceiptBody(p, { api = DEFAULT_API, issuedAt = new Date().t
     version: RECEIPT_VERSION,
     receipt_id: `contrib-${chain}-${p.tx_hash}`,
     issued_at: issuedAt,
-    issuer: { name: p.label ? `Lumi Scanner Kit contributor (${String(p.label).slice(0, 40)})` : "Lumi Scanner Kit contributor", methodology_url: `${api}/v1/trust/methodology`, methodology_version: "v0" },
+    issuer: { name: p.label ? `Lumi Check contributor (${String(p.label).slice(0, 40)})` : "Lumi Check contributor", methodology_url: `${api}/v1/trust/methodology`, methodology_version: "v0" },
     seller: { endpoint: p.endpoint, domain, pay_to: p.pay_to },
     payment: {
       network: p.network, asset: p.asset, ...(p.issuer ? { issuer: p.issuer } : {}), amount: String(Number(p.amount)), tx_hash: p.tx_hash, payer: p.payer,

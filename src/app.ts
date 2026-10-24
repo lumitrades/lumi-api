@@ -76,7 +76,7 @@ export interface AppOptions {
   commerceStore?: CommerceStore;
   /** Idempotent-retry cache override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   idempotencyStore?: IdempotencyStore;
-  /** Scanner-kit contributor store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
+  /** Lumi Check contributor store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   contributorStore?: ContributorStore;
   /** Contributions write queue override (tests). Default: env.CONTRIB_QUEUE; absent = writes inline. */
   contribQueue?: ContribQueue | null;
@@ -121,7 +121,7 @@ export interface App {
   logTraffic(request: Request, response: Response, ctx?: WaitUntil): void;
   /** Write this isolate's buffered traffic counts now. */
   flushTraffic(): Promise<void>;
-  /** Scanner-kit contributions (keys, submissions, credits). */
+  /** Lumi Check contributions (keys, submissions, credits). */
   contributors: Contributors;
   /** Queue consumer for lumi-contrib-writes: batched contribution writes. */
   contribQueue(bodies: unknown[]): Promise<number>;
@@ -681,7 +681,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const r = await trust.handle(request, path, base);
       if (r) return r;
     }
-    // Scanner kit v0 (DRAFT, branch scanner-kit-v0): contributor-signed receipts + owner key management.
+    // Lumi Check v0 (DRAFT, branch scanner-kit-v0): contributor-signed receipts + owner key management.
     if (path.startsWith("/v1/contrib/") || path === "/v1/owner/contributors" || path.startsWith("/v1/owner/contributors/")) {
       const r = await contributors.handle(request, path);
       if (r) return r;

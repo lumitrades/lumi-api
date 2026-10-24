@@ -1,4 +1,4 @@
--- Lumi Scanner Kit v0: contributor keys and contributed test data. DRAFT on branch scanner-kit-v0; NOT applied to production.
+-- Lumi Check v0: contributor keys and contributed test data. DRAFT on branch scanner-kit-v0; NOT applied to production.
 -- Write cost per ACCEPTED submission: 1 row + 2 index entries in contributor_submissions, plus 1 row on the
 -- contributions-only daily counter (meta k = 'contrib_writes:YYYY-MM-DD'). That counter is separate from the catalog
 -- 'writes:' counter, so contributions can never use up catalog ingest/probe/evidence budget. Inserts go through the

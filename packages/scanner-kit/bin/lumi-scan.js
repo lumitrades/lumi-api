@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * lumi-scan: Lumi Scanner Kit CLI (v0, DRAFT).
+ * lumi-scan: Lumi Check CLI (v0, DRAFT).
  *   keygen [--out path]                         create a contributor key (prints the PUBLIC key only)
  *   quote <url> [--method POST --body '{}']     free 402 quote check (never pays)
  *   wanted [--network xrpl:0] [--limit 5]       what Lumi would like tested next

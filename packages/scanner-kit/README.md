@@ -1,4 +1,4 @@
-# Lumi Scanner Kit (v0, DRAFT, not published)
+# Lumi Check (v0, DRAFT, not published)
 
 A thin client for contributing **signed, on-ledger-verifiable x402 delivery receipts** to Lumi ("Tested by Lumi").
 The kit only collects and signs evidence. Seller selection, scoring, the catalog, history and anti-fraud stay on
