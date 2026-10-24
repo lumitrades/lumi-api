@@ -9,6 +9,8 @@ import { CDP_FACILITATOR_URL, type CdpCredentials } from "./cdp";
 export type XrplNetwork = "xrpl:0" | "xrpl:1" | "xrpl:2";
 
 export interface Env {
+  /** Optional KV namespace holding a fresher OFAC SDN address set (key "ofac_sdn_addresses", JSON from scripts/ofac_refresh.py). Unset = bundled snapshot only. */
+  SANCTIONS_KV?: unknown;
   /** CAIP-2 XRPL network id: xrpl:0 mainnet, xrpl:1 testnet, xrpl:2 devnet. */
   XRPL_NETWORK?: string;
   /** Classic address that receives payments. */

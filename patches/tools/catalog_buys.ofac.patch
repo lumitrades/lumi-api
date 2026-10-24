@@ -1,0 +1,18 @@
+--- a/catalog_buys.ts
++++ b/catalog_buys.ts
+@@ -28,6 +28,7 @@
+ import { privateKeyToAccount } from "viem/accounts";
+ import { x402Client, x402HTTPClient } from "@x402/core/client";
+ import { registerExactEvmScheme } from "@x402/evm/exact/client";
++import { assertPayToAllowed } from "../lumi-api/scripts/ofac_guard.ts";
+ 
+ const API = process.env.LUMI_API ?? "https://api.lumitrades.io";
+ const DIR = "/workspace/notes/vendor_research/base_buys";
+@@ -137,6 +138,7 @@
+   if (!opts.length) return { error: "no Base USDC exact option" };
+   const a = opts.find((x: any) => String(x.payTo).toLowerCase() === c.pay_to.toLowerCase());
+   if (!a) return { error: `quote payTo ${short(String(opts[0].payTo))} differs from listing` };
++  try { assertPayToAllowed(String(a.payTo), "catalog_buys", { resource: c.resource }); } catch (e) { return { error: (e as Error).message }; }
+   if (a.extra?.assetTransferMethod && a.extra.assetTransferMethod !== "eip3009") return { error: `transfer method ${a.extra.assetTransferMethod} (needs approval tx), skipped` };
+   const amt = BigInt(a.amount ?? a.maxAmountRequired ?? 0);
+   if (amt <= 0n || amt > maxEach) return { error: `price ${usd(amt)} USDC above $${usd(maxEach)}` };

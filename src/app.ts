@@ -21,6 +21,7 @@ import { staleInputs, hasContent, fileMeta, withMeta, isoTimestamps, metaFrom, n
 import { briefView, yenView, sentimentView, eventsView, tradesView } from "./products";
 import { institutionalView } from "./institutional";
 import { handleMcp, isOwnerKey, MCP_CORS, type McpDeps } from "./mcp";
+import { createSanctionsScreen, type KVLike, type SanctionsDoc } from "./sanctions";
 import { createTrust, TRUST_POST_PATHS, REPORT_FRESH_MS, type Trust } from "./trust";
 import { createCommerce, D1CommerceStore, MemoryCommerceStore, type Commerce } from "./commerce";
 import type { CommerceStore } from "./commerce/store";
@@ -46,6 +47,8 @@ import { D1IdempotencyStore, MemoryIdempotencyStore, type IdempotencyStore } fro
 import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, type SalesStore, type AlertConfig } from "./sales";
 
 export interface AppOptions {
+  /** OFAC SDN address snapshot override (tests); default = bundled data/ofac_sdn_addresses.json (+ optional SANCTIONS_KV). */
+  sanctions?: SanctionsDoc;
   fetch?: typeof fetch;
   log?: (event: Record<string, unknown>) => void;
   /** Clock (ms), injectable for tests. */
@@ -225,6 +228,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     ...(config.evm?.network === "eip155:84532" ? ["https://sepolia.base.org", "https://base-sepolia-rpc.publicnode.com"] : ["https://base-rpc.publicnode.com", "https://mainnet.base.org", "https://base.drpc.org"]),
   ];
   const xrplBuyers = split(env.TRUST_BUYER_ADDRESSES).length ? split(env.TRUST_BUYER_ADDRESSES) : [config.payTo];
+  // OFAC SDN screen: bundled snapshot Set per isolate (+ optional KV copy); no D1 reads.
+  const sanctions = createSanctionsScreen({ doc: opts.sanctions, kv: env.SANCTIONS_KV as KVLike | undefined, now, log: (e) => deps.log?.(e) });
   const catalogStore = opts.catalogStore ?? (env.TRUST_DB ? new D1CatalogStore(env.TRUST_DB) : new MemoryCatalogStore());
   /**
    * The persisted rate is only a last-known fallback (used when every live source fails, valid 7 days), so it is
@@ -274,6 +279,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     receipts: receiptStore,
     evidence: evidenceStore,
     onStatusChanges: (changes) => commerceStore.addChanges(changes),
+    sanctions,
     baseRpcs: split(env.BASE_INDEX_RPCS).length ? split(env.BASE_INDEX_RPCS) : ["https://base-rpc.publicnode.com", "https://base.drpc.org", "https://gateway.tenderly.co/public/base"],
     buyers: { xrpl: xrplBuyers, evm: split(env.TRUST_BUYER_EVM).length ? split(env.TRUST_BUYER_EVM) : DEFAULT_EVM_BUYERS, stellar: stellarBuyers },
     stellarHorizon,
@@ -321,6 +327,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   });
   const ownHosts = new Set(["api.lumitrades.io", ...(config.publicBaseUrl ? [new URL(config.publicBaseUrl).hostname] : [])]);
   const commerce = createCommerce({
+    sanctions,
     store: commerceStore,
     cfg: config,
     fetch: doFetch,
@@ -520,7 +527,12 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const exact = (await trust.lookup({ url } as LookupQuery, base)) as any;
       const hasExact = !!exact?.self || (exact?.catalog?.entries?.length ?? 0) > 0;
       const dom = hasExact ? null : ((await trust.lookup({ domain: host } as LookupQuery, base)) as any);
-      const body = trustVerdict({ url, payTo, amountUsd, network: sp.get("network") ?? undefined }, exact, dom, base);
+      await sanctions.ready();
+      const body = trustVerdict({ url, payTo, amountUsd, network: sp.get("network") ?? undefined }, exact, dom, base, sanctions);
+      if ((body as any)?.verdict === "block" && (body as any)?.reasons?.[0]?.code === "sanctioned_address") {
+        const hit = sanctions.check(payTo) ?? sanctions.checkAny(((exact?.catalog?.entries?.[0]?.pay_to ?? dom?.catalog?.entries?.[0]?.pay_to ?? []) as any[]).map((p) => String(p?.pay_to ?? "")));
+        if (hit) sanctions.refuse("trust_check", hit, { url_host: host });
+      }
       const t = now();
       const meta = metaFrom(t, t + 86_400_000, t + 30 * 60_000, t);
       const cand = buyCandidate(body as any, exact);

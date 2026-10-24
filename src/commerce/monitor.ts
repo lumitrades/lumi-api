@@ -128,6 +128,17 @@ export function createMonitor(deps: CommerceDeps) {
 
   // ---------------- enrolment
 
+  /** OFAC SDN screen: a listed payTo is refused (and logged); Lumi never enrols, bills or test-buys it. */
+  async function sanctioned(where: string, payTo: string | null | undefined, extra: Record<string, unknown> = {}) {
+    if (!deps.sanctions || !payTo) return null;
+    await deps.sanctions.ready();
+    const hit = deps.sanctions.check(payTo);
+    if (hit) deps.sanctions.refuse(where, hit, extra);
+    return hit;
+  }
+  const sanctionedRes = (hit: { normalized: string; publication_date: string | null }) =>
+    json(403, { error: "sanctioned_address", reason: "sanctioned_address", pay_to: hit.normalized, list: "OFAC SDN", publication_date: hit.publication_date, detail: "This payTo is listed on the U.S. Treasury OFAC SDN list. Lumi does not enrol, bill or test-buy it.", note: "Not charged." }, NO_STORE);
+
   async function checkEndpoint(raw: any, e: { address: string; network: string }, rate: number): Promise<{ ok: true; ep: MonitorEndpoint } | { ok: false; url: string; reason: string }> {
     const url = safeHttpsUrl(raw?.url);
     if (!url) return { ok: false, url: String(raw?.url ?? "").slice(0, 200), reason: "https URL with a public DNS name required" };
@@ -151,6 +162,7 @@ export function createMonitor(deps: CommerceDeps) {
     // The proven network, or Lumi's own configured network of the same family (identical to it in production).
     const fam = (n: string) => n.split(":")[0];
     const nets = new Set<string>([e.network, ...([deps.cfg.network, deps.cfg.evm?.network] as (string | undefined)[]).filter((n): n is string => !!n && fam(n) === fam(e.network))]);
+    for (const a of terms.accepts as any[]) if (await sanctioned("monitor_enroll_quote", String(a?.payTo ?? ""), { url })) return { ok: false, url, reason: "sanctioned_address: the quote pays an OFAC SDN-listed address" };
     const mine = terms.accepts.filter((a: any) => nets.has(String(a?.network ?? "")) && String(a?.payTo ?? "").toLowerCase() === e.address.toLowerCase());
     if (!mine.length) return { ok: false, url, reason: `the quote does not pay the proven payTo on ${e.network}` };
     const priced = mine.map((a: any) => ({ a, usd: acceptUsd(a, rate) })).filter((x: any) => x.usd != null).sort((x: any, y: any) => x.usd - y.usd);
@@ -168,6 +180,8 @@ export function createMonitor(deps: CommerceDeps) {
     const proof = await verifyProof(deps.cfg.invoiceSecret, "monitor-enroll", b, now(), deps.fetch, deps.xrplRpc);
     if (!proof.ok) return json(proof.reason === "ledger_unavailable_retry" ? 503 : 403, { error: "payto_proof_failed", reason: proof.reason, challenge: `${base}/v1/monitor/challenge?pay_to=<payTo>` }, NO_STORE);
     const lc = proof.address.toLowerCase();
+    const sx = await sanctioned("monitor_enroll", proof.address);
+    if (sx) return sanctionedRes(sx);
     const recent = (await store.enrollmentsByPayTo([lc])).filter((x) => x.created_at > now() - DAY_MS);
     if (recent.length >= ENROLL_PER_PAYTO_PER_DAY) return json(429, { error: "too_many_enrollments", detail: `At most ${ENROLL_PER_PAYTO_PER_DAY} enrolments per payTo per day.` }, NO_STORE);
     const webhook = b.webhook_url == null || b.webhook_url === "" ? null : safeHttpsUrl(b.webhook_url);
@@ -237,6 +251,8 @@ export function createMonitor(deps: CommerceDeps) {
         : `List price. Add ?enrollment=<enrollment_id> from POST ${base}/v1/monitor/enroll (free, requires a payTo signature). A payment without a valid enrollment is refused before settlement.`;
       return paymentRequiredResponse(deps.cfg, q, id ? "enrollment_unknown" : "PAYMENT-SIGNATURE header is required");
     }
+    const sx = await sanctioned("monitor_subscribe", e.pay_to, { enrollment_id: e.id });
+    if (sx) return sanctionedRes(sx); // before any 402 or settlement
     const econ = planEconomics(e)[plan] as { eligible: boolean; reason?: string };
     if (!econ.eligible) return json(409, { error: "plan_not_eligible", plan, reason: econ.reason, enrollment_id: e.id, note: "Not charged." }, NO_STORE);
     const usd = planPriceUsd(plan, e.is_test, deps.testPriceUsd);
@@ -421,6 +437,7 @@ export function createMonitor(deps: CommerceDeps) {
       const e = await store.enrollment(p.enrollment_id);
       if (!e) continue;
       if (p.plan === "audit" && (await store.report(p.id))) continue;
+      if (await sanctioned("monitor_due", e.pay_to, { enrollment_id: e.id, plan_id: p.id })) continue; // never hand a listed payTo to the test-buy runner
       const runs = (await store.runsFor(e.id, 400)).filter((r) => r.plan_id === p.id);
       let budgetLeft = p.budget_usd - p.spent_usd;
       for (const ep of planEndpoints(e, p.plan)) {
@@ -633,6 +650,8 @@ export function createMonitor(deps: CommerceDeps) {
     if (path === "/v1/monitor" && get) return json(200, doc(base), { "Cache-Control": "public, max-age=600" });
     if (path === "/v1/monitor/challenge" && get) {
       const a = (url.searchParams.get("pay_to") ?? url.searchParams.get("payTo") ?? "").trim();
+      const sx = await sanctioned("monitor_challenge", a);
+      if (sx) return sanctionedRes(sx);
       const c = await makeChallenge(deps.cfg.invoiceSecret, "monitor-enroll", a, now());
       if (!c) return a ? bad("invalid_pay_to", "pay_to is not a valid XRPL r-address or Base 0x address.", { example: "?pay_to=<XRPL r-address or Base 0x address>" }) : bad("pay_to_required", "?pay_to=<XRPL r-address or Base 0x address>");
       return json(200, { ...c, sign: c.network === "xrpl:0" ? "ripple-keypairs sign(utf8 hex of message, privateKey) with the payTo's master or regular key; send public_key too" : "EIP-191 personal_sign(message) from the payTo", next: `POST ${base}/v1/monitor/enroll` }, NO_STORE);

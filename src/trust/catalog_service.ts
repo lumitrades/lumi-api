@@ -20,6 +20,7 @@ export type CatalogJob =
   | { kind: "xrpl_census"; payTo: string }
   | { kind: "base_logs"; from: number; to: number; offset: number; head: number; headTs: number }
   | { kind: "base_funders" };
+import type { SanctionsScreen } from "../sanctions";
 export interface QueueLike {
   sendBatch(messages: { body: CatalogJob; delaySeconds?: number }[]): Promise<unknown>;
 }
@@ -54,6 +55,8 @@ export interface CatalogDeps {
   baseRpcs?: string[];
   /** Status flips found by a probe batch (quote valid / pays listed payTo / price matches), for the licence feed delta. */
   onStatusChanges?: (changes: StatusChange[]) => Promise<void>;
+  /** OFAC SDN screen (src/sanctions.ts): queued test-buys whose listing pays a listed address are withheld from the runner. */
+  sanctions?: SanctionsScreen;
 }
 
 export interface StatusChange { ts: number; resource: string; field: "quote_valid" | "pays_listed_address" | "price_matches"; old: string | null; new: string | null }
@@ -151,6 +154,7 @@ export const WRITE_BUDGET = { ingest: 200_000, probe: 200_000, evidence: 200_000
 export function buyCandidate(body: any, exact: any, t = Date.now()) {
   const e = exact?.catalog?.entries?.[0];
   if (!e || exact?.self || !body?.matched?.exact) return null;
+  if ((body?.reasons ?? []).some((r: any) => r?.code === "sanctioned_address")) return null; // never queue a test-buy of an OFAC-listed payTo
   // Inconclusive buys (Lumi-side, delivery unknown) do not count as a recent purchase: the listing may be retested.
   const last = (e.purchases ?? []).find((p: any) => p?.delivery !== "inconclusive" && p?.data_returned !== null && !(p?.data_returned === false && (p?.http_status == null || p?.http_status === 0)));
   if (last && Date.parse(last.at) > t - 30 * 86_400_000) return null;
@@ -819,7 +823,18 @@ export function createCatalog(deps: CatalogDeps) {
       if (!(await deps.isOwner(request))) return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
       if (!deps.evidence) return json(503, { error: "evidence_unavailable" });
       const status = url.searchParams.get("status") ?? "queued";
-      return json(200, { status, rows: await deps.evidence.buyQueue(status, Math.min(200, Number(url.searchParams.get("limit") ?? "50") || 50)) }, { "Cache-Control": "no-store" });
+      const rows = await deps.evidence.buyQueue(status, Math.min(200, Number(url.searchParams.get("limit") ?? "50") || 50));
+      if (!deps.sanctions) return json(200, { status, rows }, { "Cache-Control": "no-store" });
+      // Sanctions screen before the runner sees a row: the listing's payTos (one indexed read per row, owner-only, once a day).
+      await deps.sanctions.ready();
+      const keep: typeof rows = [], refused: { resource: string; pay_to: string; reason: string }[] = [];
+      for (const r of rows) {
+        const listed = (await store.byResource(r.resource).catch(() => null))?.pay_tos ?? "";
+        const hit = deps.sanctions.checkAny(listed.split(","));
+        if (hit) { deps.sanctions.refuse("catalog_buy_queue", hit, { resource: r.resource }); refused.push({ resource: r.resource, pay_to: hit.normalized, reason: "sanctioned_address" }); }
+        else keep.push(r);
+      }
+      return json(200, { status, rows: keep, ...(refused.length ? { refused } : {}) }, { "Cache-Control": "no-store" });
     }
     if (request.method === "POST" && path === "/v1/trust/catalog/ingest") {
       if (!(await deps.isOwner(request))) return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });

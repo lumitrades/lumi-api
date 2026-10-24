@@ -7,6 +7,7 @@ import { compact, eventRows, catalystRows } from "./products";
 import { band } from "./feeds";
 import type { LiveRow } from "./live";
 import { VENDORS, vendorById, vendorPayTos } from "./vendors";
+import { sanctionedReason, type SanctionsScreen } from "./sanctions";
 
 type Json = any;
 const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
@@ -144,7 +145,7 @@ const conclusive = (p: Json) => p?.delivery !== "inconclusive" && p?.data_return
 const inconclusiveText = (p: Json, what: string) =>
   `Lumi's latest ${what} (${p.at}, tx ${p.tx_hash}) paid ${p.amount} ${p.asset}, but Lumi recorded no HTTP response (${p.inconclusive_reason ?? "no_http_response"}): delivery unknown. This was a Lumi-side failure and is not counted against the seller.`;
 
-export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: Json | null, base: string) {
+export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: Json | null, base: string, sanctions?: Pick<SanctionsScreen, "check" | "checkAny">) {
   const reasons: Reason[] = [];
   const add = (code: string, severity: Reason["severity"], detail: string) => reasons.push({ code, severity, detail });
   const exactEntries: Json[] = exact?.catalog?.entries ?? [];
@@ -177,12 +178,16 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
   // M-3 (audit 2026-10-23b): the Bazaar only lists EVM/Solana payTos, so an XRPL payTo Lumi itself paid was a false block.
   // Also known: the payTos of Lumi's curated record for this seller (by id, or the same operator via a shared listed payTo)
   // and seller.pay_to of Lumi's own signed test-buy receipts for these entries.
-  const knownPayTo = new Set<string>([
+  const knownRaw: string[] = [
     ...listedPayTo,
     ...curated.flatMap((c) => { const v = c?.id ? vendorById(String(c.id)) : undefined; return v ? vendorPayTos(v) : []; }),
     ...(listedPayTo.length ? VENDORS.filter((v) => vendorPayTos(v).some((p) => listedPayTo.includes(p.toLowerCase()))).flatMap(vendorPayTos) : []),
     ...entries.flatMap((x) => (x.purchases ?? []).map((p: Json) => p?.receipt?.seller?.pay_to).filter((p: unknown): p is string => typeof p === "string")),
-  ].map((p) => p.toLowerCase()));
+  ];
+  const knownPayTo = new Set<string>(knownRaw.map((p) => p.toLowerCase()));
+  // OFAC SDN screen first: the quoted payTo, or any payTo Lumi has on record for this resource, on the list => block.
+  const sanctionedHit = sanctions ? sanctions.check(input.payTo) ?? sanctions.checkAny([...entries.flatMap((x) => (x.pay_to ?? []).map((p: Json) => String(p.pay_to))), ...knownRaw]) : null;
+  if (sanctionedHit) reasons.unshift(sanctionedReason(sanctionedHit));
   if (input.payTo) {
     const q = input.payTo.toLowerCase();
     if (knownPayTo.has(q)) add("pay_to_matches", "info", listedPayTo.includes(q) ? "The payTo you were quoted matches the listing." : "The payTo you were quoted is a known address of this seller (Lumi's curated vendor record or Lumi's own paid test-buy), not a Bazaar-listed one.");
@@ -237,7 +242,7 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
     if (v.l1) add("vet402_l1", "info", `vet402 (third party) recorded ${v.l1.purchase_attempts} purchase attempt(s), ${v.l1.settled} settled, ${v.l1.settled_with_2xx} with a 2xx response (last ${day(v.l1.last_at)}). Not counted in Lumi's own test-buys.`);
   }
 
-  const verdict = self ? "allow" : reasons.some((r) => r.severity === "block") ? "block" : reasons.some((r) => r.severity === "warn") ? "warn" : "allow";
+  const verdict = sanctionedHit ? "block" : self ? "allow" : reasons.some((r) => r.severity === "block") ? "block" : reasons.some((r) => r.severity === "warn") ? "warn" : "allow";
   if (verdict === "allow" && e && !reasons.some((r) => r.code === "purchase_verified")) add("quote_verified", "info", "Listed in the Bazaar and its recent free quote checks are valid.");
   const confidence = self ? "n/a" : (e?.purchases ?? []).some(conclusive) || (!e && curated.length) ? "medium" : e?.quote_checks ? "low" : "very low";
   const cur = curated[0];
