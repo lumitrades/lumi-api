@@ -20,7 +20,7 @@ use this package when you want paid tools to pay automatically from your own wal
 | `lumi_coins` | free | – | The 50 coins covered: signals for all, levels for the 13 watchlist/major coins (XRP XLM HBAR XDC AXL ZBCN BTC ETH SOL DOGE ADA LINK SUI) |
 | `lumi_quote` | free | – | The x402 quote for any paid path, without paying |
 | `lumi_vendor_scores` | free | `url?` `domain?` `payTo?` `vendor_id?` | Look up any x402 seller before paying: tier (catalogued / quote-verified, low confidence / purchase-verified), last free 402-quote check, price and payTo vs its Bazaar listing, on-chain test-buy evidence. No args: Lumi's curated vendor scores |
-| `lumi_seller_monitoring` | free | `enrollment_id?` | Seller monitoring plans (Monitor $9/30d, Monitor Plus $29/30d, Audit $99 one-off), enrolment steps; with an id, that seller's public entry and badge. Paying never changes a score |
+| `lumi_seller_monitoring` | free | `enrollment_id?` | Seller monitoring plans (per endpoint per 30d: Watch $5, Watch Plus $12, Watch Pro $20; 10+ endpoints -20%, 3 terms prepaid -10%; Audit $99 one-off; free Watch tier; 14-day Watch Plus trial), enrolment steps; with an id, that seller's public entry and badge. Paying never changes a score |
 | `lumi_trust_feed` | free | – | Trust data feed plans (free key 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d) and licence terms |
 | `lumi_brief` | paid | $0.02 | Today's market brief (BTC, CoinMarketCap Fear & Greed, movers, key levels, yen, events, paper trades, news). `format: "md"` for markdown |
 | `lumi_signal` | paid | $0.01 | Buy/sell read for one coin (1h/4h/1d + indicators) |

@@ -9,6 +9,7 @@
  */
 
 import { planPriceTable } from "./commerce/discovery";
+import { MONITOR_PRICE_TEXT } from "./commerce/plans";
 import type { Trust } from "./trust";
 import type { Config } from "./config";
 import { atomicToUsdc, dropsToXrp } from "./config";
@@ -100,7 +101,7 @@ const FREE_DESCRIPTIONS: Record<string, string> = {
     "Check an x402 seller before paying it: {\"url\":\"...\"}, {\"domain\":\"...\"} or {\"payTo\":\"...\"} (case-insensitive) looks it up in the full CDP x402 Bazaar catalog (free quote checks of listings on a rotating schedule: 'quote-verified, low confidence'; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys ('purchase-verified', counted per chain: Base USDC for Bazaar listings, XRPL for a small curated list). Answer-only; tx evidence is in the paid trust check. With no arguments: curated XRPL vendor observations; {\"vendor_id\":\"...\"} for one vendor's summary. Observations, not ratings; no match is not a negative signal.",
   samples: "Free, clearly labelled SAMPLE previews of every paid product (truncated, up to 10 minutes old), with the USD price of each. Use it to see the output shape before paying.",
   seller_monitoring:
-    "For x402 sellers: Monitor $9/30 days (1 endpoint, test-buy per term + alerts), Monitor Plus $29/30 days (weekly test-buys, up to 20 endpoints), Audit $99 one-off (every listed endpoint, signed report). Seller-funded, no auto-renew, payTo proven by signature; paying never changes a score. Answers with the plan table and enrolment steps; payment happens at GET /v1/monitor/subscribe/{plan}?enrollment=.",
+    `${MONITOR_PRICE_TEXT.replace(/\.$/, "")}. Seller-funded, no auto-renew, payTo proven by signature; paying never changes a score. Answers with the plan table and enrolment steps; payment happens at GET /v1/monitor/subscribe/{plan}?enrollment=<id>&endpoints=<N>.`,
   trust_feed:
     "Licensed trust data feed: free key with 1,000 lookups/month (wallet signature), $1.50 per 1,000 extra lookups, Feed $99/30 days, Feed Pro $199/30 days (snapshot export, webhooks). Answers with plans, endpoints and licence terms; keys and payments at the REST URLs under /v1/feed.",
   quote: "Live x402 v2 quote (all accepts options) for a paid skill or path, e.g. {\"skill\":\"signal\",\"coin\":\"XRP\"} or \"quote /v1/brief\". A 503 means the data is not fresh right now and would not be sold.",

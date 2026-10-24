@@ -20,6 +20,7 @@ import { indexDoc, VERSION } from "./docs";
 import { DISCLAIMER, type CoinRef } from "./views";
 import type { Prepared } from "./app";
 import { lookupError, type Trust } from "./trust";
+import { MONITOR_PRICE_TEXT } from "./commerce/plans";
 
 export const MODERN_VERSION = "2026-07-28";
 const LEGACY_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -222,7 +223,7 @@ function toolList() {
       name: "lumi_seller_monitoring",
       title: "Lumi: seller monitoring plans and monitored sellers (free)",
       description:
-        "Free. For x402 sellers: Monitor $9/30 days (1 endpoint, seller-funded test-buy per term + alerts), Monitor Plus $29/30 days (weekly test-buys, up to 20 endpoints), Audit $99 one-off (every listed endpoint, signed report). No auto-renew; payTo proven by signature; paying never changes a score. " +
+        `${MONITOR_PRICE_TEXT.replace(/\.$/, "")}. No auto-renew; payTo proven by signature; paying never changes a score. ` +
         "No args: plans, enrolment steps and safeguards. enrollment_id: that seller's public entry (disclosure, findings, replies) and live badge status. Plans are paid over x402 at the REST URL.",
       inputSchema: { type: "object", properties: { enrollment_id: { type: "string", pattern: "^men_[a-f0-9]{24}$", description: "Optional enrollment id (men_...)" } } },
       annotations: ro,
@@ -248,7 +249,7 @@ function toolList() {
 const INSTRUCTIONS =
   "Lumi Trades (lumitrades.io) crypto market reads: daily brief, live signals for 50 coins (lumi_signal, cheap lumi_lite, or all at once with lumi_scan), support/resistance levels, paper-trade slate, " +
   "BTC/macro backdrop, yen carry-trade watch, sentiment, funding rates, Fear & Greed, events and the next 48h, lumi_trust_check (should I pay this x402 URL? allow/warn/block), and a daily policy brief " +
-  "(BIS, IMF, US regulators, major banks and tokenization firms mapped to XRP, XLM, XDC, QNT, AXL, HBAR). lumi_catalog, lumi_coins, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (seller monitoring plans: Monitor $9/30d, Monitor Plus $29/30d, Audit $99) and lumi_trust_feed (licensed data feed: free 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d) are free; lumi_vendor_report is the paid full history for one vendor ($0.02). " +
+  "(BIS, IMF, US regulators, major banks and tokenization firms mapped to XRP, XLM, XDC, QNT, AXL, HBAR). lumi_catalog, lumi_coins, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (seller monitoring: Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d, Audit $99, free tier and 14-day trial) and lumi_trust_feed (licensed data feed: free 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d) are free; lumi_vendor_report is the paid full history for one vendor ($0.02). " +
   "Paid tools cost $0.003 to $0.10 per call (the daily policy brief is $0.10, everything else $0.02 or less) via x402; paid in XRP, RLUSD or USDC on the XRP Ledger or USDC on Base or Stellar; " + TRIAL_SHORT + "; without access they return the price and how to pay. " +
   PAID_TOOLS_NOTE + " Analytics and education only, not financial advice. Cite 'Lumi Trades (lumitrades.io)'.";
 

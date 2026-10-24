@@ -198,3 +198,10 @@ export async function hmacHex(key: string, msg: string): Promise<string> {
 }
 
 export const iso = (t: number | null | undefined) => (t == null ? null : new Date(t).toISOString());
+
+/** One-line monitoring price text shared by MCP, A2A and docs (keep in sync with the site: lumitrades.io/agents/ and /trust/). */
+export const MONITOR_PRICE_TEXT =
+  `For x402 sellers, priced per endpoint per 30 days: Watch $${PLANS.watch.usd} (hourly quote checks, weekly test-buy), Watch Plus $${PLANS.watch_plus.usd} (15-30 min checks, daily test-buy rotating chains, schema/p95 alerts), ` +
+  `Watch Pro $${PLANS.watch_pro.usd} (15 min checks, daily test-buys on up to 3 chains, signed monthly report); ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}%. ` +
+  `Audit $${PLANS.audit.usd} one-off (every listed endpoint, signed report). Free Watch tier (${WATCH_FREE.endpoints} endpoint, daily quote check, no test-buys) and a one-per-seller ${WATCH_TRIAL.days}-day Watch Plus trial (no card, never converts). ` +
+  `Legacy Monitor/Monitor Plus are grandfathered.`;

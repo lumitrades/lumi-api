@@ -190,7 +190,7 @@ export function buildServer(client) {
     {
       title: "Lumi: seller monitoring plans and monitored sellers (free)",
       description:
-        "Free. For x402 sellers: Monitor $9/30 days (1 endpoint, seller-funded test-buy per term + alerts), Monitor Plus $29/30 days (weekly test-buys, up to 20 endpoints), Audit $99 one-off (every listed endpoint, signed report). No auto-renew; payTo proven by signature; paying never changes a score. " +
+        "Free. For x402 sellers, priced per endpoint per 30 days: Watch $5 (hourly quote checks, weekly test-buy), Watch Plus $12 (15-30 min checks, daily test-buy rotating chains, schema/p95 alerts), Watch Pro $20 (15 min checks, daily test-buys on up to 3 chains, signed monthly report); 10+ endpoints -20%, 3 terms prepaid -10%. Audit $99 one-off. Free Watch tier (1 endpoint, daily quote check, no test-buys) and a one-per-seller 14-day Watch Plus trial (no card, never converts). Legacy Monitor/Monitor Plus are grandfathered. No auto-renew; payTo proven by signature; paying never changes a score. " +
         "No args: plans, enrolment steps and safeguards. enrollment_id: that seller's public entry (disclosure, findings, replies) and live badge status. Plans are paid over x402 at the REST URL.",
       inputSchema: { enrollment_id: z.string().regex(/^men_[a-f0-9]{24}$/).optional().describe("Optional enrollment id (men_...)") },
     },

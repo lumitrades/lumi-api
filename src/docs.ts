@@ -1,6 +1,7 @@
 /** Free, human- and agent-facing documents: index, skill.md, discovery manifests, OpenAPI. */
 
 import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPriceTable, planResources } from "./commerce/discovery";
+import { WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
 import { EXPLORERS, dropsToXrp } from "./config";
 import { PAID_ENDPOINTS, priceTable, EXAMPLE_COIN } from "./catalog";
@@ -200,7 +201,7 @@ export function wellKnownX402(cfg: Config, base: string) {
     x402Version: 2,
     kind: "resource-server",
     name: "Lumi API",
-    description: `Pay-per-call crypto market reads from lumitrades.io (signals, all-coins scan, lite reads, levels, paper-trade ideas, macro, daily brief, yen carry-trade watch, sentiment, funding, Fear & Greed, events and a 48h window, an x402 pay-check, a detailed x402 vendor report from Lumi's trust observations and a daily policy brief), settled in ${settledIn(cfg)}. Also: seller monitoring plans (Monitor $9/30d, Monitor Plus $29/30d, Audit $99) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
+    description: `Pay-per-call crypto market reads from lumitrades.io (signals, all-coins scan, lite reads, levels, paper-trade ideas, macro, daily brief, yen carry-trade watch, sentiment, funding, Fear & Greed, events and a 48h window, an x402 pay-check, a detailed x402 vendor report from Lumi's trust observations and a daily policy brief), settled in ${settledIn(cfg)}. Also: seller monitoring plans (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d; Audit $99; free tier and 14-day trial) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
     resources: PAID_ENDPOINTS.map((e) => ({
       name: e.name,
       url: `${base}${e.example}`,
@@ -253,7 +254,7 @@ export function wellKnownX402(cfg: Config, base: string) {
           : []),
       ],
     })).concat(planResources(cfg, base) as any),
-    plans: { note: "Plan routes (seller monitoring, trust data feed) are one x402 payment per 30-day term or one-off, no auto-renew. The concrete URL quotes the list price; the payment binds to ?enrollment= or ?key_id= and is refused before settlement without a valid one (except Feed / Feed Pro, which issue a new key).", monitor: `${base}/v1/monitor`, feed: `${base}/v1/feed`, license: `${base}/v1/feed/license` },
+    plans: { note: "Plan routes (seller monitoring, trust data feed) are one x402 payment per 30-day term (Watch tiers: per endpoint, ?endpoints=N, optionally ?terms=3 prepaid) or one-off, no auto-renew. The concrete URL quotes the list price; the payment binds to ?enrollment= or ?key_id= and is refused before settlement without a valid one (except Feed / Feed Pro, which issue a new key).", monitor: `${base}/v1/monitor`, feed: `${base}/v1/feed`, license: `${base}/v1/feed/license` },
     facilitators: [cfg.facilitatorUrl, ...(cfg.evm ? [...(cfg.evm.cdp ? [cfg.evm.cdp.url] : []), cfg.evm.facilitatorUrl] : []), ...(cfg.stellar ? [cfg.stellar.facilitatorUrl] : [])],
     networks: paymentNetworks(cfg),
     agent_card: `${base}/.well-known/agent-card.json`,
@@ -1078,8 +1079,10 @@ ${rows}</tbody></table></div>
 <p class="note">Signals: ${coins.length} coins, computed live (1h refreshed about every 13 minutes): ${esc(coins.map((c) => c.symbol).join(", "))}. Levels, slate and trades: ${esc(siteOnly(coins).map((c) => c.symbol).join(", "))}. Every response carries <code>as_of</code>, <code>data_age_seconds</code>, <code>next_update</code> and <code>stale_after</code> (ISO UTC). You only pay when you get data: not charged on bad input (4xx before any quote) or stale data (503 "Not charged." past <code>stale_after</code>).</p>
 <h2 id="monitoring">For x402 sellers: monitoring</h2>
 <div class="tbl"><table><thead><tr><th>Plan</th><th>USD</th><th>What you get</th></tr></thead><tbody>
-${planPriceTable(base).filter((p) => p.path.startsWith("/v1/monitor")).map((p) => `<tr><td><code>GET ${esc(p.path)}</code></td><td>$${esc(p.price_usd)}${p.term_days ? ` / ${p.term_days} days` : " one-off"}</td><td>${esc(p.summary)}</td></tr>`).join("\n")}</tbody></table></div>
-<p class="note">Prove your payTo with a signature, enrol endpoints (test-buys capped at $0.10 each, seller-funded and labelled so), pay over x402; no auto-renew. Paying never changes a score; findings can be replied to, not removed; the badge is removed automatically if a test fails or the plan lapses. <a href="${esc(base)}/v1/monitor">How it works</a> &middot; <a href="${esc(base)}/v1/monitor/sellers">Monitored sellers</a> &middot; <a href="${esc(base)}/v1/monitor/corrections">Corrections</a></p>
+${planPriceTable(base).filter((p) => p.path.startsWith("/v1/monitor")).map((p) => `<tr><td><code>GET ${esc(p.path)}</code></td><td>$${esc(p.price_usd)}${p.per ? " per endpoint" : ""}${p.term_days ? ` / ${p.term_days} days` : " one-off"}${p.legacy ? " (legacy, grandfathered)" : ""}</td><td>${esc(p.summary)}</td></tr>`).join("\n")}
+<tr><td><code>POST /v1/monitor/free</code></td><td>$0</td><td>Free Watch: ${WATCH_FREE.endpoints} endpoint, a daily quote check, no test-buys, no badge (status page labelled &ldquo;${esc(WATCH_FREE.label)}&rdquo;).</td></tr>
+<tr><td><code>POST /v1/monitor/trial</code></td><td>$0</td><td>${WATCH_TRIAL.days}-day Watch Plus trial, one per seller (prove the domain and the payTo wallet), test-buys capped at $${WATCH_TRIAL.capUsd} in total, no card, never auto-converts; read-only after it ends unless you pay.</td></tr></tbody></table></div>
+<p class="note">Prove your payTo with a signature, enrol endpoints (test-buys capped at $0.05 each on Watch and $0.10 on Watch Plus / Pro, seller-funded and labelled so, never more than half the fee), pay over x402 per endpoint (${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}%); no auto-renew. Status page: <code>/v1/monitor/status/&lt;id&gt;</code>. Paying never changes a score; findings can be replied to, not removed; the badge is removed automatically if a test fails or the plan lapses. <a href="${esc(base)}/v1/monitor">How it works</a> &middot; <a href="${esc(base)}/v1/monitor/sellers">Monitored sellers</a> &middot; <a href="${esc(base)}/v1/monitor/corrections">Corrections</a></p>
 <h2 id="feed">For facilitators, wallets and frameworks: trust data feed</h2>
 <div class="tbl"><table><thead><tr><th>Plan</th><th>USD</th><th>What you get</th></tr></thead><tbody>
 <tr><td>Free key</td><td>$0</td><td>1,000 lookups / month per key (wallet signature), answer-only.</td></tr>
