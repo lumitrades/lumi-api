@@ -635,11 +635,12 @@ export function createMonitor(deps: CommerceDeps) {
             if (!isDue) continue;
             const price = chain.usd;
             const buy = price != null && price <= tier.maxBuyUsd && price <= budgetLeft + 1e-9;
+            const left = budgetLeft; // max_usd never exceeds the remaining budget (the trial's total cap holds even with price slippage)
             if (buy) budgetLeft -= price!;
             tasks.push({
               plan_id: p.id, plan: p.plan, enrollment_id: e.id, network: chain.network, pay_to: chain.pay_to, ...(chain.proven ? {} : { pay_to_proven: false }),
               endpoint: { url: ep.url, method: ep.method, ...(ep.body ? { body: ep.body } : {}) },
-              mode: buy ? "buy" : "quote_only", max_usd: buy ? Math.min(tier.maxBuyUsd, price! * 1.15) : 0, enrolled_price_usd: price == null ? ep.price_usd : String(price),
+              mode: buy ? "buy" : "quote_only", max_usd: buy ? Math.round(Math.min(tier.maxBuyUsd, price! * 1.15, left) * 1e6) / 1e6 : 0, enrolled_price_usd: price == null ? ep.price_usd : String(price),
               funding: fundingOf(p.plan), ...(p.is_test ? { test: true } : {}),
               ...(!buy ? { why: price == null ? "unpriced listing" : price > tier.maxBuyUsd ? `above the $${tier.maxBuyUsd} cap of ${tier.name}` : p.plan === "watch_plus_trial" ? `trial test-buy cap ($${WATCH_TRIAL.capUsd}) used` : "plan test-buy budget used" } : {}),
             });

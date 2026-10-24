@@ -1,4 +1,4 @@
-/** D1 + in-memory stores for seller monitoring and the licence feed (migrations 0011, 0022). */
+/** D1 + in-memory stores for seller monitoring and the licence feed (migrations 0011, 0023). */
 import type { D1Like } from "../config";
 
 /** A payment option seen in the endpoint's 402 at enrolment. Only the enrolled network's payTo is proven by signature;
@@ -12,7 +12,7 @@ export interface Enrollment {
 export interface PlanRow {
   id: string; enrollment_id: string; plan: string; starts_at: number; ends_at: number; paid_tx: string; paid_network: string; paid_asset: string; paid_amount: string;
   payer: string | null; usd: number | null; budget_usd: number; spent_usd: number; is_test: boolean; reminded: number; created_at: number;
-  /** Watch tiers: endpoints covered and per-endpoint list price (migration 0022). Null/absent on legacy rows. */
+  /** Watch tiers: endpoints covered and per-endpoint list price (migration 0023). Null/absent on legacy rows. */
   endpoints?: number | null; unit_usd?: number | null;
 }
 export interface TrialRow { id: string; enrollment_id: string; plan_id: string; domain_lc: string; pay_to_lc: string; nonce: string; proof: string; created_at: number }
