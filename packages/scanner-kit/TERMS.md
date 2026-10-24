@@ -60,7 +60,7 @@ name or badges. Those remain Lumi's, and nothing here or in the license grants r
   per UTC day with delivered, failed and status-class counts (no wallet, amount, tx hash, URL query, payload or identifier
   of you), are kept long-term.
 - Your contributor account (key id, public key, registered wallets) is kept while it is active, meaning you submitted a
-  receipt or made a signed check in the last 12 months. It is not deleted at 90 days.
+  receipt or made a signed check in the last 365 days. It is not deleted at 90 days.
 - **Deleting your account.** You can delete it at any time yourself (`lumi-scan account delete`, which calls the signed
   `DELETE /v1/contrib/me`) or by emailing hello@lumitrades.io. Deletion cannot be undone.
   Deleted at once: your key (it can never sign again), label, public key, registered wallets and the funding wallet

@@ -60,7 +60,7 @@ You are shown this at first run and in `lumi-scan setup`.
 - Retention: raw data (tier-1 outcome counters, tier-2 submissions) is kept for 90 days, then deleted, and a raw day is
   deleted only after it has been rolled up. The daily per-seller summaries (delivered, failed, status-class counts; no
   wallet, amount, tx, query or client id) are kept long-term. Contributor accounts are kept while active (a receipt or
-  signed check in the last 12 months). Unused credits expire 90 days after they were earned. Tier-1 outcomes are never a
+  signed check in the last 365 days). Unused credits expire 90 days after they were earned. Tier-1 outcomes are never a
   scoring input.
 
 ### Deleting your account
