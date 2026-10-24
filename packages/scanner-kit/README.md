@@ -97,8 +97,8 @@ You are shown this at first run and in `lumi-scan setup`.
    same payer, seller and amount within two minutes of another is refused as a near-duplicate even with a new tx hash.
    Zero-weight receipts are stored and shown to you with `weight: 0` and the reason, but earn no credits or leaderboard
    place and can't confirm anyone's negative finding. Exchange and faucet wallets Lumi lists are ignored as funders.
-5. **No cash.** Each verified receipt earns **free Lumi Check credits** (one per unique seller per day; self-tests and
-   duplicates earn nothing), spendable on checks and detailed reports (`lumi-scan credits`,
+5. **No cash.** Each verified receipt earns **5 free Lumi Check credits** (one per unique seller per day; self-tests and
+   duplicates earn nothing), spendable on detailed checks (1 credit) and vendor reports (10 credits) (`lumi-scan credits`,
    `lumi-scan spend trust_check <url>`). You also get the contributor badge, a place on the public leaderboard, early
    access and higher rate limits. Cash bounties are disabled.
 

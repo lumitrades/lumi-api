@@ -39,7 +39,8 @@ name or badges. Those remain Lumi's, and nothing here or in the license grants r
 - Each **verified** contributed receipt earns **free Lumi Check credits**, which you can spend on Lumi checks and
   detailed reports. Only tier-2 signed receipts earn credits; tier-1 anonymous outcomes earn nothing. One receipt per
   unique seller per UTC day earns; self-tests, duplicates, unconfirmed negatives and disputed findings earn nothing.
-  The amount per receipt is set by Lumi and may change. Unused credits expire 90 days after the day they were earned;
+  At launch a verified receipt earns 5 credits, a detailed check costs 1 credit and a vendor report 10 credits; Lumi
+  sets these amounts and may change them. Unused credits expire 90 days after the day they were earned;
   spends use your oldest credits first.
 - **Credits are not cash**, not money, not a security, not transferable and cannot be redeemed for money.
 - Contributors with a verified receipt also get the contributor badge, a place on the public (pseudonymous)
