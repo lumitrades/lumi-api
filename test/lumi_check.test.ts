@@ -82,6 +82,20 @@ describe("GET /v1/check (free pre-pay check)", () => {
     expect(b.score.scored).toBe(false);
     expect((await s.get("/v1/check?url=nope")).status).toBe(400);
   });
+  it("payTo-only check (MCP tool payments): curated seller is matched and scored, unknown address warns", async () => {
+    const s = mk();
+    await seedGood(s);
+    const known = await (await s.get("/v1/check?payTo=raKj7ZGoPy1fWw1vfynuJhyHirpcmUMBhP")).json();
+    expect(known.decision, JSON.stringify(known.reasons)).not.toBe("block");
+    expect(known.score.scored).toBe(true);
+    expect(known.query.url).toBeNull();
+    expect((await verifySignedResponse(known.receipt, { trusted: [PUB], now: NOW })).ok).toBe(true);
+    const unknown = await (await s.get("/v1/check?payTo=0x000000000000000000000000000000000000dEaD")).json();
+    expect(unknown.decision).toBe("warn");
+    expect(unknown.reasons.map((r: any) => r.code)).toContain("not_observed");
+    expect((await s.get("/v1/check?payTo=GABC")).status).toBe(400);
+    expect((await s.get("/v1/check")).status).toBe(400);
+  });
   it("unsigned when no signing key is configured", async () => {
     const s = mk({ LUMI_CHECK_SIGNING_KEY: "" });
     const b = await (await s.get(`/v1/check?url=${encodeURIComponent("https://unknown-seller.example/v1/x")}`)).json();

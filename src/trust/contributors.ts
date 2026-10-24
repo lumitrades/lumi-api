@@ -111,6 +111,8 @@ export interface Submission {
   outcome: string | null; finding: Finding; wanted: boolean; demand_opt_in: boolean; ledger_ts: number | null;
   credit_uusd: number; credit_note: string | null; dispute: string | null; metrics: string | null; receipt: string;
 }
+/** One redemption of free Lumi Check credits (the earn side is derived from verified submissions, so disputes reverse it). */
+export interface CreditSpend { id: string; key_id: string; ts: number; day: string; product: string; cost: number; ref: string | null }
 export type Finding = "counted" | "unconfirmed" | "confirmed" | "held" | "disputed" | "contradicted";
 export interface CapCounts { key_day: number; key_ep_day: number; ep_day_sources: number; source_ep_day: number; key_ep_recent: number; month_credit: number; dup: number }
 export type WriteOp =
@@ -137,6 +139,11 @@ export interface ContributorStore {
   getMeta(k: string): Promise<string | null>;
   /** Retention: delete submissions (incl. the stored receipt copy) older than `beforeDay`. Returns rows deleted. */
   purge(beforeDay: string): Promise<number>;
+  /** Earn side of the check-credit ledger: this key's submissions since a day (seller, day, finding only). */
+  verifiedSince(key_id: string, sinceDay: string): Promise<Pick<Submission, "domain" | "pay_to" | "day" | "finding" | "dispute">[]>;
+  addSpend(row: CreditSpend): Promise<void>;
+  deleteSpend(id: string): Promise<void>;
+  spendsSince(key_id: string, sinceDay: string): Promise<CreditSpend[]>;
 }
 
 // ---------------------------------------------------------------- stores
@@ -202,7 +209,17 @@ export class MemoryContributorStore implements ContributorStore {
   }
   async since(d: string, n: number) { return [...this.subs.values()].filter((s) => s.day >= d).slice(0, n); }
   async getMeta(k: string) { return this.meta.get(k) ?? null; }
-  async purge(d: string) { let n = 0; for (const [k, s] of this.subs) if (s.day < d) { this.subs.delete(k); n++; } this.writes += n; return n; }
+  async purge(d: string) {
+    let n = 0;
+    for (const [k, s] of this.subs) if (s.day < d) { this.subs.delete(k); n++; }
+    for (const [k, s] of this.spends) if (s.day < d) this.spends.delete(k);
+    this.writes += n; return n;
+  }
+  spends = new Map<string, CreditSpend>();
+  async verifiedSince(id: string, d: string) { return [...this.subs.values()].filter((s) => s.key_id === id && s.day >= d).map(({ domain, pay_to, day, finding, dispute }) => ({ domain, pay_to, day, finding, dispute })); }
+  async addSpend(r: CreditSpend) { this.spends.set(r.id, { ...r }); this.writes++; }
+  async deleteSpend(id: string) { this.spends.delete(id); this.writes++; }
+  async spendsSince(id: string, d: string) { return [...this.spends.values()].filter((s) => s.key_id === id && s.day >= d).sort((a, b) => b.ts - a.ts).map((x) => ({ ...x })); }
 }
 
 const SUB_COLS = "tx_hash, key_id, day, created_at, mode, kit_version, endpoint, endpoint_key, domain, network, asset, amount, pay_to, payer, source, new_wallet, receipt_hash, http_status, outcome, finding, wanted, demand_opt_in, ledger_ts, credit_uusd, credit_note, dispute, metrics, receipt";
@@ -287,7 +304,18 @@ export class D1ContributorStore implements ContributorStore {
   async getMeta(k: string) { return (await this.db.prepare("SELECT v FROM meta WHERE k = ?1").bind(k).first<{ v: string }>())?.v ?? null; }
   async purge(d: string) {
     const r: any = await this.db.prepare("DELETE FROM contributor_submissions WHERE day < ?1").bind(d).run();
+    await this.db.prepare("DELETE FROM contributor_credit_spends WHERE day < ?1").bind(d).run();
     return Number(r?.meta?.changes ?? 0);
+  }
+  async verifiedSince(id: string, d: string) {
+    return ((await this.db.prepare("SELECT domain, pay_to, day, finding, dispute FROM contributor_submissions WHERE key_id = ?1 AND day >= ?2").bind(id, d).all<any>()).results ?? []);
+  }
+  async addSpend(r: CreditSpend) {
+    await this.db.prepare("INSERT INTO contributor_credit_spends (id, key_id, ts, day, product, cost, ref) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)").bind(r.id, r.key_id, r.ts, r.day, r.product, r.cost, r.ref).run();
+  }
+  async deleteSpend(id: string) { await this.db.prepare("DELETE FROM contributor_credit_spends WHERE id = ?1").bind(id).run(); }
+  async spendsSince(id: string, d: string) {
+    return ((await this.db.prepare("SELECT id, key_id, ts, day, product, cost, ref FROM contributor_credit_spends WHERE key_id = ?1 AND day >= ?2 ORDER BY ts DESC").bind(id, d).all<any>()).results ?? []).map((r: any) => ({ ...r, ts: Number(r.ts), cost: Number(r.cost) }));
   }
 }
 
@@ -386,12 +414,37 @@ export interface ContributorDeps {
   credits?: string; caps?: string; minKit?: string; retiredKits?: string;
   /** Scoped admin key for /v1/owner/contributors* (CONTRIB_ADMIN_KEY). When set, OWNER_MCP_KEY no longer opens these routes. */
   adminKey?: string;
-  /** API-credit accounting (CONTRIB_CREDITS_ENABLED). Default false: rewards are badges + leaderboard only, never cash. */
+  /** Legacy USD-denominated credit / cash-bounty accounting (CONTRIB_CASH_BOUNTIES_ENABLED). Default false: never cash. */
   creditsEnabled?: boolean;
+  /** Free Lumi Check credits per verified receipt (CONTRIB_CHECK_CREDITS_PER_RECEIPT). Placeholder default, needs Bobby. */
+  checkCreditsPerReceipt?: string;
+  /** Free Lumi Check credit prices (CONTRIB_CHECK_CREDIT_PRICES JSON). */
+  checkCreditPrices?: string;
+  /** Serves a paid product for credits: the same body the x402 route returns. Not charged on errors. */
+  redeem?: (product: CreditProduct, input: Record<string, string>, base: string) => Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; status: number; error: Record<string, unknown> }>;
 }
+
+export type CreditProduct = "trust_check" | "vendor_report";
 
 /** Lumi Check v0: contributed submissions (incl. the stored receipt copy) are deleted after this many days. DRAFT, needs Bobby's approval. */
 export const CONTRIB_RETENTION_DAYS = 90;
+/**
+ * Free Lumi Check credits (launch rewards, NO cash). Each verified receipt earns CHECK_CREDITS_PER_RECEIPT, at most ONE
+ * earning per (contributor, seller, UTC day): extra receipts on the same seller that day, duplicates and rejected
+ * (self-dealt, unverifiable) receipts earn nothing. Only findings counted/confirmed without a dispute earn; a later dispute
+ * or contradiction removes the earning (the earn side is derived, not stored). Credits expire with the receipt (retention).
+ * Spend on detailed checks (paid /v1/trust/check) or vendor reports. PLACEHOLDER numbers, flagged for Bobby.
+ */
+export const CHECK_CREDITS_PER_RECEIPT = 5;
+export const CHECK_CREDIT_PRICES: Record<CreditProduct, number> = { trust_check: 1, vendor_report: 10 };
+/** Perks for contributors with >= 1 verified receipt: early access + a higher /v1/check rate limit (per key, per minute). */
+export const CONTRIB_PERK_CHECKS_PER_MINUTE = 120;
+/**
+ * DISABLED STUB (design note, nothing pays out): post-revenue "wanted list" of FIXED bounties for testing specific sellers,
+ * paid from a capped budget. See docs/contrib-bounties.md. No payout code exists; /v1/contrib/bounties reports disabled.
+ */
+export const CONTRIB_BOUNTIES = Object.freeze({ enabled: false, status: "planned_after_revenue", budget_cap_usd: 0, payout: "none" });
+
 /** Contributor badges: verified receipts (findings counted or confirmed; at most one per endpoint per UTC day per key). */
 export const CONTRIB_BADGES = [
   { id: "first_receipt", label: "First verified receipt", min: 1 },
@@ -431,6 +484,14 @@ export function createContributors(deps: ContributorDeps) {
   const adminKey = deps.adminKey || deps.ownerKey;
   const ownerOk = async (req: Request) => isOwnerKey(/^Bearer\s+(\S+)$/i.exec(req.headers.get("Authorization") ?? "")?.[1], adminKey);
   const creditsOn = deps.creditsEnabled === true;
+  const perReceipt = (() => { const n = Number(deps.checkCreditsPerReceipt); return Number.isInteger(n) && n >= 0 && n <= 1000 ? n : CHECK_CREDITS_PER_RECEIPT; })();
+  const prices: Record<CreditProduct, number> = (() => {
+    const m = mergeJson({ ...CHECK_CREDIT_PRICES }, deps.checkCreditPrices) as Record<CreditProduct, unknown>;
+    const out = { ...CHECK_CREDIT_PRICES };
+    for (const k of Object.keys(out) as CreditProduct[]) { const n = Number(m[k]); if (Number.isInteger(n) && n >= 1 && n <= 10_000) out[k] = n; }
+    return out;
+  })();
+  const perkMinute = new Map<string, { at: number; n: number }>();
   const noStore = { "Cache-Control": "no-store" };
   const err = (status: number, error: string, extra: Record<string, unknown> = {}) => json(status, { error, ...extra }, noStore);
 
@@ -677,11 +738,11 @@ export function createContributors(deps: ContributorDeps) {
     await write(ops);
     return json(202, {
       accepted: true, queued: !!deps.queue, tx_hash: tx, finding,
-      ...(creditsOn ? { credit_uusd: cr.uusd, credit_usd: cr.uusd / 1e6, credit_note: cr.note } : { rewards: "badges_and_leaderboard" }),
+      ...(creditsOn ? { credit_uusd: cr.uusd, credit_usd: cr.uusd / 1e6, credit_note: cr.note } : { rewards: "check_credits_badges_leaderboard", check_credits: { per_verified_receipt: perReceipt, rule: "one earning per seller per UTC day; credited once the finding is verified" } }),
       ...(flag ? { endpoint_flag: flag.flag } : {}),
       note: creditsOn
         ? "Credits are Lumi API credits, not cash. Negative findings count only after independent confirmation. Draft terms apply."
-        : "Rewards are contributor badges and a leaderboard of verified receipts. No cash, no credits. Negative findings count only after independent confirmation. Draft terms apply.",
+        : "Rewards: free Lumi Check credits (detailed checks and reports), contributor badges, the leaderboard, early access and higher rate limits. No cash. Negative findings count only after independent confirmation. Draft terms apply.",
     }, noStore);
   }
 
@@ -761,7 +822,7 @@ export function createContributors(deps: ContributorDeps) {
             : { ...k, submissions: t?.n ?? 0, credits_state: "disabled" };
         }),
         rules: { credits_enabled: creditsOn, ...(creditsOn ? { credits: CREDITS } : {}), caps: CAPS, min_kit_version: minKit, retired_kit_versions: [...retired], formats: ACCEPTED_FORMATS, retention_days: CONTRIB_RETENTION_DAYS },
-        note: creditsOn ? "Credits are API credits, not cash. There is no payout code." : "Credits are disabled: rewards are badges and the leaderboard only. There is no payout code.",
+        note: creditsOn ? "Credits are API credits, not cash. There is no payout code." : "Cash bounties are disabled: rewards are free Lumi Check credits, badges, the leaderboard and perks. There is no payout code.",
       }, noStore);
     }
     if (path === "/v1/owner/contributors/flags" && m === "GET") {
@@ -834,12 +895,15 @@ export function createContributors(deps: ContributorDeps) {
     if (raw.length > 24_000) return err(413, "too_large");
     if (isOwner) return ownerRoutes(req, path, raw);
     if (path === "/v1/contrib/disputes" && req.method === "POST") return dispute(raw);
+    if (path === "/v1/contrib/bounties" && (req.method === "GET" || req.method === "HEAD")) {
+      return json(200, { kind: "contributor_bounties", ...CONTRIB_BOUNTIES, wanted: [], note: "Disabled. Planned after revenue: a wanted list of fixed bounties for testing specific sellers, paid from a capped budget. Nothing pays out today; rewards are free Lumi Check credits, badges and the leaderboard." }, noStore);
+    }
     if (path === "/v1/contrib/leaderboard" && (req.method === "GET" || req.method === "HEAD")) {
       const rows = (await leaderboard()).slice(0, 50).map(({ key_id: _k, ...r }) => r);
       return json(200, {
         kind: "contributor_leaderboard", window_days: CONTRIB_RETENTION_DAYS, rows, badges: CONTRIB_BADGES,
         counts: "Verified receipts only: on-ledger payment checked, finding counted or confirmed, at most one per endpoint per UTC day per contributor. Held, disputed and contradicted receipts do not count.",
-        note: "Badges and rank only. No cash, no credits. Paying Lumi never changes a rank or badge. Contributors appear under a pseudonymous handle.",
+        note: "Badges and rank (plus free Lumi Check credits, shown to each contributor only). No cash. Paying Lumi never changes a rank or badge. Contributors appear under a pseudonymous handle.",
       }, { "Cache-Control": "public, max-age=300" });
     }
     const a = await authContributor(req, raw);
@@ -860,12 +924,15 @@ export function createContributors(deps: ContributorDeps) {
       return json(200, {
         key_id: key.key_id, label: key.label, status: key.status, share_demand: key.share_demand, wallets: key.wallets,
         today: { accepted: c.key_day, cap: key.daily_cap ?? CAPS.key_daily },
-        ...(creditsOn ? { credits_month_usd: c.month_credit / 1e6, credits_month_cap_usd: CREDITS.monthly_cap_uusd / 1e6 } : { rewards: "badges_and_leaderboard" }),
+        ...(creditsOn ? { credits_month_usd: c.month_credit / 1e6, credits_month_cap_usd: CREDITS.monthly_cap_uusd / 1e6 } : { rewards: "check_credits_badges_leaderboard" }),
         ...(await standing(key.key_id)),
+        check_credits: (({ spends: _s, ...b }) => b)(await creditBalance(key)),
         submissions: (await store.recentByKey(key.key_id, 50)).map(publicRow),
-        note: creditsOn ? "Your own submissions only. Credits are Lumi API credits, not cash." : "Your own submissions only. Rewards are badges and leaderboard rank, no cash.",
+        note: creditsOn ? "Your own submissions only. Credits are Lumi API credits, not cash." : "Your own submissions only. Rewards are free Lumi Check credits, badges, leaderboard rank, early access and higher rate limits. No cash.",
       }, noStore);
     }
+    if (path === "/v1/contrib/credits" && req.method === "GET") return json(200, await creditBalance(key), noStore);
+    if (path === "/v1/contrib/credits/spend" && req.method === "POST") return spendCredits(req, raw, key);
     if (path === "/v1/contrib/me" && req.method === "POST") {
       let b: any; try { b = JSON.parse(raw); } catch { return err(400, "invalid_json"); }
       if (typeof b?.share_demand !== "boolean") return err(400, "share_demand_boolean_required");
@@ -906,6 +973,61 @@ export function createContributors(deps: ContributorDeps) {
     return { leaderboard: me ? { rank: me.rank, handle: me.handle, verified_receipts: me.verified_receipts } : { rank: null, verified_receipts: 0 }, badges: me?.badges ?? [] };
   }
 
+  // ---------------------------------------------------- free Lumi Check credits (no cash)
+
+  /** Earned = per-receipt value x unique (seller, UTC day) slots with a verified, undisputed finding, within retention. */
+  async function creditBalance(key: ContributorKey) {
+    const since = dayOf(now() - CONTRIB_RETENTION_DAYS * DAY_MS);
+    const [rows, spends] = await Promise.all([store.verifiedSince(key.key_id, since), store.spendsSince(key.key_id, since)]);
+    const slots = new Set<string>();
+    for (const r of rows) if (VERIFIED.includes(r.finding) && !r.dispute) slots.add(`${(r.domain || r.pay_to || "?").toLowerCase()}:${r.day}`);
+    const earned = key.forfeited ? 0 : slots.size * perReceipt;
+    const spent = spends.reduce((a, x) => a + x.cost, 0);
+    return {
+      kind: "lumi_check_credits", key_id: key.key_id, balance: Math.max(0, earned - spent), earned, spent,
+      earning_slots: slots.size, per_verified_receipt: perReceipt, prices, expires_after_days: CONTRIB_RETENTION_DAYS,
+      perks: { early_access: slots.size > 0, higher_rate_limit: slots.size > 0 ? { checks_per_minute: CONTRIB_PERK_CHECKS_PER_MINUTE } : null },
+      spends: spends.slice(0, 20).map(({ key_id: _k, ...x }) => x),
+      rule: "One earning per seller per UTC day per contributor, for verified receipts only. Self-dealt, duplicate, held, disputed or contradicted receipts earn nothing. Credits are not cash, cannot be transferred or sold, and expire with the receipt after the retention window.",
+    };
+  }
+
+  async function spendCredits(req: Request, raw: string, key: ContributorKey): Promise<Response> {
+    let b: any; try { b = JSON.parse(raw); } catch { return err(400, "invalid_json"); }
+    const product = b?.product as CreditProduct;
+    if (!(product in prices)) return err(400, "unknown_product", { products: prices });
+    if (!deps.redeem) return err(503, "redeem_unavailable");
+    const input: Record<string, string> = {};
+    for (const [k, v] of Object.entries(b?.input ?? {})) if (typeof v === "string" || typeof v === "number") input[k] = String(v).slice(0, 500);
+    const cost = prices[product];
+    const before = await creditBalance(key);
+    if (before.balance < cost) return err(402, "insufficient_credits", { balance: before.balance, cost, hint: "Earn free Lumi Check credits with verified receipts, or pay with x402 as usual." });
+    const t = now();
+    const id = `spend_${t.toString(36)}_${(await sha256Hex(key.key_id + ":" + raw + ":" + Math.random())).slice(0, 10)}`;
+    // Reserve first, then re-check (concurrent spends cannot overdraw: the loser is rolled back).
+    await store.addSpend({ id, key_id: key.key_id, ts: t, day: dayOf(t), product, cost, ref: null });
+    const after = await creditBalance(key);
+    if (after.earned - after.spent < 0) { await store.deleteSpend(id); return err(402, "insufficient_credits", { balance: before.balance, cost }); }
+    let out: Awaited<ReturnType<NonNullable<ContributorDeps["redeem"]>>>;
+    try { out = await deps.redeem(product, input, new URL(req.url).origin); } catch { out = { ok: false, status: 503, error: { error: "data_unavailable" } }; }
+    if (!out.ok) { await store.deleteSpend(id); return json(out.status, { ...out.error, note: "No credits were spent." }, noStore); }
+    deps.log?.({ event: "contrib_credit_spend", product, cost }); // no key id, no query
+    return json(200, { ...out.body, lumi_credits: { spent: cost, balance: after.balance, spend_id: id, note: "Paid with free Lumi Check credits. Credits never change a score, tier, ranking or badge." } }, noStore);
+  }
+
+  /** Higher /v1/check rate limit for contributors with a verified receipt (signed request). null = not a contributor request. */
+  async function checkPerk(req: Request): Promise<{ ok: true } | { ok: false; res: Response } | null> {
+    if (!req.headers.get("Lumi-Contributor-Key")) return null;
+    const a = await authContributor(req, "");
+    if (!a.ok) return null; // fall back to the anonymous free limit
+    const bal = await creditBalance(a.key);
+    if (!bal.perks.higher_rate_limit) return null;
+    const t = now(), m = perkMinute.get(a.key.key_id);
+    if (m && t - m.at < 60_000) { if (++m.n > CONTRIB_PERK_CHECKS_PER_MINUTE) return { ok: false, res: err(429, "rate_limited", { limit_per_minute: CONTRIB_PERK_CHECKS_PER_MINUTE }) }; }
+    else perkMinute.set(a.key.key_id, { at: t, n: 1 });
+    return { ok: true };
+  }
+
   /** Retention: drop submissions older than CONTRIB_RETENTION_DAYS (run from the cron and the owner route). */
   async function purge() {
     const before = dayOf(now() - CONTRIB_RETENTION_DAYS * DAY_MS);
@@ -923,6 +1045,6 @@ export function createContributors(deps: ContributorDeps) {
     return rows;
   }
 
-  return { handle, consume, purge, leaderboard, rules: { credits: CREDITS, caps: CAPS, credits_enabled: creditsOn, retention_days: CONTRIB_RETENTION_DAYS }, _boostFlag: boostFlag, _credit: credit };
+  return { handle, consume, purge, leaderboard, checkPerk, rules: { credits: CREDITS, caps: CAPS, credits_enabled: creditsOn, cash_bounties: CONTRIB_BOUNTIES, check_credits: { per_verified_receipt: perReceipt, prices }, retention_days: CONTRIB_RETENTION_DAYS }, _boostFlag: boostFlag, _credit: credit };
 }
 export type Contributors = ReturnType<typeof createContributors>;

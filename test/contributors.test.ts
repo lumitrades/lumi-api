@@ -114,7 +114,7 @@ describe("contributor keys (owner only)", () => {
 
 describe("signed submissions", () => {
   it("passive receipt from the kit: verified on-ledger, extra fields stored, credits weighted (XRPL + wanted) when credits are re-enabled", async () => {
-    const s = setup({ env: { CONTRIB_CREDITS_ENABLED: "true" } });
+    const s = setup({ env: { CONTRIB_CASH_BOUNTIES_ENABLED: "true" } });
     const w = wallet(1);
     const c = await s.issue(1, [w]);
     const r = await s.receipt(w, 1);
@@ -238,7 +238,7 @@ describe("signed submissions", () => {
   });
 
   it("unlisted endpoints and repeats earn less; monthly cap; credits are not cash", async () => {
-    const s = setup({ env: { CONTRIB_CREDITS_ENABLED: "true", CONTRIB_CREDITS: JSON.stringify({ monthly_cap_uusd: 40_000 }), CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 5, source_endpoint_daily: 5 }) } });
+    const s = setup({ env: { CONTRIB_CASH_BOUNTIES_ENABLED: "true", CONTRIB_CREDITS: JSON.stringify({ monthly_cap_uusd: 40_000 }), CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 5, source_endpoint_daily: 5 }) } });
     const a = await s.issue(1, [wallet(1)]);
     const u = await s.submit(a, await s.receipt(wallet(1), 70, { endpoint: "https://unknown.example/x", payTo: wallet(9).address }));
     expect(u.j).toMatchObject({ credit_uusd: 0, credit_note: "unlisted_endpoint" });
@@ -326,7 +326,7 @@ describe("D1 write budget and queue", () => {
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
-      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
+      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
       for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
       const store = new D1ContributorStore(db);
       const s = setup({ store });
@@ -339,7 +339,11 @@ describe("D1 write budget and queue", () => {
       expect(await store.getMeta(contribBudgetKey(NOW))).toBe("3");
       const c = await store.counts({ key_id: a.key_id, endpoint_key: row!.endpoint_key, source: row!.source, day: row!.day, since_recent: "2026-01-01", since_month: "2026-10-01", tx_hash: txh(120) });
       expect(c).toMatchObject({ key_day: 1, key_ep_day: 1, ep_day_sources: 1, dup: 1, month_credit: 0 }); // credits disabled by default
+      await store.addSpend({ id: "sp1", key_id: a.key_id, ts: NOW, day: "2026-10-23", product: "trust_check", cost: 1, ref: null });
+      expect((await store.spendsSince(a.key_id, "2026-01-01")).map((x) => x.cost)).toEqual([1]);
+      expect((await store.verifiedSince(a.key_id, "2026-01-01"))[0].finding).toBe("counted");
       expect(await store.purge("2099-01-01")).toBe(1);
+      expect(await store.spendsSince(a.key_id, "2000-01-01")).toEqual([]);
       expect(await store.byTx(txh(120))).toBeNull();
       expect((await s.owner("POST", `/v1/owner/contributors/${a.key_id}/revoke`, { reason: "t", forfeit: true })).status).toBe(200);
       expect((await store.getKey(a.key_id))?.forfeited).toBe(true);
@@ -360,13 +364,13 @@ describe("helpers", () => {
 });
 
 describe("Lumi Check: rewards, privacy and integrity", () => {
-  it("credits are off by default: no credit fields, rewards are badges + leaderboard", async () => {
+  it("cash credits are off by default: no credit_uusd fields; rewards are check credits, badges + leaderboard", async () => {
     const s = setup();
     const a = await s.issue(1, [wallet(1)]);
     const { status, j } = await s.submit(a, await s.receipt(wallet(1), 300));
     expect(status, JSON.stringify(j)).toBe(202);
     expect(j.credit_uusd).toBeUndefined();
-    expect(j.rewards).toBe("badges_and_leaderboard");
+    expect(j.rewards).toBe("check_credits_badges_leaderboard");
     expect(j.note).toMatch(/No cash/);
     expect((await s.store.byTx(txh(300))).credit_uusd).toBe(0);
     const me: any = await (await s.signed(a, "GET", "/v1/contrib/me")).json();
@@ -441,5 +445,71 @@ describe("Lumi Check: rewards, privacy and integrity", () => {
     const lower = await kit.signReceipt({ ...Object.fromEntries(Object.entries(r).filter(([k]) => k !== "receipt_hash" && k !== "signer")), payment: { ...r.payment, tx_hash: r.payment.tx_hash.toLowerCase() } }, await kit.signerFor("xrpl:0", wallet(1).seed));
     const d = await s.submit(a, lower);
     expect(d.status).toBe(409);
+  });
+});
+
+describe("free Lumi Check credits (no cash)", () => {
+  const credits = async (s: any, k: any) => (await (await s.signed(k, "GET", "/v1/contrib/credits")).json()) as any;
+  it("earn one per seller per day for verified receipts only; self-dealt, duplicate and unconfirmed earn nothing", async () => {
+    const s = setup({ env: { CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 5, source_endpoint_daily: 5, endpoint_daily_sources: 9 }) } });
+    const w = wallet(1);
+    const a = await s.issue(1, [w], { own_domains: ["myshop.example"] });
+    expect((await credits(s, a)).balance).toBe(0);
+    const r = await s.receipt(w, 400);
+    expect((await s.submit(a, r)).status).toBe(202);
+    expect((await credits(s, a))).toMatchObject({ balance: 5, earned: 5, earning_slots: 1, per_verified_receipt: 5 });
+    await s.submit(a, await s.receipt(w, 401)); // same seller, same day
+    expect((await s.submit(a, r)).j.error).toBe("duplicate");
+    expect((await s.submit(a, await s.receipt(w, 402, { payTo: w.address }))).j.error).toBe("self_testing");
+    expect((await s.submit(a, await s.receipt(w, 403, { endpoint: "https://api.myshop.example/data", payTo: wallet(6).address }))).j.error).toBe("self_testing");
+    expect((await credits(s, a)).earned).toBe(5);
+    await s.submit(a, await s.receipt(w, 404, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0], outcome: "no_data", status: 200 })); // unconfirmed negative
+    expect((await credits(s, a)).earned).toBe(5);
+    expect((await s.app.fetch(new Request(BASE + "/v1/contrib/credits"))).status).toBe(401);
+  });
+
+  it("per-receipt value is configurable (placeholder default 5)", async () => {
+    const s = setup({ env: { CONTRIB_CHECK_CREDITS_PER_RECEIPT: "2" } });
+    const a = await s.issue(1, [wallet(1)]);
+    await s.submit(a, await s.receipt(wallet(1), 410));
+    expect((await credits(s, a))).toMatchObject({ earned: 2, per_verified_receipt: 2 });
+  });
+
+  it("spend on a detailed check: same body as the paid route, balance drops, errors and overdraft spend nothing", async () => {
+    const s = setup({ env: { CONTRIB_CHECK_CREDIT_PRICES: JSON.stringify({ trust_check: 3 }) } });
+    const a = await s.issue(1, [wallet(1)]);
+    await s.submit(a, await s.receipt(wallet(1), 420));
+    expect((await (await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "nope" })).json() as any).error).toBe("unknown_product");
+    const bad = await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: "nope" } });
+    expect(bad.status).toBe(400);
+    expect((await credits(s, a)).balance).toBe(5);
+    const ok = await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP + "?q=private" } });
+    const j: any = await ok.json();
+    expect(ok.status, JSON.stringify(j)).toBe(200);
+    expect(["allow", "warn", "block"]).toContain(j.verdict);
+    expect(j.lumi_receipt.kind).toBe("trust_check");
+    expect(JSON.stringify(j)).not.toContain("private");
+    expect(j.lumi_credits).toMatchObject({ spent: 3, balance: 2 });
+    const again = await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP } });
+    expect(again.status).toBe(402);
+    const b: any = await credits(s, a);
+    expect(b).toMatchObject({ balance: 2, spent: 3 });
+    expect(b.spends).toHaveLength(1);
+  });
+
+  it("perks: contributors with a verified receipt get early access + a higher /v1/check limit; cash bounties are a disabled stub", async () => {
+    const s = setup();
+    const a = await s.issue(1, [wallet(1)]);
+    const none: any = await credits(s, a);
+    expect(none.perks).toEqual({ early_access: false, higher_rate_limit: null });
+    await s.submit(a, await s.receipt(wallet(1), 430));
+    expect(((await credits(s, a)) as any).perks.higher_rate_limit.checks_per_minute).toBe(120);
+    const q = "/v1/check?url=" + encodeURIComponent("https://unknown.example/x");
+    let anonLimited = false;
+    for (let i = 0; i < 31; i++) if ((await s.app.fetch(new Request(BASE + q))).status === 429) anonLimited = true;
+    expect(anonLimited).toBe(true);
+    expect((await s.signed(a, "GET", q)).status).toBe(200);
+    const bounties: any = await (await s.app.fetch(new Request(BASE + "/v1/contrib/bounties"))).json();
+    expect(bounties).toMatchObject({ enabled: false, payout: "none", wanted: [] });
   });
 });
