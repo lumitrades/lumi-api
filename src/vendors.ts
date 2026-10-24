@@ -24,6 +24,11 @@ export interface Vendor {
   /** Pay-to addresses advertised in the vendor's 402 quotes (XRPL r-address and, if offered, EVM). */
   pay_to: { xrpl: string[]; evm?: string[] };
   endpoints: VendorEndpoint[];
+  /**
+   * Opt-in only: show "test payment not accepted yet" (count + first attempt of unsettled signed XRPL test payments)
+   * while Lumi has no paid test-buy of this vendor. Set it only after confirming the failure is not on Lumi's side.
+   */
+  label_unsettled_payments?: true;
 }
 
 export const VENDORS: Vendor[] = [
@@ -193,6 +198,8 @@ export const VENDORS: Vendor[] = [
     homepage: "https://pay.edge-agents.ai",
     pay_to: { xrpl: ["rKv7LTd19CUsKKirVzdZWK4HuFChHf4Hp7"], evm: ["0x7d9C21AcB6be3F6EA4723c148A32DC327a3eCB5b"] },
     endpoints: [{ url: "https://pay.edge-agents.ai/v1/services/perp-funding-rates", method: "GET", listed_price: "0.01", listed_asset: "RLUSD", test_buy: true }],
+    // Oct 24 2026: its XRPL path answers matching signed payments with "No matching payment requirements" (checked: not a Lumi-side request bug).
+    label_unsettled_payments: true,
   },
   {
     id: "x402lab",

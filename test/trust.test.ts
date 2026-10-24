@@ -546,3 +546,74 @@ describe("app: storage quota errors map to 503", () => {
     expect(b.status).toBe(500);
   });
 });
+
+describe("trust: opt-in unsettled payment attempts (payment_attempts)", () => {
+  const auth = { Authorization: `Bearer ${OWNER}` };
+  const EDGE = vendorById("edge-agents")!;
+  const ep = EDGE.endpoints[0].url;
+  const body = (tx: string, signed_at: string, extra: Record<string, unknown> = {}) => ({ vendor_id: "edge-agents", endpoint: ep, tx_hash: tx, signed_at, amount: "0.01", asset: "RLUSD", http_status: 402, detail: "HTTP 402: No matching payment requirements", ...extra });
+  const list = async (req: any) => ((await (await req("/v1/trust/vendors")).json()) as any).vendors as any[];
+
+  it("is opt-in: only edge-agents carries the flag; monid does not", () => {
+    expect(EDGE.label_unsettled_payments).toBe(true);
+    expect(vendorById("monid")!.label_unsettled_payments).toBeUndefined();
+    expect(VENDORS.filter((v) => v.label_unsettled_payments).map((v) => v.id)).toEqual(["edge-agents"]);
+  });
+
+  it("requires the owner key and is a trust POST path", async () => {
+    const { req } = setup();
+    expect(TRUST_POST_PATHS).toContain("/v1/trust/attempts");
+    expect((await req("/v1/trust/attempts", { method: "POST", body: body(H("A1"), "2026-10-22T03:00:00Z") })).status).toBe(401);
+  });
+
+  it("records never-settled signed payments, dedupes, and lists count + first attempt", async () => {
+    const { req } = setup();
+    expect((await list(req)).find((v) => v.id === "edge-agents").payment_attempts).toBeUndefined();
+    expect((await req("/v1/trust/attempts", { method: "POST", body: body(H("A1"), "2026-10-21T03:08:48.615Z"), headers: auth })).status).toBe(201);
+    expect((await req("/v1/trust/attempts", { method: "POST", body: body(H("A2"), "2026-10-22T09:25:07Z", { endpoint: "https://pay.edge-agents.ai/v1/services/macro-no-inflation" }), headers: auth })).status).toBe(201);
+    const dup = await req("/v1/trust/attempts", { method: "POST", body: body(H("A1"), "2026-10-21T03:08:48.615Z"), headers: auth });
+    expect(dup.status).toBe(200);
+    expect(((await dup.json()) as any).duplicate).toBe(true);
+    const e = (await list(req)).find((v) => v.id === "edge-agents");
+    expect(e.payment_attempts).toMatchObject({ status: "test_payment_not_accepted_yet", network: "xrpl:0", count: 2, first_attempt: "2026-10-21T03:08:48.615Z", last_attempt: "2026-10-22T09:25:07.000Z" });
+    expect(e.payment_attempts.note).not.toMatch(/scam|fraud/i);
+    // never an input to the score
+    const { req: req2 } = setup();
+    const e2 = (await list(req2)).find((v) => v.id === "edge-agents");
+    expect(e.score).toBe(e2.score);
+    expect(e.samples).toEqual(e2.samples);
+  });
+
+  it("does not label vendors that did not opt in, even with stored attempts", async () => {
+    const { req, store } = setup();
+    await store.addUnsettledAttempt({ vendor_id: "monid", endpoint: "https://monid-x402-xrpl-production.up.railway.app/x", ts: NOW - DAY, network: "xrpl:0", tx_hash: H("B1"), amount: "0.006", asset: "RLUSD", http_status: 402, detail: null });
+    expect((await list(req)).find((v) => v.id === "monid").payment_attempts).toBeUndefined();
+  });
+
+  it("disappears once the vendor has a paid test-buy", async () => {
+    const { req, store } = setup();
+    await store.addUnsettledAttempt({ vendor_id: "edge-agents", endpoint: ep, ts: NOW - DAY, network: "xrpl:0", tx_hash: H("C1"), amount: "0.01", asset: "RLUSD", http_status: 402, detail: null });
+    expect((await list(req)).find((v) => v.id === "edge-agents").payment_attempts.count).toBe(1);
+    const { req: reqB, store: storeB } = setup();
+    await storeB.addUnsettledAttempt({ vendor_id: "edge-agents", endpoint: ep, ts: NOW - DAY, network: "xrpl:0", tx_hash: H("C1"), amount: "0.01", asset: "RLUSD", http_status: 402, detail: null });
+    await storeB.addObservation({ vendor_id: "edge-agents", endpoint: ep, ts: NOW - 3_600_000, network: "xrpl:0", tx_hash: H("C2"), amount: "0.01", asset: "RLUSD", http_status: 200, data_returned: true, latency_ms: 500, summary: "HTTP 200; response contained data.", source: "lumi_test_buy" });
+    expect((await list(reqB)).find((v) => v.id === "edge-agents").payment_attempts).toBeUndefined();
+  });
+
+  it("rejects a payment that settled on-ledger, foreign hosts and bad input", async () => {
+    const { req } = setup({ txs: { [H("D1")]: { from: BUYER, to: EDGE.pay_to.xrpl[0], delivered: { currency: RLUSD.currency, issuer: RLUSD.issuer, value: "0.01" } } } });
+    const settled = await req("/v1/trust/attempts", { method: "POST", body: body(H("D1"), "2026-10-22T03:00:00Z"), headers: auth });
+    expect(settled.status).toBe(409);
+    expect(((await settled.json()) as any).reason).toBe("payment_on_ledger");
+    expect((await req("/v1/trust/attempts", { method: "POST", body: body(H("D2"), "2026-10-22T03:00:00Z", { endpoint: "https://evil.example/x" }), headers: auth })).status).toBe(400);
+    expect((await req("/v1/trust/attempts", { method: "POST", body: body("nothex", "2026-10-22T03:00:00Z"), headers: auth })).status).toBe(400);
+    expect((await req("/v1/trust/attempts", { method: "POST", body: body(H("D3"), "2027-01-01T00:00:00Z"), headers: auth })).status).toBe(400);
+    expect((await req("/v1/trust/attempts", { method: "POST", body: body(H("D4"), "2026-10-22T03:00:00Z", { detail: "this is a scam" }), headers: auth })).status).toBe(400);
+  });
+
+  it("answers 503 when the ledger is unreachable (nothing stored)", async () => {
+    const { req, store } = setup({ ledgerDown: true });
+    expect((await req("/v1/trust/attempts", { method: "POST", body: body(H("E1"), "2026-10-22T03:00:00Z"), headers: auth })).status).toBe(503);
+    expect((await store.unsettledAttempts("edge-agents")).count).toBe(0);
+  });
+});

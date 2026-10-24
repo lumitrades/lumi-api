@@ -20,7 +20,7 @@ import { receiptMatchesBuy, receiptVerifyDoc, verifyReceipt, type Receipt, type 
 import { dataReturnedView, deliveryCounts, deliveryState, deliveryText, guardBuy, inconclusiveReason, INCONCLUSIVE_REASONS, isInconclusiveReason } from "./delivery";
 import { isStorageQuotaError, storageUnavailableBody } from "./storage_errors";
 import type { LookupQuery } from "./catalog";
-import type { ObservationRow, ProbeRow, ProbeSummary, ReportRow, TrustStore } from "./store";
+import type { ObservationRow, ProbeRow, ProbeSummary, ReportRow, TrustStore, UnsettledAttemptRow } from "./store";
 import {
   lookupXrplPayment, lookupBaseUsdc, lookupStellarUsdc, STELLAR_HORIZON, verifyXrplSignature, xrplAddressOf, xrplRegularKey, recoverEvmSigner, sha256Hex,
   XRPL_TX_RE, EVM_TX_RE, XRPL_ADDR_RE, EVM_ADDR_RE, RLUSD, USDC_XRPL, type Fetch, type LedgerPayment,
@@ -36,7 +36,7 @@ export const WEIGHTS = { delivery: 0.5, uptime: 0.2, latency: 0.15, agent_report
 export const REPORT_OUTCOMES = ["delivered", "no_data", "empty_result", "error_status", "timeout", "wrong_data", "other"] as const;
 export const CONTACT_EMAIL = "hello@lumitrades.io";
 const BANNED_WORDS = /\b(scam\w*|fraud\w*|untrustworthy|rip-?off|thie(f|ves)|steal\w*)\b/i;
-export const TRUST_POST_PATHS = ["/v1/reports", "/v1/tips", "/v1/trust/replies", "/v1/trust/observations", "/v1/trust/probe", "/v1/trust/buys/inconclusive"];
+export const TRUST_POST_PATHS = ["/v1/reports", "/v1/tips", "/v1/trust/replies", "/v1/trust/observations", "/v1/trust/attempts", "/v1/trust/probe", "/v1/trust/buys/inconclusive"];
 
 export const LABEL =
   "Lumi's automated observations of this x402 endpoint (free 402-quote checks plus small paid test-buys), not a rating or review of the business. Few samples = low confidence.";
@@ -89,7 +89,7 @@ export const RECEIPT_FREE_LIMITS = { perMinute: 10, perDay: 100, globalPerDay: 5
 /** The precomputed vendors index is served while younger than this (rebuilt by the 30-minute cron and after trust writes). */
 export const VENDORS_INDEX_TTL_MS = 40 * 60_000;
 const VENDORS_MEMO_MS = 60_000;
-const VENDORS_KEY = "vendors_index_v3"; // v3: free shape + latest test-buy tx_hash/explorer per vendor (v2 had no tx evidence)
+const VENDORS_KEY = "vendors_index_v4"; // v4: + opt-in payment_attempts; v3: latest test-buy tx_hash/explorer per vendor
 
 export interface Trust {
   handle(request: Request, path: string, base: string): Promise<Response | null>;
@@ -520,11 +520,30 @@ export function createTrust(deps: TrustDeps): Trust {
     };
   }
 
+  /**
+   * Opt-in (vendor.label_unsettled_payments) and only while Lumi has no paid test-buy of the vendor: how many signed XRPL
+   * test payments the seller's endpoint did not accept, and since when. Informational; never an input to the score.
+   */
+  async function paymentAttempts(v: Vendor, paidTestBuys: number) {
+    if (!v.label_unsettled_payments || paidTestBuys > 0) return null;
+    const a = await store.unsettledAttempts(v.id);
+    if (!a.count || a.first == null || a.last == null) return null;
+    return {
+      status: "test_payment_not_accepted_yet",
+      network: "xrpl:0",
+      count: a.count,
+      first_attempt: new Date(a.first).toISOString(),
+      last_attempt: new Date(a.last).toISOString(),
+      note: "Signed XRPL test payments Lumi sent that the seller's endpoint did not accept, so none reached the ledger and nothing was paid. Informational only; not part of the score. Shown until the first paid test-buy succeeds.",
+    };
+  }
+
   async function vendorsDoc(base: string) {
     const rows = await Promise.all(
       VENDORS.map(async (v) => {
         const [g, reach] = await Promise.all([gather(v), reachability(v)]);
         const last = g.obs[0];
+        const attempts = await paymentAttempts(v, g.score.samples.paid_test_buys);
         return {
           id: v.id,
           name: v.name,
@@ -535,6 +554,7 @@ export function createTrust(deps: TrustDeps): Trust {
           confidence: g.score.confidence,
           samples: g.score.samples,
           last_paid_observation: last ? obsLatestFreeView(last) : null,
+          ...(attempts ? { payment_attempts: attempts } : {}),
           latest_probes: g.probes.latest.map(probeView),
           replies: g.replies.length,
           detail: `${base}/v1/trust/vendors/${v.id}`,
@@ -1148,6 +1168,45 @@ export function createTrust(deps: TrustDeps): Trust {
     return json(201, { recorded: true, observation: obsView(row) });
   }
 
+  // ---------------- POST /v1/trust/attempts (owner): a signed test payment the seller did not accept (never on-ledger)
+
+  async function postAttempt(request: Request, base: string): Promise<Response> {
+    if (!(await isOwner(request))) return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
+    const parsed = await readJson(request);
+    if (!parsed.ok) return parsed.res;
+    const b = parsed.body;
+    const vendorErr = vendorIdError(b.vendor_id, base);
+    if (vendorErr) return vendorErr;
+    const vendor = vendorById(b.vendor_id as string)!;
+    const endpoint = typeof b.endpoint === "string" ? b.endpoint.trim() : "";
+    let host = "";
+    try { host = new URL(endpoint).host; } catch { /* invalid */ }
+    if (!host || !endpoint.startsWith("https://") || host !== new URL(vendor.homepage).host) return bad("endpoint", "an https URL on the vendor's own host");
+    if ((b.network ?? "xrpl:0") !== "xrpl:0") return bad("network", "xrpl:0");
+    const tx = typeof b.tx_hash === "string" ? b.tx_hash.trim().toUpperCase() : "";
+    if (!XRPL_TX_RE.test(tx)) return bad("tx_hash", "64 hex chars");
+    const ts = typeof b.signed_at === "string" ? Date.parse(b.signed_at) : NaN;
+    if (!Number.isFinite(ts) || ts > now() + 60_000 || ts < now() - 120 * DAY) return bad("signed_at", "ISO time within the last 120 days");
+    const httpStatus = b.http_status == null ? null : Number(b.http_status);
+    if (httpStatus != null && !(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599)) return bad("http_status", "integer 100-599 or null");
+    const amount = b.amount == null ? null : String(b.amount);
+    if (amount != null && !(Number(amount) > 0)) return bad("amount", "positive number or null");
+    const asset = b.asset == null ? null : String(b.asset);
+    if (asset != null && !/^[A-Z]{3,12}$/.test(asset)) return bad("asset", "asset code such as RLUSD or XRP");
+    const detail = b.detail == null ? null : cleanText(String(b.detail));
+    if (detail != null && (detail.length > 200 || BANNED_WORDS.test(detail))) return bad("detail", "factual wording, at most 200 chars");
+
+    // Only a payment that never reached the ledger counts; a settled one is a paid test-buy (POST /v1/trust/observations).
+    const look = await lookupXrplPayment(deps.fetch, deps.xrplRpc, tx);
+    if (look.ok) return json(409, { recorded: false, reason: "payment_on_ledger", detail: "This payment settled; record it with POST /v1/trust/observations." });
+    if (look.reason === "ledger_unavailable") return json(503, { error: "ledger_unavailable", retryable: true }, { "Retry-After": "30" });
+    const row: UnsettledAttemptRow = { vendor_id: vendor.id, endpoint, ts, network: "xrpl:0", tx_hash: tx, amount, asset, http_status: httpStatus, detail };
+    const ins = await store.addUnsettledAttempt(row);
+    deps.log({ event: "trust_unsettled_attempt", vendor: vendor.id, inserted: ins === "inserted", ledger: look.reason });
+    if (ins === "duplicate") return json(200, { recorded: false, duplicate: true, tx_hash: tx });
+    return json(201, { recorded: true, attempt: { ...row, signed_at: new Date(ts).toISOString(), ledger: look.reason } });
+  }
+
   // ---------------- POST /v1/trust/buys/inconclusive (owner): correct a stored buy to "delivery unknown, Lumi-side"
 
   async function postInconclusive(request: Request): Promise<Response> {
@@ -1333,6 +1392,8 @@ export function createTrust(deps: TrustDeps): Trust {
         return postObservation(request, base);
       case "/v1/trust/buys/inconclusive":
         return postInconclusive(request);
+      case "/v1/trust/attempts":
+        return postAttempt(request, base);
       case "/v1/trust/probe":
         if (!(await isOwner(request))) return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
         return json(200, { ran: true, ...(await runProbes()) });

@@ -34,6 +34,25 @@ export interface ObservationRow {
   summary_before?: string | null;
 }
 
+/** A signed XRPL test payment the seller's endpoint did not accept or settle (never on-ledger). Informational; never scored. */
+export interface UnsettledAttemptRow {
+  vendor_id: string;
+  endpoint: string;
+  ts: number; // when Lumi signed and sent it (ms)
+  network: string;
+  tx_hash: string;
+  amount: string | null;
+  asset: string | null;
+  http_status: number | null;
+  detail: string | null;
+}
+
+export interface UnsettledSummary {
+  count: number;
+  first: number | null;
+  last: number | null;
+}
+
 export interface ReportRow {
   id: string;
   vendor_id: string;
@@ -93,6 +112,10 @@ export interface TrustStore {
   latestObservations(vendorIds: string[], limit: number): Promise<ObservationRow[]>;
   /** Owner correction: mark a stored test-buy inconclusive (Lumi-side). Keeps the old summary in summary_before. */
   markObservationInconclusive(tx: string, reason: string, summary: string, at: number): Promise<ObservationRow | null>;
+  /** Owner: record a signed test payment the seller did not accept (tx never reached the ledger). */
+  addUnsettledAttempt(row: UnsettledAttemptRow): Promise<InsertResult>;
+  /** Count + first/last time of a vendor's unsettled attempts (any age). Missing table reads as zero. */
+  unsettledAttempts(vendorId: string): Promise<UnsettledSummary>;
   addReport(row: ReportRow): Promise<InsertResult>;
   hasVerifiedReport(txHash: string): Promise<boolean>;
   verifiedReports(vendorId: string, since: number): Promise<ReportRow[]>;
@@ -118,6 +141,7 @@ export class MemoryTrustStore implements TrustStore {
   reports: ReportRow[] = [];
   replies: ReplyRow[] = [];
   tips: TipRow[] = [];
+  attempts: UnsettledAttemptRow[] = [];
   counters = new Map<string, { count: number; expires: number }>();
 
   constructor(seed: ObservationRow[] = []) {
@@ -156,6 +180,15 @@ export class MemoryTrustStore implements TrustStore {
   }
   async latestObservations(vendorIds: string[], limit: number) {
     return this.obs.filter((o) => vendorIds.includes(o.vendor_id)).sort((a, b) => b.ts - a.ts).slice(0, limit).map((o) => ({ ...o }));
+  }
+  async addUnsettledAttempt(row: UnsettledAttemptRow): Promise<InsertResult> {
+    if (this.attempts.some((a) => a.tx_hash === row.tx_hash)) return "duplicate";
+    this.attempts.push({ ...row });
+    return "inserted";
+  }
+  async unsettledAttempts(vendorId: string): Promise<UnsettledSummary> {
+    const ts = this.attempts.filter((a) => a.vendor_id === vendorId).map((a) => a.ts);
+    return { count: ts.length, first: ts.length ? Math.min(...ts) : null, last: ts.length ? Math.max(...ts) : null };
   }
   async addReport(row: ReportRow): Promise<InsertResult> {
     if (row.verified && this.reports.some((r) => r.verified && r.tx_hash === row.tx_hash)) return "duplicate";
@@ -249,6 +282,28 @@ export class D1TrustStore implements TrustStore {
       .bind(tx, reason, summary, at).run();
     const r = await this.db.prepare("SELECT * FROM observations WHERE tx_hash = ?1").bind(tx).first<Record<string, any>>();
     return r ? obsFrom(r) : null;
+  }
+  async addUnsettledAttempt(r: UnsettledAttemptRow): Promise<InsertResult> {
+    try {
+      await this.db
+        .prepare("INSERT INTO unsettled_attempts (tx_hash, vendor_id, endpoint, ts, network, amount, asset, http_status, detail) VALUES (?,?,?,?,?,?,?,?,?)")
+        .bind(r.tx_hash, r.vendor_id, r.endpoint, r.ts, r.network, r.amount, r.asset, r.http_status, r.detail)
+        .run();
+      return "inserted";
+    } catch (e) {
+      if (isUnique(e)) return "duplicate";
+      throw e;
+    }
+  }
+  async unsettledAttempts(vendorId: string): Promise<UnsettledSummary> {
+    try {
+      const r = await this.db.prepare("SELECT COUNT(*) AS n, MIN(ts) AS first, MAX(ts) AS last FROM unsettled_attempts WHERE vendor_id = ?").bind(vendorId).first<{ n: number; first: number | null; last: number | null }>();
+      const n = Number(r?.n ?? 0);
+      return { count: n, first: n ? Number(r!.first) : null, last: n ? Number(r!.last) : null };
+    } catch (e) {
+      if (/no such table/i.test(String(e))) return { count: 0, first: null, last: null }; // migration 0015 not applied yet
+      throw e;
+    }
   }
   async observations(vendorId: string, since: number) {
     const r = await this.db.prepare("SELECT * FROM observations WHERE vendor_id = ? AND ts >= ? ORDER BY ts DESC LIMIT 500").bind(vendorId, since).all();
