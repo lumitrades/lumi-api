@@ -1,0 +1,26 @@
+--- a/trust_testbuys.ts
++++ b/trust_testbuys.ts
+@@ -30,6 +30,7 @@
+ import { spawnSync } from "node:child_process";
+ import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+ import { VENDORS, type Vendor, type VendorEndpoint } from "../lumi-api/src/vendors.ts";
++import { assertPayToAllowed } from "../lumi-api/scripts/ofac_guard.ts";
+ 
+ const API = process.env.LUMI_API ?? "https://api.lumitrades.io";
+ const LOG = "/workspace/notes/trust_testbuys.log";
+@@ -101,6 +102,7 @@
+     const pick = ep.listed_asset === "XRP" ? asXrp ?? asRl : asRl ?? asXrp;
+     if (!pick) return { error: "no xrpl:0 exact XRP or RLUSD option in the quote" };
+     if (!v.pay_to.xrpl.includes(pick.payTo)) return { error: "quote pays an address not listed for this vendor" };
++    try { assertPayToAllowed(String(pick.payTo), "trust_testbuys:xrpl", { url: ep.url }); } catch (e) { return { error: (e as Error).message }; }
+     const asset: Asset = pick.asset === "XRP" ? "XRP" : "RLUSD";
+     const price = asset === "XRP" ? Number(pick.amount) / 1e6 : Number(pick.amount);
+     if (!(price > 0)) return { error: "quote amount not positive" };
+@@ -261,6 +263,7 @@
+     const url = new URL(u.toString());
+     if (method === "GET" && input.queryParams && typeof input.queryParams === "object" && !u.search) for (const [k, v] of Object.entries(input.queryParams)) url.searchParams.set(k, String(v));
+     const body = method === "POST" ? JSON.stringify(input.body ?? {}) : undefined;
++    try { assertPayToAllowed(String(a.payTo), "trust_testbuys:stellar", { resource: item.resource }); } catch { continue; }
+     const s: StellarSeller = { host: u.hostname, resource: item.resource, method, url: url.toString(), body, price, payTo: a.payTo, source };
+     const cur = best.get(s.host);
+     if (!cur || s.price < cur.price || (s.price === cur.price && method === "GET" && cur.method === "POST")) best.set(s.host, s);

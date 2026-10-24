@@ -22,6 +22,7 @@ import { staleInputs, hasContent, fileMeta, withMeta, isoTimestamps, metaFrom, n
 import { briefView, yenView, sentimentView, eventsView, tradesView } from "./products";
 import { institutionalView } from "./institutional";
 import { handleMcp, isOwnerKey, MCP_CORS, type McpDeps } from "./mcp";
+import { createSanctionsScreen, type KVLike, type SanctionsDoc } from "./sanctions";
 import { createTrust, TRUST_POST_PATHS, REPORT_FRESH_MS, type Trust } from "./trust";
 import { createCommerce, D1CommerceStore, MemoryCommerceStore, type Commerce } from "./commerce";
 import type { CommerceStore } from "./commerce/store";
@@ -52,6 +53,8 @@ import { D1IdempotencyStore, MemoryIdempotencyStore, type IdempotencyStore } fro
 import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, type SalesStore, type AlertConfig } from "./sales";
 
 export interface AppOptions {
+  /** OFAC SDN address snapshot override (tests); default = bundled data/ofac_sdn_addresses.json (+ optional SANCTIONS_KV). */
+  sanctions?: SanctionsDoc;
   fetch?: typeof fetch;
   log?: (event: Record<string, unknown>) => void;
   /** Clock (ms), injectable for tests. */
@@ -242,6 +245,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     ...(config.evm?.network === "eip155:84532" ? ["https://sepolia.base.org", "https://base-sepolia-rpc.publicnode.com"] : ["https://base-rpc.publicnode.com", "https://mainnet.base.org", "https://base.drpc.org"]),
   ];
   const xrplBuyers = split(env.TRUST_BUYER_ADDRESSES).length ? split(env.TRUST_BUYER_ADDRESSES) : [config.payTo];
+  // OFAC SDN screen: bundled snapshot Set per isolate (+ optional KV copy); no D1 reads.
+  const sanctions = createSanctionsScreen({ doc: opts.sanctions, kv: env.SANCTIONS_KV as KVLike | undefined, now, log: (e) => deps.log?.(e) });
   const catalogStore = opts.catalogStore ?? (env.TRUST_DB ? new D1CatalogStore(env.TRUST_DB) : new MemoryCatalogStore());
   /**
    * The persisted rate is only a last-known fallback (used when every live source fails, valid 7 days), so it is
@@ -291,6 +296,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     receipts: receiptStore,
     evidence: evidenceStore,
     onStatusChanges: (changes) => commerceStore.addChanges(changes),
+    sanctions,
     baseRpcs: split(env.BASE_INDEX_RPCS).length ? split(env.BASE_INDEX_RPCS) : ["https://base-rpc.publicnode.com", "https://base.drpc.org", "https://gateway.tenderly.co/public/base"],
     buyers: { xrpl: xrplBuyers, evm: split(env.TRUST_BUYER_EVM).length ? split(env.TRUST_BUYER_EVM) : DEFAULT_EVM_BUYERS, stellar: stellarBuyers },
     stellarHorizon,
@@ -392,7 +398,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const hasExact = !!exact?.self || (exact?.catalog?.entries?.length ?? 0) > 0;
     const host = new URL(input.url).hostname.toLowerCase();
     const dom = hasExact ? null : ((await trust.lookup({ domain: host } as LookupQuery, base, free ? { free: true } : undefined)) as any);
-    return { verdict: trustVerdict(input, exact, dom, base) as Record<string, any>, exact, host };
+    await sanctions.ready();
+    return { verdict: trustVerdict(input, exact, dom, base, sanctions) as Record<string, any>, exact, dom, host };
   }
 
   /** payTo-only verdict (MCP tool payments): who is this address, per the catalog and Lumi's curated vendors. */
@@ -402,7 +409,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const cur = doc?.curated?.[0]?.id as string | undefined;
     let host: string | null = cur ?? null;
     if (!host && first) { try { host = new URL(first).hostname.toLowerCase(); } catch { host = null; } }
-    const verdict = trustVerdict({ url: first ?? "", ...input } as any, doc, null, base) as Record<string, any>;
+    await sanctions.ready();
+    const verdict = trustVerdict({ url: first ?? "", ...input } as any, doc, null, base, sanctions) as Record<string, any>;
     if (verdict.matched) verdict.matched.exact = false;
     return { verdict, exact: doc, host };
   }
@@ -426,6 +434,10 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (limit) return limit;
     const network = sp.get("network")?.slice(0, 40) || undefined;
     const { verdict, host } = clean ? await checkVerdict({ url: clean, payTo, amountUsd, network }, base, true) : await payToVerdict({ payTo: payTo!, amountUsd, network }, base);
+    if (verdict?.verdict === "block" && verdict?.reasons?.[0]?.code === "sanctioned_address") {
+      const hit = sanctions.check(payTo);
+      if (hit) sanctions.refuse("free_check", hit, host ? { url_host: host } : {});
+    }
     const score = host ? scoreView(await liveScore(host), verdict.matched?.tier) : null;
     const link = host ? `${base}/trust/v/${encodeURIComponent(host)}` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(payTo!)}`;
     const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict, score, link, paid: false });
@@ -462,6 +474,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   }
   const ownHosts = new Set(["api.lumitrades.io", ...(config.publicBaseUrl ? [new URL(config.publicBaseUrl).hostname] : [])]);
   const commerce = createCommerce({
+    sanctions,
     store: commerceStore,
     cfg: config,
     fetch: doFetch,
@@ -660,7 +673,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     try {
       const clean = originPath(url) ?? url;
       const network = sp.get("network") ?? undefined;
-      const { verdict: body, exact } = await checkVerdict({ url: clean, payTo, amountUsd, network }, base, false);
+      const { verdict: body, exact, dom } = await checkVerdict({ url: clean, payTo, amountUsd, network }, base, false);
+      if ((body as any)?.verdict === "block" && (body as any)?.reasons?.[0]?.code === "sanctioned_address") {
+        const hit = sanctions.check(payTo) ?? sanctions.checkAny(((exact?.catalog?.entries?.[0]?.pay_to ?? dom?.catalog?.entries?.[0]?.pay_to ?? []) as any[]).map((p) => String(p?.pay_to ?? "")));
+        if (hit) sanctions.refuse("trust_check", hit, { url_host: host });
+      }
       const t = now();
       const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: body, score: scoreView(await liveScore(host), (body as any).matched?.tier), link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: true });
       (body as any).lumi_receipt = await signResponse("trust_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
