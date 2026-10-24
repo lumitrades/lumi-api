@@ -63,7 +63,7 @@ test("fail mode: open by default (warn, payment proceeds); closed blocks; unsign
   assert.equal(closed.decision, "block");
   const forged = fakeFetch(() => ({ receipt: signed(payload("allow"), { seed: ed25519.utils.randomPrivateKey() }) }));
   const f = await kit.createLumiCheck({ fetchImpl: forged, publicKeys: [PUB], config: cfgOn }).check({ url: "https://a.example/x" });
-  assert.equal(f.decision, "warn"); assert.equal(f.reasons[0].code, "lumi_unverified");
+  assert.equal(f.decision, "warn"); assert.equal(f.reasons[0].code, "lumi_untrusted_key"); // signed by a key that is not pinned
   assert.equal(kit.DEFAULT_CONFIG.fail_mode, "open"); assert.equal(kit.DEFAULT_CONFIG.timeout_ms, 2500);
 });
 
@@ -208,4 +208,25 @@ test("walletProof: wallet signs a message bound to the contributor key (EVM addr
   assert.equal(kit.walletProofMessage(PUB, evm.address), `lumi-wallet-proof:v1:${PUB}:${evm.address.toLowerCase()}`);
   assert.match(p.signature, /^0x[0-9a-f]{130}$/);
   assert.equal(JSON.stringify(p).includes("22".repeat(32)), false); // never the secret
+});
+
+test("pinned keys: defaults reject other keys (lumi_untrusted_key), never fetch keys, and validate overrides", async () => {
+  const sk = ed25519.utils.randomPrivateKey(), pub = hex(ed25519.getPublicKey(sk));
+  const body = { type: "lumi_signed_response", version: "0.1", kind: "lumi_check", id: "p", issued_at: new Date().toISOString(), expires_at: new Date(Date.now() + 300000).toISOString(),
+    payload: { decision: "allow", reasons: [], score: null, link: null, matched: null, paid: false, query: {} } };
+  const receipt_hash = sha256Hex(canonicalJson(body)), message = `lumi-signed:lumi_check:${receipt_hash}`;
+  const r = { ...body, receipt_hash, signer: { key_type: "lumi-ed25519", key_id: kit.lumiKeyId(pub), public_key: pub, message, signature: b64(ed25519.sign(new TextEncoder().encode(message), sk)) } };
+  assert.deepEqual(kit.pinnedPublicKeys(), kit.LUMI_SIGNING_KEYS.filter((k) => k.status !== "retired").map((k) => k.public_key));
+  assert.equal(kit.LUMI_SIGNING_KEYS[0].key_id, "lsk_5c8c2f54fd228547");
+  assert.equal(kit.LUMI_SIGNING_KEYS[0].key_id, kit.lumiKeyId(kit.LUMI_SIGNING_KEYS[0].public_key));
+  const v = kit.verifyLumiSigned(r);
+  assert.equal(v.ok, false); assert.equal(v.error, "lumi_untrusted_key"); assert.match(v.detail, /lsk_5c8c2f54fd228547/);
+  assert.equal(kit.verifyLumiSigned(r, { publicKeys: [pub] }).ok, true);
+  const urls = [];
+  const lumi = kit.createLumiCheck({ api: "https://api.test", fetchImpl: async (u) => { urls.push(String(u)); return u.includes("/v1/check/keys") ? Response.json({ keys: [{ public_key: pub }] }) : Response.json({ receipt: r }); }, config: { fail_mode: "closed", timeout_ms: 2500 } });
+  const out = await lumi.check({ url: "https://s.example/x" });
+  assert.equal(out.decision, "block"); assert.equal(out.reasons[0].code, "lumi_untrusted_key"); assert.equal(out.verified, false);
+  assert.ok(urls.every((u) => !u.includes("/v1/check/keys")));
+  assert.throws(() => kit.createLumiCheck({ publicKeys: [] }), /publicKeys/);
+  assert.throws(() => kit.createLumiCheck({ publicKeys: ["not-hex"] }), /publicKeys/);
 });

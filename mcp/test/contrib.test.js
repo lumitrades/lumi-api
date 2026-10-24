@@ -14,8 +14,8 @@ const payer = deriveAddress(deriveKeypair(seed).publicKey);
 const TX = "C".repeat(64);
 const PAYTO = "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe";
 
-async function connect(env, fetchImpl) {
-  const server = buildServer(createClient(loadSettings({ XRPL_SEED: seed })), { contrib: { env: { LUMI_KIT_HOME: mkdtempSync(join(tmpdir(), "kit-")), ...env }, fetchImpl } });
+async function connect(env, fetchImpl, extra = {}) {
+  const server = buildServer(createClient(loadSettings({ XRPL_SEED: seed })), { contrib: { env: { LUMI_KIT_HOME: mkdtempSync(join(tmpdir(), "kit-")), ...env }, fetchImpl, ...extra } });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(a);
   const c = new Client({ name: "t", version: "0" });
@@ -80,8 +80,15 @@ test("lumi_check: free signed pre-pay check; fail-open warn when Lumi is unreach
   const receipt_hash = sha256Hex(canonicalJson(body)), message = `lumi-signed:lumi_check:${receipt_hash}`;
   const receipt = { ...body, receipt_hash, signer: { key_type: "lumi-ed25519", key_id: kit.lumiKeyId(pub), public_key: pub, message, signature: b64(ed25519.sign(new TextEncoder().encode(message), sk)) } };
   const urls = [];
+  // The responder offers its own key at /v1/check/keys: the pinned defaults must ignore it and reject the verdict.
   const f = async (u) => { urls.push(String(u)); return String(u).includes("/v1/check/keys") ? Response.json({ keys: [{ public_key: pub }] }) : Response.json({ receipt }); };
-  const c = await connect({ LUMI_CHECK_API: "https://api.test" }, f);
+  const pinned = await connect({ LUMI_CHECK_API: "https://api.test" }, f);
+  const u = JSON.parse((await pinned.callTool({ name: "lumi_check", arguments: { url: "https://bad.example/x" } })).content[0].text);
+  assert.equal(u.verified, false); assert.equal(u.decision, "warn"); assert.equal(u.reasons[0].code, "lumi_untrusted_key");
+  assert.match(u.reasons[0].detail, /not a pinned Lumi signing key/);
+  assert.ok(urls.every((x) => !x.includes("/v1/check/keys")), "keys are never fetched");
+  await pinned.close();
+  const c = await connect({ LUMI_CHECK_API: "https://api.test" }, f, { publicKeys: [pub] });
   const j = JSON.parse((await c.callTool({ name: "lumi_check", arguments: { url: "https://bad.example/x?secret=1", amount_usd: 0.01 } })).content[0].text);
   assert.equal(j.decision, "block"); assert.equal(j.verified, true); assert.equal(j.link, "https://api.test/trust/v/bad.example");
   assert.ok(urls.every((u) => !u.includes("secret")));

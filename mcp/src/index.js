@@ -11,7 +11,7 @@ import { z } from "zod";
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createClient, loadSettings, assetLabel } from "./lumi.js";
-import { registerContribTools } from "./contrib.js";
+import { registerContribTools, checkLumiReceipt } from "./contrib.js";
 
 const VENDOR_LOOKUP_DESCRIPTION =
   "Free. Check an x402 seller before you pay it: pass url (the resource you are about to buy), domain, or payTo (the address in its 402 quote, case-insensitive). Lumi ingests the full CDP x402 Bazaar catalog daily and runs free, unpaid 402-quote checks of listings on a rotating schedule (valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response), labelled 'quote-verified, low confidence', plus Lumi's own test-buys confirmed on-chain, labelled 'purchase-verified' and counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated list, separately). Answer-only: tx evidence is in the paid trust check. Observations, not ratings; no match is not a negative signal. With no arguments: the curated XRPL vendor scores and catalog counts; vendor_id gives one curated vendor's summary (tx evidence is in the paid vendor report).";
@@ -224,7 +224,9 @@ export function buildServer(client, opts = {}) {
         if (!r.paid) return { ...text(r), isError: r.status !== 402 || !!r.error };
         const receipt = { tx: r.receipt?.transaction, network: r.receipt?.network, spent_this_session: r.spent_this_session };
         if (typeof r.body === "string") return text(`${r.body}\n\n[x402 receipt: ${JSON.stringify(receipt)}]`);
-        return text({ ...r.body, mcp_receipt: receipt, ...(t.name === "lumi_vendor_report" ? {} : { note: DISCLAIMER }) });
+        // Paid trust/check: its lumi_receipt is kept only when signed by a pinned Lumi key.
+        const body = t.name === "lumi_trust_check" ? await checkLumiReceipt(r.body, opts.contrib ?? {}) : r.body;
+        return text({ ...body, mcp_receipt: receipt, ...(t.name === "lumi_vendor_report" ? {} : { note: DISCLAIMER }) });
       },
     );
   }

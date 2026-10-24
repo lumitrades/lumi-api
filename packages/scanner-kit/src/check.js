@@ -10,6 +10,7 @@
  */
 import { originPath } from "./origin.js";
 import { verifyLumiSigned } from "./lumi_signed.js";
+import { pinnedPublicKeys } from "./lumi_keys.js";
 import { loadConfig } from "./config.js";
 import { reportOutcome } from "./telemetry.js";
 import { kitHeader, DEFAULT_API } from "./version.js";
@@ -37,15 +38,11 @@ export function createLumiCheck({ api = DEFAULT_API, publicKeys, timeoutMs, fail
   const base = api.replace(/\/+$/, "");
   const ms = timeoutMs ?? cfg.timeout_ms ?? 2500;
   const mode = (failMode ?? cfg.fail_mode) === "closed" ? "closed" : "open";
-  let keys = publicKeys ?? cfg.public_keys ?? null;
-
-  async function trustedKeys() {
-    if (keys?.length) return keys;
-    const r = await fetchImpl(base + "/v1/check/keys", { headers: { "Lumi-Kit": kitHeader() }, signal: AbortSignal.timeout(ms) });
-    const j = await r.json();
-    keys = (j.keys ?? []).map((k) => k.public_key).filter(Boolean);
-    return keys;
-  }
+  // Pinned keys shipped with the kit. No network fetch and no config-file keys: the server being checked must not be able
+  // to choose the key. `publicKeys` (code only) replaces the pins, for tests or a self-hosted Lumi.
+  if (publicKeys !== undefined && (!Array.isArray(publicKeys) || !publicKeys.length || !publicKeys.every((k) => /^[0-9a-f]{64}$/i.test(String(k)))))
+    throw new TypeError("publicKeys must be a non-empty array of 64-hex Ed25519 public keys");
+  const keys = publicKeys ?? pinnedPublicKeys();
   const unavailable = (code, detail, extra = {}) => ({
     decision: mode === "closed" ? "block" : "warn", reasons: [{ code, severity: mode === "closed" ? "block" : "warn", detail }],
     score: null, link: null, verified: false, fail_mode: mode, unavailable: true, ...extra,
@@ -66,8 +63,11 @@ export function createLumiCheck({ api = DEFAULT_API, publicKeys, timeoutMs, fail
       return unavailable("lumi_unreachable", e?.name === "TimeoutError" ? `No answer within ${ms} ms.` : "Network error reaching Lumi.");
     }
     let v;
-    try { v = verifyLumiSigned(j.receipt, { publicKeys: await trustedKeys(), now: now() }); } catch { v = { ok: false, errors: ["keys_unavailable"] }; }
-    if (!v.ok) return unavailable("lumi_unverified", `Lumi's signature did not verify (${(v.errors ?? []).join(", ")}).`);
+    try { v = verifyLumiSigned(j.receipt, { publicKeys: keys, now: now() }); } catch { v = { ok: false, errors: ["verify_failed"] }; }
+    if (!v.ok) {
+      const keyErr = v.error === "lumi_untrusted_key" || v.error === "lumi_retired_key";
+      return unavailable(keyErr ? v.error : "lumi_unverified", v.detail ?? `Lumi's signature did not verify (${(v.errors ?? []).join(", ")}).`, { errors: v.errors });
+    }
     const p = j.receipt.payload; // the signed payload is the source of truth
     return { decision: p.decision, reasons: p.reasons, score: p.score, link: p.link, matched: p.matched, verified: true, key_id: v.key_id, receipt: j.receipt, fail_mode: mode };
   }
