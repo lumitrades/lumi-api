@@ -42,6 +42,7 @@ import { D1FeedStore, MemoryFeedStore, FEEDS, dueFeed, refreshFeed, feedFresh, t
 import { liteView, scanView, fundingView, fearGreedView, fearGreedFromContext, events48View, trustVerdict } from "./quick";
 import { lookupError } from "./trust/index";
 import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
+import { signingSecretSeparate } from "./trust/lumi_keys";
 import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
 import { curatedByHost } from "./trust/badge";
 import type { LookupQuery } from "./trust/catalog";
@@ -313,12 +314,15 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (!h || t - h.t > 60_000) { outcomeHits.set(ip, { t, n: 1 }); return false; }
     return ++h.n > 120;
   };
+  // LUMI_CHECK_SIGNING_KEY signs answers; CONTRIB_ADMIN_KEY (else OWNER_MCP_KEY) is the separate admin credential. If one
+  // secret is reused for both, fail closed: no signing with it and no contributor admin routes.
+  const secretReused = !signingSecretSeparate(env);
   const contributors = createContributors({
     store: opts.contributorStore ?? (env.TRUST_DB ? new D1ContributorStore(env.TRUST_DB) : new MemoryContributorStore()),
     fetch: doFetch,
     now,
-    ownerKey: env.OWNER_MCP_KEY,
-    adminKey: env.CONTRIB_ADMIN_KEY,
+    ownerKey: secretReused ? undefined : env.OWNER_MCP_KEY,
+    adminKey: secretReused ? undefined : env.CONTRIB_ADMIN_KEY,
     creditsEnabled: env.CONTRIB_CASH_BOUNTIES_ENABLED === "true",
     checkCreditsPerReceipt: env.CONTRIB_CHECK_CREDITS_PER_RECEIPT,
     checkCreditPrices: env.CONTRIB_CHECK_CREDIT_PRICES,
@@ -381,7 +385,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
 
   // Lumi Check v0: dedicated ed25519 response-signing key (Worker secret LUMI_CHECK_SIGNING_KEY; never logged).
   let signKeyMemo: Promise<SigningKey | null> | undefined;
-  const signKey = () => (signKeyMemo ??= signingKeyFrom(env.LUMI_CHECK_SIGNING_KEY));
+  const signKey = () => (signKeyMemo ??= secretReused ? Promise.resolve(null) : signingKeyFrom(env.LUMI_CHECK_SIGNING_KEY));
 
   /** Live score summary for a host or vendor id (curated vendors only; everything else is "not_scored"). */
   async function liveScore(keyOrHost: string) {
@@ -807,7 +811,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     // Lumi Check v0: free signed pre-pay check, signing keys, earned-only signed badge.
     if (request.method === "GET" || request.method === "HEAD") {
       if (path === "/v1/check") return freeCheck(request, url, base);
-      if (path === "/v1/check/keys" || path === "/.well-known/lumi-keys.json") return json(200, keysDoc(await signKey(), base), { "Cache-Control": "public, max-age=3600" });
+      if (path === "/v1/check/keys" || path === "/.well-known/lumi-keys.json") return json(200, keysDoc(await signKey(), base, { secretReused }), { "Cache-Control": "public, max-age=3600" });
       const eb = /^\/v1\/badge\/([^/]{1,200})\.(json|svg)$/.exec(path);
       if (eb) { const k = safeDecode(eb[1]); if (k) return earnedBadge(k, eb[2] as "json" | "svg", base); }
     }

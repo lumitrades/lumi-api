@@ -60,3 +60,40 @@ describe("contributor activity (approved: active = activity in the last 365 days
     expect(contrib().rules).toMatchObject({ active_window_days: 365, retention_days: 90, check_credits: { expires_after_days: 90 } });
   });
 });
+
+describe("Lumi Check signing key: pinned public key, separate from the admin credential", () => {
+  it("pins exactly one active key and its key_id matches the public key", async () => {
+    const { LUMI_SIGNING_KEYS, trustedPublicKeys } = await import("../src/trust/lumi_keys");
+    const { keyIdOf } = await import("../src/trust/lumi_sign");
+    expect(LUMI_SIGNING_KEYS.filter((k) => k.status === "active")).toHaveLength(1);
+    for (const k of LUMI_SIGNING_KEYS) {
+      expect(k.public_key).toMatch(/^[0-9a-f]{64}$/);
+      expect(k.key_id).toBe(await keyIdOf(k.public_key));
+    }
+    expect(trustedPublicKeys([{ key_id: "x", public_key: "AA", status: "retired", added: "2026-01-01" }])).toEqual([]);
+  });
+
+  it("refuses to sign and closes contributor admin when one secret is reused for both jobs", async () => {
+    const { signingSecretSeparate } = await import("../src/trust/lumi_keys");
+    const seed = "ab".repeat(32);
+    expect(signingSecretSeparate({ LUMI_CHECK_SIGNING_KEY: seed, CONTRIB_ADMIN_KEY: "c".repeat(40) })).toBe(true);
+    expect(signingSecretSeparate({ LUMI_CHECK_SIGNING_KEY: seed, CONTRIB_ADMIN_KEY: seed.toUpperCase() })).toBe(false);
+    expect(signingSecretSeparate({ LUMI_CHECK_SIGNING_KEY: seed, OWNER_MCP_KEY: ` ${seed} ` })).toBe(false);
+    const { createApp } = await import("../src/app");
+    const app = createApp({ XRPL_NETWORK: "xrpl:1", PAY_TO: "rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM", FACILITATOR_URL: "https://f.test", DATA_BASE_URL: "https://d.test", INVOICE_SECRET: "s", LUMI_CHECK_SIGNING_KEY: seed, CONTRIB_ADMIN_KEY: seed } as any, { log: () => {} } as any);
+    const keys: any = await (await app.fetch(new Request("https://api.test/v1/check/keys"))).json();
+    expect(keys.status).toBe("signing_key_reused_as_admin_key");
+    expect(keys.keys.every((k: any) => k.signing === false)).toBe(true);
+    const admin = await app.fetch(new Request("https://api.test/v1/owner/contributors", { headers: { Authorization: `Bearer ${seed}` } }));
+    expect(admin.status).toBe(401);
+  });
+
+  it("/v1/check/keys lists the pinned keys and flags a configured key that is not pinned", async () => {
+    const { createApp } = await import("../src/app");
+    const app = createApp({ XRPL_NETWORK: "xrpl:1", PAY_TO: "rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM", FACILITATOR_URL: "https://f.test", DATA_BASE_URL: "https://d.test", INVOICE_SECRET: "s", LUMI_CHECK_SIGNING_KEY: "cd".repeat(32) } as any, { log: () => {} } as any);
+    const keys: any = await (await app.fetch(new Request("https://api.test/.well-known/lumi-keys.json"))).json();
+    expect(keys.status).toBe("configured_key_not_pinned");
+    expect(keys.keys[0]).toMatchObject({ signing: true, pinned: false });
+    expect(keys.keys.some((k: any) => k.key_id === "lsk_5c8c2f54fd228547" && k.pinned && k.status === "active")).toBe(true);
+  });
+});
