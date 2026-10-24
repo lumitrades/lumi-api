@@ -1,0 +1,172 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ed25519 } from "@noble/curves/ed25519";
+import * as kit from "../src/index.js";
+import { canonicalJson, sha256Hex, hex, b64 } from "../src/util.js";
+
+// Ephemeral test signing key (never printed).
+const SEED = ed25519.utils.randomPrivateKey();
+const PUB = hex(ed25519.getPublicKey(SEED));
+function signed(payload, { kind = "lumi_check", ttl = 300_000, seed = SEED } = {}) {
+  const now = Date.now();
+  const body = { type: "lumi_signed_response", version: "0.1", kind, id: "t1", issued_at: new Date(now).toISOString(), expires_at: new Date(now + ttl).toISOString(), payload };
+  const receipt_hash = sha256Hex(canonicalJson(body));
+  const message = `lumi-signed:${kind}:${receipt_hash}`;
+  const pub = hex(ed25519.getPublicKey(seed));
+  return { ...body, receipt_hash, signer: { key_type: "lumi-ed25519", key_id: kit.lumiKeyId(pub), public_key: pub, message, signature: b64(ed25519.sign(new TextEncoder().encode(message), seed)) } };
+}
+const payload = (decision, extra = {}) => ({ decision, confidence: "high", reasons: decision === "allow" ? [] : [{ code: "seller_unverified", severity: decision }], query: {}, matched: null, score: { score: 91 }, link: "https://api.lumitrades.io/trust/v/x.example", paid: false, ...extra });
+const cfgOn = { telemetry: true, share_receipts: false, fail_mode: "open", timeout_ms: 2500 };
+
+function fakeFetch(handler) {
+  const calls = [];
+  const f = async (u, init = {}) => {
+    calls.push({ url: String(u), init });
+    const r = await handler(String(u), init);
+    return r instanceof Response ? r : new Response(JSON.stringify(r), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  f.calls = calls;
+  return f;
+}
+
+test("verifyLumiSigned: valid, tampered, wrong key, expired", () => {
+  const r = signed(payload("allow"));
+  assert.equal(kit.verifyLumiSigned(r, { publicKeys: [PUB] }).ok, true);
+  const t = structuredClone(r); t.payload.decision = "block";
+  assert.ok(kit.verifyLumiSigned(t, { publicKeys: [PUB] }).errors.includes("receipt_hash_mismatch"));
+  assert.ok(kit.verifyLumiSigned(r, { publicKeys: ["00".repeat(32)] }).errors.includes("untrusted_key"));
+  const e = kit.verifyLumiSigned(signed(payload("allow"), { ttl: -1000 }), { publicKeys: [PUB] });
+  assert.equal(e.ok, false); assert.equal(e.expired, true);
+});
+
+test("check: sends origin + path only, returns the SIGNED decision, score and link", async () => {
+  const f = fakeFetch((u) => ({ kind: "lumi_check", decision: "allow", receipt: signed(payload("block")) }));
+  const lumi = kit.createLumiCheck({ fetchImpl: f, publicKeys: [PUB], config: cfgOn });
+  const r = await lumi.check({ url: "https://api.x.example/data?q=my+secret+query#frag", payTo: "0x1111111111111111111111111111111111111111", amount: "10000", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", network: "eip155:8453" });
+  assert.equal(r.decision, "block"); // from the signed payload, not the unsigned top level
+  assert.equal(r.verified, true);
+  assert.equal(r.link, "https://api.lumitrades.io/trust/v/x.example");
+  const q = new URL(f.calls[0].url).searchParams;
+  assert.equal(q.get("url"), "https://api.x.example/data");
+  assert.equal(q.get("amount"), "0.01");
+  assert.ok(!f.calls[0].url.includes("secret"));
+});
+
+test("fail mode: open by default (warn, payment proceeds); closed blocks; unsigned counts as unavailable", async () => {
+  const slow = fakeFetch(() => new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("t"), { name: "TimeoutError" })), 5)));
+  const open = await kit.createLumiCheck({ fetchImpl: slow, publicKeys: [PUB], config: cfgOn }).check({ url: "https://a.example/x" });
+  assert.equal(open.decision, "warn"); assert.equal(open.reasons[0].code, "lumi_unreachable"); assert.equal(open.fail_mode, "open");
+  const closed = await kit.createLumiCheck({ fetchImpl: slow, publicKeys: [PUB], failMode: "closed", config: cfgOn }).check({ url: "https://a.example/x" });
+  assert.equal(closed.decision, "block");
+  const forged = fakeFetch(() => ({ receipt: signed(payload("allow"), { seed: ed25519.utils.randomPrivateKey() }) }));
+  const f = await kit.createLumiCheck({ fetchImpl: forged, publicKeys: [PUB], config: cfgOn }).check({ url: "https://a.example/x" });
+  assert.equal(f.decision, "warn"); assert.equal(f.reasons[0].code, "lumi_unverified");
+  assert.equal(kit.DEFAULT_CONFIG.fail_mode, "open"); assert.equal(kit.DEFAULT_CONFIG.timeout_ms, 2500);
+});
+
+test("x402 onBeforePaymentCreation adapter: aborts on block, proceeds on allow", async () => {
+  let d = "block";
+  const lumi = kit.createLumiCheck({ fetchImpl: fakeFetch(() => ({ receipt: signed(payload(d)) })), publicKeys: [PUB], config: cfgOn });
+  const hook = kit.x402BeforePaymentHook(lumi);
+  const ctx = { paymentRequired: { resource: { url: "https://api.x.example/d?x=1" }, accepts: [] }, selectedRequirements: { scheme: "exact", network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "5000", payTo: "0x1111111111111111111111111111111111111111" } };
+  const a = await hook(ctx);
+  assert.equal(a.abort, true); assert.match(a.reason, /seller_unverified/);
+  d = "allow"; assert.equal(await hook(ctx), undefined);
+});
+
+test("MCP onPaymentRequired adapter: checks by payTo only for mcp:// tools, returns { abort: true } on block", async () => {
+  const f = fakeFetch(() => ({ receipt: signed(payload("block")) }));
+  const hook = kit.mcpOnPaymentRequiredHook(kit.createLumiCheck({ fetchImpl: f, publicKeys: [PUB], config: cfgOn }));
+  const r = await hook({ toolName: "get_data", arguments: { secret: "x" }, paymentRequired: { resource: { url: "mcp://tool/get_data" }, accepts: [{ network: "xrpl:0", payTo: "raKj7ZGoPy1fWw1vfynuJhyHirpcmUMBhP", amount: "1000", asset: "XRP" }] } });
+  assert.deepEqual(r, { abort: true });
+  const q = new URL(f.calls[0].url).searchParams;
+  assert.equal(q.get("url"), null); assert.equal(q.get("payTo"), "raKj7ZGoPy1fWw1vfynuJhyHirpcmUMBhP");
+  assert.ok(!f.calls[0].url.includes("secret"));
+});
+
+// ---- Tier 1: anonymous delivery outcomes ----
+const FORBIDDEN = ["payTo", "pay_to", "payer", "wallet", "address", "amount", "asset", "tx_hash", "tx", "url", "path", "query", "payload", "body", "client_id", "install_id", "key_id", "network"];
+
+test("tier 1 is ON by default and sends exactly the allowed keys, never a forbidden field", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lk-"));
+  const cfg = kit.loadConfig(join(dir, "none.json"), {});
+  assert.equal(cfg.telemetry, true);
+  const f = fakeFetch(() => new Response("{}", { status: 202 }));
+  const r = await kit.reportOutcome({ target: "https://user:pw@api.seller.example:8443/v1/data?q=secret&wallet=rABC#x", delivered: false, status: 503, payTo: "0xabc", amount: "1", tx_hash: "A".repeat(64) }, { fetchImpl: f, config: cfg });
+  assert.equal(r.sent, true);
+  assert.ok(f.calls[0].url.endsWith("/v1/check/outcome"));
+  const body = JSON.parse(f.calls[0].init.body);
+  assert.deepEqual(Object.keys(body).sort(), ["delivered", "status_class", "subject", "token", "v"]);
+  assert.deepEqual({ ...body, token: undefined }, { v: 1, subject: "api.seller.example", delivered: false, status_class: "5xx", token: undefined });
+  for (const k of FORBIDDEN) assert.ok(!(k in body), k);
+  const raw = f.calls[0].init.body;
+  for (const s of ["secret", "wallet", "rABC", "user", "pw", "/v1/data", "8443", "0xabc", "AAAA"]) assert.ok(!raw.includes(s), s);
+  assert.deepEqual(Object.keys(f.calls[0].init.headers).sort(), ["Content-Type", "Lumi-Kit"]); // no auth, no contributor key
+  // token is fresh per event: two reports are not linkable
+  await kit.reportOutcome({ target: "api.seller.example", delivered: true, status: 200 }, { fetchImpl: f, config: cfg });
+  assert.notEqual(JSON.parse(f.calls[1].init.body).token, body.token);
+  for (const o of [{ target: "rPEPPER7kfTD9w2To4CQk6UCfuHM9c6GDY", delivered: true }, { target: "mcp://tool/x", delivered: true }, { target: "https://a.example", delivered: "yes" }])
+    assert.equal(kit.buildOutcome(o), null);
+});
+
+test("tier 1 off switch: config flag, LUMI_CHECK_TELEMETRY=off, and the CLI each stop all sends", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lk-"));
+  const p = join(dir, "config.json");
+  const f = fakeFetch(() => ({}));
+  kit.saveConfig({ telemetry: false }, p);
+  assert.deepEqual(await kit.reportOutcome({ target: "a.example", delivered: true }, { fetchImpl: f, configPath: p, env: {} }), { sent: false, reason: "telemetry_off" });
+  for (const v of ["off", "0", "false", "no"])
+    assert.equal((await kit.reportOutcome({ target: "a.example", delivered: true }, { fetchImpl: f, configPath: join(dir, "x.json"), env: { LUMI_CHECK_TELEMETRY: v } })).sent, false);
+  const lumi = kit.createLumiCheck({ fetchImpl: f, publicKeys: [PUB], configPath: p, env: {} });
+  assert.equal((await lumi.reportOutcome({ target: "a.example", delivered: true })).sent, false);
+  const wrapped = kit.withOutcomeReporting(async () => new Response("ok", { headers: { "PAYMENT-RESPONSE": "x" } }), lumi);
+  await wrapped("https://a.example/x");
+  assert.equal(f.calls.length, 0);
+  // CLI
+  const { execFileSync } = await import("node:child_process");
+  const cli = new URL("../bin/lumi-scan.js", import.meta.url).pathname;
+  const p2 = join(dir, "cli.json");
+  execFileSync(process.execPath, [cli, "telemetry", "off"], { env: { ...process.env, LUMI_KIT_CONFIG: p2 }, stdio: "pipe" });
+  assert.equal(kit.loadConfig(p2, {}).telemetry, false);
+});
+
+test("withOutcomeReporting: one outcome per PAID call, none for unpaid calls", async () => {
+  const f = fakeFetch(() => ({}));
+  const lumi = kit.createLumiCheck({ fetchImpl: f, publicKeys: [PUB], config: cfgOn });
+  await kit.withOutcomeReporting(async () => new Response("free"), lumi)("https://a.example/x?q=1");
+  assert.equal(f.calls.length, 0);
+  await kit.withOutcomeReporting(async () => new Response("", { status: 502, headers: { "PAYMENT-RESPONSE": "x" } }), lumi)("https://a.example/x?q=1");
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual({ ...JSON.parse(f.calls[0].init.body), token: 0 }, { v: 1, subject: "a.example", delivered: false, status_class: "5xx", token: 0 });
+});
+
+// ---- Tier 2: full signed receipts ----
+test("tier 2 is OFF by default: submit sends nothing unless sharing is enabled", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "lk-"));
+  assert.equal(kit.loadConfig(join(dir, "none.json"), {}).share_receipts, false);
+  const f = fakeFetch(() => ({ ok: true }));
+  const priv = hex(ed25519.utils.randomPrivateKey());
+  const off = kit.createLumiClient({ keyId: "lck_0123456789abcdef", privateKey: priv, fetchImpl: f, configPath: join(dir, "none.json"), env: {} });
+  const r = await off.submit({ any: "receipt" }, "passive");
+  assert.equal(r.sent, false); assert.equal(r.error, "sharing_off");
+  const envOff = kit.createLumiClient({ keyId: "lck_0123456789abcdef", privateKey: priv, fetchImpl: f, configPath: join(dir, "none.json"), env: { LUMI_SHARE_RECEIPTS: "1", LUMI_CHECK_TELEMETRY: "on" } });
+  assert.equal(f.calls.length, 0);
+  const p = join(dir, "c.json"); kit.saveConfig({ share_receipts: true }, p);
+  assert.equal((await kit.createLumiClient({ keyId: "lck_0123456789abcdef", privateKey: priv, fetchImpl: f, configPath: p, env: { LUMI_SHARE_RECEIPTS: "0" } }).submit({}, "passive")).sent, false);
+  assert.equal(f.calls.length, 0);
+  await envOff.submit({ a: 1 }, "passive");
+  assert.equal(f.calls.length, 1);
+  assert.ok(f.calls[0].url.endsWith("/v1/contrib/submissions"));
+});
+
+test("receipts carry origin + path only", async () => {
+  const body = kit.buildReceiptBody({ endpoint: "https://x.example/a/b?q=secret", network: "xrpl:0", tx_hash: "AB".repeat(32), payer: "rX", pay_to: "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe", amount: "0.001", asset: "XRP", observed_at: "2026-10-23T12:00:00Z", http_status: 200, outcome: "delivered", mode: "passive" });
+  assert.equal(body.seller.endpoint, "https://x.example/a/b");
+});
+
+test("disclosure names both tiers and all three off switches", () => {
+  for (const s of ["Tier 1 (ON by default)", "Tier 2 (OFF by default", "lumi-scan telemetry off", "LUMI_CHECK_TELEMETRY=off", "\"telemetry\": false", "No cash"]) assert.ok(kit.DISCLOSURE.includes(s), s);
+});

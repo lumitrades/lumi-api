@@ -15,7 +15,7 @@ name or badges. Those remain Lumi's, and nothing here or in the license grants r
 - Lumi issues keys at its discretion and can **revoke a key instantly**, with or without notice, for example for
   suspected self-testing, boosting, collusion, false reports or abuse.
 - A key is a revocable credential tied to the wallets you register. It is not transferable and has no value of its own.
-- On revocation for abuse, Lumi may **forfeit** unpaid credits and refuse future keys for the same wallets.
+- On revocation for abuse, Lumi may **forfeit** unspent credits and refuse future keys for the same wallets.
 
 ## 3. What you submit
 
@@ -29,34 +29,43 @@ name or badges. Those remain Lumi's, and nothing here or in the license grants r
 - You grant Lumi a perpetual, irrevocable, worldwide, royalty-free licence to use, combine, analyse and publish your
   submissions, including in aggregate scores and badges.
 
-## 4. Credits and rewards
+## 4. Rewards (no cash)
 
-- Accepted receipts earn **credits**. **Credits are not cash**, not money, not a security and not redeemable by
-  right. Credit amounts are set by Lumi and may change: higher for wanted-list endpoints and under-covered chains
-  (XRPL, Stellar), lower for repeats, and zero for unlisted endpoints.
-- **Phase 2 (possible, not promised): fixed bounties.** Lumi may later pay a **fixed bounty per verified receipt**
-  from a **capped monthly budget**. That budget opens only once Lumi's own net results are clearly ahead, as decided by
-  Lumi. When the monthly budget is used up, no more bounties are paid that month. Bounties are set per receipt and
-  are not tied to Lumi's revenue or profit. Lumi has full discretion over whether and when bounties start, their
-  amount, eligibility and any KYC or tax requirements.
+- Each **verified** contributed receipt earns **free Lumi Check credits**, which you can spend on Lumi checks and
+  detailed reports. Only tier-2 signed receipts earn credits; tier-1 anonymous outcomes earn nothing. One receipt per
+  unique seller per UTC day earns; self-tests, duplicates, unconfirmed negatives and disputed findings earn nothing.
+  The amount per receipt is set by Lumi and may change. Credits expire with the 90-day retention window.
+- **Credits are not cash**, not money, not a security, not transferable and cannot be redeemed for money.
+- Contributors with a verified receipt also get the contributor badge, a place on the public (pseudonymous)
+  leaderboard, early access and higher rate limits.
+- **No cash bounties at launch.** Any future paid bounties would be a separate, opt-in "wanted list" of fixed bounties
+  for testing specific sellers, from a capped budget, under separate terms. Nothing here promises them.
 - Nothing in these terms is an employment, partnership or agency relationship.
 
-## 5. Demand data
+## 5. Sharing tiers
+
+- **Tier 1 (on by default):** after each check, the kit sends an anonymous delivery outcome: seller host (or Lumi vendor
+  id), delivered yes/no, and a coarse status class. No wallet address, amount, tx hash, URL path or query, payload, or
+  stable identifier. Turn it off with `lumi-scan telemetry off`, `LUMI_CHECK_TELEMETRY=off`, or `"telemetry": false`.
+- **Tier 2 (off by default, opt-in):** full signed receipts. Nothing is sent unless you turn it on (`lumi-scan sharing on`).
+- Stored contributor data and outcome counters are kept for 90 days, then deleted.
+
+## 6. Demand data
 
 - Off by default. If you opt in (`share-demand on`), Lumi may use your passive purchases in **aggregate demand
   statistics only**, at domain level, with at least two contributors per row and no key ids or wallets. You can opt
   out at any time; opting out applies to future submissions.
 
-## 6. What you get
+## 7. What you get
 
 - Your own submissions back, with status, findings and credits (`/v1/contrib/me`), plus normal Lumi API access.
 - **Not** access to the raw pooled database.
 
-## 7. Sellers
+## 8. Sellers
 
 Sellers can dispute a finding by signing with their pay-to wallet. Lumi reviews disputes and may uphold or clear them.
 
-## 8. No warranty; limits
+## 9. No warranty; limits
 
 The kit is provided "as is" (see `LICENSE`). Test-buys spend real funds: you are responsible for your wallets, caps
 and any losses. Lumi is not liable for seller behaviour. These terms may change, and the current DRAFT is not in effect.

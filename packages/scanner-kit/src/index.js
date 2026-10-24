@@ -10,3 +10,8 @@ export { createLumiClient } from "./client.js";
 export { reportPurchase } from "./report.js";
 export { testBuy, pickQuote } from "./buy.js";
 export { capsFrom, checkSpend, recordSpend, loadState, saveState, defaultStatePath, DEFAULT_CAPS, HARD_CEILING } from "./caps.js";
+export { originPath } from "./origin.js";
+export { verifyLumiSigned, lumiSignedMessage, lumiKeyId, LUMI_SIGNED_TYPE } from "./lumi_signed.js";
+export { loadConfig, saveConfig, sharingEnabled, telemetryEnabled, defaultConfigPath, DEFAULT_CONFIG, DISCLOSURE, SHARING_OFF_ERROR } from "./config.js";
+export { reportOutcome, buildOutcome, subjectOf, statusClassOf, OUTCOME_FIELDS } from "./telemetry.js";
+export { createLumiCheck, x402BeforePaymentHook, mcpOnPaymentRequiredHook, withOutcomeReporting, amountUsdOf } from "./check.js";

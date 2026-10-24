@@ -1,8 +1,13 @@
 /** Signed client for Lumi's contributor API. Every request is signed with the contributor key (not a wallet key). */
 import { signRequest } from "./contributor_key.js";
 import { kitHeader, DEFAULT_API } from "./version.js";
+import { loadConfig, SHARING_OFF_ERROR } from "./config.js";
 
-export function createLumiClient({ api = DEFAULT_API, keyId, privateKey, fetchImpl = fetch }) {
+/**
+ * submit() is tier 2 (full signed receipts): it refuses, sending nothing, unless sharing is on
+ * (config share_receipts / LUMI_SHARE_RECEIPTS / `lumi-scan sharing on`). Pass { config } to override in code.
+ */
+export function createLumiClient({ api = DEFAULT_API, keyId, privateKey, fetchImpl = fetch, config, configPath, env }) {
   if (!keyId || !privateKey) throw new Error("contributor key_id and private key required (run keygen, then ask Lumi to issue your key)");
   const base = api.replace(/\/+$/, "");
   async function call(method, path, bodyObj) {
@@ -18,7 +23,13 @@ export function createLumiClient({ api = DEFAULT_API, keyId, privateKey, fetchIm
     return { status: res.status, ...j };
   }
   return {
-    submit: (receipt, mode) => call("POST", "/v1/contrib/submissions", { mode, receipt }),
+    async submit(receipt, mode) {
+      const cfg = config ?? loadConfig(configPath, env);
+      if (cfg.share_receipts !== true) return { status: 0, sent: false, error: "sharing_off", detail: SHARING_OFF_ERROR };
+      return call("POST", "/v1/contrib/submissions", { mode, receipt });
+    },
+    credits: () => call("GET", "/v1/contrib/credits"),
+    spendCredits: (product, input) => call("POST", "/v1/contrib/credits/spend", { product, input }),
     wanted: (o = {}) => call("GET", "/v1/contrib/wanted" + (o.network || o.limit ? "?" + new URLSearchParams({ ...(o.network ? { network: o.network } : {}), ...(o.limit ? { limit: String(o.limit) } : {}) }) : "")),
     me: () => call("GET", "/v1/contrib/me"),
     shareDemand: (v) => call("POST", "/v1/contrib/me", { share_demand: !!v }),
