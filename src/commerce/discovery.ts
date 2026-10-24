@@ -9,7 +9,7 @@ export const PLAN_ORDER: PlanId[] = ["watch", "watch_plus", "watch_pro", "audit"
 /** Extra query parameters of the per-endpoint Watch subscribe paths. */
 export const WATCH_QTY_PARAMS = [
   { name: "endpoints", required: false, desc: `Number of endpoints covered (1-${WATCH_DISCOUNTS.maxEndpoints}; default: the number of seller endpoints in the enrolment). Price = per-endpoint price × endpoints; ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints get -${WATCH_DISCOUNTS.volume * 100}%.` },
-  { name: "terms", required: false, desc: `1 (default) or ${WATCH_DISCOUNTS.prepayTerms}: prepay ${WATCH_DISCOUNTS.prepayTerms} consecutive 30-day terms for -${WATCH_DISCOUNTS.prepay * 100}% (stacks with the volume discount). Still no auto-renew.` },
+  { name: "terms", required: false, desc: `1 (default) or ${WATCH_DISCOUNTS.prepayTerms}: prepay ${WATCH_DISCOUNTS.prepayTerms} consecutive 30-day terms for -${WATCH_DISCOUNTS.prepay * 100}% (does not stack with the volume discount: the larger one applies). Still no auto-renew.` },
 ];
 
 /** What the unpaid template path does (no subject) and the query parameter that binds the payment. */
@@ -61,7 +61,7 @@ export function planPriceTable(base: string) {
 }
 
 export const COMMERCE_FREE_ENDPOINTS = [
-  { method: "GET", path: "/v1/monitor", summary: `Seller monitoring: plans per endpoint per 30 days (Watch $${PLANS.watch.usd}, Watch Plus $${PLANS.watch_plus.usd}, Watch Pro $${PLANS.watch_pro.usd}; ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}%), Audit $${PLANS.audit.usd} one-off, free Watch tier, ${WATCH_TRIAL.days}-day Watch Plus trial; how to enrol, methodology and safeguards` },
+  { method: "GET", path: "/v1/monitor", summary: `Seller monitoring: plans per endpoint per 30 days (Watch $${PLANS.watch.usd}, Watch Plus $${PLANS.watch_plus.usd}, Watch Pro $${PLANS.watch_pro.usd}; ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}%, not stacked), Audit $${PLANS.audit.usd} one-off, free Watch tier, ${WATCH_TRIAL.days}-day Watch Plus trial; how to enrol, methodology and safeguards` },
   { method: "GET", path: "/v1/monitor/challenge?pay_to=", summary: "Message to sign with your payTo wallet (ripple-keypairs for XRPL, EIP-191 for Base) before enrolling" },
   { method: "POST", path: "/v1/monitor/enroll", summary: "Enrol endpoints for monitoring (signature-proven payTo; each endpoint quote-checked, ≤ $0.10 per test-buy)" },
   { method: "POST", path: "/v1/monitor/free", summary: `Free Watch tier (management token): ${WATCH_FREE.endpoints} endpoint, a daily quote check, no test-buys, no badge; status page labelled "${WATCH_FREE.label}"` },
@@ -119,7 +119,7 @@ export function commerceOpenApiPaths(cfg: Config, base: string) {
         operationId: `plan_${id}`,
         tags: p.family === "monitor" ? tagM : tagF,
         summary: `${p.name}${p.perEndpoint ? " (priced per endpoint" : " ("}${p.days ? `${p.perEndpoint ? ", " : ""}${p.days}-day term, no auto-renew` : "one-off"})${p.legacy ? " [legacy, grandfathered]" : ""}`,
-        description: `${p.summary} Paid via x402 (XRPL XRP/RLUSD/USDC or Base USDC). Renew by paying again.${p.perEndpoint ? ` The amount below is for 1 endpoint × 1 term; the 402 for ?endpoints=N&terms=T quotes per-endpoint price × N × T less discounts (${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms -${WATCH_DISCOUNTS.prepay * 100}%).` : ""}${p.family === "monitor" ? ` Test-buys are seller-funded from the fee, capped at ${p.perEndpoint ? WATCH_TIERS[p.id as "watch"].maxBuyUsd : MONITOR_LIMITS.maxBuyUsd} USD each and ${MONITOR_LIMITS.budgetShare * 100}% of the fee in total; ineligible plans return 409 before any quote.` : ""}`,
+        description: `${p.summary} Paid via x402 (XRPL XRP/RLUSD/USDC or Base USDC). Renew by paying again.${p.perEndpoint ? ` The amount below is for 1 endpoint × 1 term; the 402 for ?endpoints=N&terms=T quotes per-endpoint price × N × T less discounts (${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms -${WATCH_DISCOUNTS.prepay * 100}%; only the larger applies, they do not stack).` : ""}${p.family === "monitor" ? ` Test-buys are seller-funded from the fee, capped at ${p.perEndpoint ? WATCH_TIERS[p.id as "watch"].maxBuyUsd : MONITOR_LIMITS.maxBuyUsd} USD each and ${MONITOR_LIMITS.budgetShare * 100}% of the fee in total; ineligible plans return 409 before any quote.` : ""}`,
         parameters: [
           { name: q.name, in: "query", required: q.required, description: q.desc, schema: { type: "string" } },
           ...(p.perEndpoint ? WATCH_QTY_PARAMS.map((x) => ({ name: x.name, in: "query", required: x.required, description: x.desc, schema: { type: "integer" } })) : []),
@@ -153,7 +153,7 @@ Docs: \`GET ${base}/v1/monitor\`. Plans priced **per endpoint per 30 days**, pai
 - **Watch** ${m("watch")}/endpoint: hourly quote checks, a weekly test-buy (≤ $${WATCH_TIERS.watch.maxBuyUsd} per buy), alerts, status page and badge.
 - **Watch Plus** ${m("watch_plus")}/endpoint: quote checks every 15-30 min, a daily test-buy (≤ $${WATCH_TIERS.watch_plus.maxBuyUsd}) rotating across chains, schema and p95-latency alerts, 90-day history.
 - **Watch Pro** ${m("watch_pro")}/endpoint: quote checks every 15 min, daily test-buys on up to 3 chains, a monthly report signed by Lumi's wallet.
-- ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints: -${WATCH_DISCOUNTS.volume * 100}%. Prepay ${WATCH_DISCOUNTS.prepayTerms} terms: -${WATCH_DISCOUNTS.prepay * 100}% (stacks).
+- ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints: -${WATCH_DISCOUNTS.volume * 100}%. Prepay ${WATCH_DISCOUNTS.prepayTerms} terms: -${WATCH_DISCOUNTS.prepay * 100}%. Discounts do not stack: only the larger applies.
 - **Audit** ${m("audit")} one-off: a test-buy of every listed endpoint, full report signed by Lumi's XRPL wallet.
 - **Free Watch**: $0, ${WATCH_FREE.endpoints} endpoint, a daily quote check, no test-buys, no badge (\`POST /v1/monitor/free\`).
 - **${WATCH_TRIAL.days}-day Watch Plus trial**: one per seller (prove the domain and the payTo wallet), test-buys capped at $${WATCH_TRIAL.capUsd} total, no card, never auto-converts; read-only after it ends unless you pay.

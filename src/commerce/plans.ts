@@ -27,7 +27,7 @@ export interface PlanDef {
   family: "monitor" | "feed";
   summary: string;
   path: string;
-  /** Watch tiers: usd is the price per endpoint per 30-day term; the quote is usd × endpoints (volume/prepay discounts). */
+  /** Watch tiers: usd is the price per endpoint per 30-day term; the quote is usd × endpoints × terms less one discount (the larger of volume/prepay). */
   perEndpoint?: boolean;
   /** Grandfathered 2026-10-22 plan ids (Monitor $9 / Monitor Plus $29): still valid and purchasable, superseded by Watch. */
   legacy?: boolean;
@@ -106,14 +106,30 @@ export function watchTier(plan: string): WatchTier | null { return (WATCH_TIERS 
 
 export const WATCH_FREE = { endpoints: 1, termDays: TERM_DAYS, label: "free tier, no test-buys" };
 export const WATCH_TRIAL = { days: 14, capUsd: 0.25, endpoints: WATCH_TIERS.watch_plus_trial.maxEndpoints, label: "Watch Plus free trial" };
-/** Volume and prepay discounts (they stack multiplicatively: 10+ endpoints prepaid for 3 terms = 0.8 × 0.9 = 28% off). */
+/** Volume and prepay discounts. They do NOT stack: when both apply (10+ endpoints prepaid for 3 terms) only the larger
+ *  one is used (20% volume), never 0.8 × 0.9. */
 export const WATCH_DISCOUNTS = { volumeMinEndpoints: 10, volume: 0.2, prepayTerms: 3, prepay: 0.1, maxEndpoints: 20 };
 
 export interface WatchPrice {
   plan: PlanId; endpoints: number; terms: number; unit_usd: number; list_usd: number;
-  volume_discount: number; prepay_discount: number; total_usd: string; per_term_usd: number; per_endpoint_term_usd: number;
+  /** The discount actually applied (only one: the larger of the eligible ones) and which one it is. */
+  discount: number; discount_applied: "volume" | "prepay" | null;
+  /** Applied rate per kind (the one not applied is 0, even if eligible). */
+  volume_discount: number; prepay_discount: number;
+  /** Eligible but not applied because discounts do not stack. */
+  discount_not_stacked?: "volume" | "prepay";
+  total_usd: string; per_term_usd: number; per_endpoint_term_usd: number;
 }
 const cents = (x: number) => Math.round(x * 100) / 100;
+/** The single discount for N endpoints × T terms: the larger of the eligible volume / prepay discounts (no stacking). */
+export function watchDiscount(endpoints: number, terms: number): { rate: number; kind: "volume" | "prepay" | null; not_stacked?: "volume" | "prepay" } {
+  const vol = endpoints >= WATCH_DISCOUNTS.volumeMinEndpoints ? WATCH_DISCOUNTS.volume : 0;
+  const pre = terms === WATCH_DISCOUNTS.prepayTerms ? WATCH_DISCOUNTS.prepay : 0;
+  if (!vol && !pre) return { rate: 0, kind: null };
+  const kind = vol >= pre ? "volume" : "prepay";
+  const other = kind === "volume" ? (pre ? "prepay" : undefined) : (vol ? "volume" : undefined);
+  return { rate: Math.max(vol, pre), kind, ...(other ? { not_stacked: other } : {}) };
+}
 /** Price of N endpoints × T terms of a Watch tier. Terms is 1 or 3 (prepay); anything else is invalid. */
 export function watchPrice(plan: PlanId, endpoints: number, terms = 1): WatchPrice | null {
   const p = PLANS[plan];
@@ -121,11 +137,12 @@ export function watchPrice(plan: PlanId, endpoints: number, terms = 1): WatchPri
   if (!Number.isInteger(endpoints) || endpoints < 1 || endpoints > WATCH_DISCOUNTS.maxEndpoints) return null;
   if (terms !== 1 && terms !== WATCH_DISCOUNTS.prepayTerms) return null;
   const unit = Number(p.usd);
-  const vd = endpoints >= WATCH_DISCOUNTS.volumeMinEndpoints ? WATCH_DISCOUNTS.volume : 0;
-  const pd = terms === WATCH_DISCOUNTS.prepayTerms ? WATCH_DISCOUNTS.prepay : 0;
+  const d = watchDiscount(endpoints, terms);
   const list = unit * endpoints * terms;
-  const total = cents(list * (1 - vd) * (1 - pd));
-  return { plan, endpoints, terms, unit_usd: unit, list_usd: list, volume_discount: vd, prepay_discount: pd, total_usd: String(total), per_term_usd: Math.round((total / terms) * 1e6) / 1e6, per_endpoint_term_usd: Math.round((total / terms / endpoints) * 1e6) / 1e6 };
+  const total = cents(list * (1 - d.rate));
+  return { plan, endpoints, terms, unit_usd: unit, list_usd: list, discount: d.rate, discount_applied: d.kind,
+    volume_discount: d.kind === "volume" ? d.rate : 0, prepay_discount: d.kind === "prepay" ? d.rate : 0,
+    ...(d.not_stacked ? { discount_not_stacked: d.not_stacked } : {}), total_usd: String(total), per_term_usd: Math.round((total / terms) * 1e6) / 1e6, per_endpoint_term_usd: Math.round((total / terms / endpoints) * 1e6) / 1e6 };
 }
 
 export const FEED_LIMITS = {
@@ -147,7 +164,7 @@ export function isTestWallet(addr: string | null | undefined, extra: string[] = 
 
 export const TEST_PRICE_USD = "0.01";
 
-/** Price of a plan payment. Watch tiers: per-endpoint price × endpoints × terms, less volume/prepay discounts. */
+/** Price of a plan payment. Watch tiers: per-endpoint price × endpoints × terms, less the larger of the volume/prepay discounts. */
 export function planPriceUsd(plan: PlanId, test: boolean, testPrice = TEST_PRICE_USD, qty: { endpoints?: number; terms?: number } = {}): string {
   if (test) return testPrice;
   if (PLANS[plan].perEndpoint) return watchPrice(plan, qty.endpoints ?? 1, qty.terms ?? 1)?.total_usd ?? PLANS[plan].usd;
@@ -160,7 +177,7 @@ export function planPriceUsd(plan: PlanId, test: boolean, testPrice = TEST_PRICE
 export function planQuote(cfg: Config, plan: PlanId, subject: string, usd: string, resourceUrl: string, test: boolean, qty: { endpoints?: number; terms?: number } = {}): Quote {
   const p = PLANS[plan];
   const n = qty.endpoints ?? 1, terms = qty.terms ?? 1;
-  const qtyText = p.perEndpoint ? ` ${n} endpoint${n === 1 ? "" : "s"} × ${terms} term${terms === 1 ? "" : "s"} of 30 days, priced per endpoint per term${n >= WATCH_DISCOUNTS.volumeMinEndpoints ? ", -20% volume" : ""}${terms === WATCH_DISCOUNTS.prepayTerms ? ", -10% prepay" : ""}.` : "";
+  const qtyText = p.perEndpoint ? ` ${n} endpoint${n === 1 ? "" : "s"} × ${terms} term${terms === 1 ? "" : "s"} of 30 days, priced per endpoint per term${(() => { const d = watchDiscount(n, terms); return d.kind ? `, -${d.rate * 100}% ${d.kind}${d.not_stacked ? " (discounts do not stack)" : ""}` : ""; })()}.` : "";
   const rate = cfg.xrpRate?.usd ?? cfg.xrpUsdFallback;
   const amountsIou: Record<string, string> = {};
   for (const o of cfg.ious) amountsIou[o.symbol] = usd;
@@ -202,6 +219,6 @@ export const iso = (t: number | null | undefined) => (t == null ? null : new Dat
 /** One-line monitoring price text shared by MCP, A2A and docs (keep in sync with the site: lumitrades.io/agents/ and /trust/). */
 export const MONITOR_PRICE_TEXT =
   `For x402 sellers, priced per endpoint per 30 days: Watch $${PLANS.watch.usd} (hourly quote checks, weekly test-buy), Watch Plus $${PLANS.watch_plus.usd} (15-30 min checks, daily test-buy rotating chains, schema/p95 alerts), ` +
-  `Watch Pro $${PLANS.watch_pro.usd} (15 min checks, daily test-buys on up to 3 chains, signed monthly report); ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}%. ` +
+  `Watch Pro $${PLANS.watch_pro.usd} (15 min checks, daily test-buys on up to 3 chains, signed monthly report); ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}% (discounts do not stack: the larger applies). ` +
   `Audit $${PLANS.audit.usd} one-off (every listed endpoint, signed report). Free Watch tier (${WATCH_FREE.endpoints} endpoint, daily quote check, no test-buys) and a one-per-seller ${WATCH_TRIAL.days}-day Watch Plus trial (no card, never converts). ` +
   `Legacy Monitor/Monitor Plus are grandfathered.`;

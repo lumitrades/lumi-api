@@ -86,6 +86,7 @@ export function watchEconomics(e: Enrollment, plan: PlanId, endpoints: number, t
   return {
     price_usd: price.total_usd, price_per_endpoint_usd: PLANS[plan].usd, endpoints, terms,
     ...(price.volume_discount ? { volume_discount: price.volume_discount } : {}), ...(price.prepay_discount ? { prepay_discount: price.prepay_discount } : {}),
+    ...(price.discount_not_stacked ? { discount_not_stacked: price.discount_not_stacked } : {}),
     ...(e.is_test ? { test_price_usd: TEST_PRICE_USD } : {}),
     endpoints_covered: eps.length,
     test_buys_planned_per_term: spend.reduce((s, x) => s + x.buys, 0),
@@ -205,7 +206,8 @@ export function createMonitor(deps: CommerceDeps) {
       pricing: {
         per_endpoint: `Watch $${PLANS.watch.usd}, Watch Plus $${PLANS.watch_plus.usd}, Watch Pro $${PLANS.watch_pro.usd} per endpoint per 30 days; price = per-endpoint price × endpoints.`,
         volume_discount: `${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints: -${WATCH_DISCOUNTS.volume * 100}%.`,
-        prepay_discount: `Prepay ${WATCH_DISCOUNTS.prepayTerms} terms (&terms=${WATCH_DISCOUNTS.prepayTerms}): -${WATCH_DISCOUNTS.prepay * 100}%. Discounts stack (0.8 × 0.9).`,
+        prepay_discount: `Prepay ${WATCH_DISCOUNTS.prepayTerms} terms (&terms=${WATCH_DISCOUNTS.prepayTerms}): -${WATCH_DISCOUNTS.prepay * 100}%.`,
+        discounts_combine: `Discounts do not stack: with ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints and ${WATCH_DISCOUNTS.prepayTerms} prepaid terms only the larger one applies (-${Math.max(WATCH_DISCOUNTS.volume, WATCH_DISCOUNTS.prepay) * 100}%).`,
         test_buy_budget: `Seller-funded test-buys never exceed ${MONITOR_LIMITS.budgetShare * 100}% of the fee.`,
         example: (() => { const x = watchPrice("watch_plus", 10, 1)!; return `Watch Plus for 10 endpoints, 1 term: $${x.total_usd}.`; })(),
       },
@@ -418,7 +420,7 @@ export function createMonitor(deps: CommerceDeps) {
       const row = rows[0], last = rows[rows.length - 1];
       return json(201, {
         paid: true, plan: def.name, plan_id: row.id, ...(rows.length > 1 ? { plan_ids: rows.map((r) => r.id) } : {}), enrollment_id: e.id, ...(e.is_test ? { test: true, price_usd: usd } : { price_usd: usd }),
-        ...(wp ? { endpoint_count: qty.endpoints, terms: qty.terms, price_per_endpoint_usd: def.usd, list_usd: String(wp.list_usd), discounts: { volume: wp.volume_discount, prepay: wp.prepay_discount } } : {}),
+        ...(wp ? { endpoint_count: qty.endpoints, terms: qty.terms, price_per_endpoint_usd: def.usd, list_usd: String(wp.list_usd), discounts: { volume: wp.volume_discount, prepay: wp.prepay_discount, applied: wp.discount_applied, ...(wp.discount_not_stacked ? { not_stacked: wp.discount_not_stacked } : {}) } } : {}),
         starts_at: iso(row.starts_at), ...(plan === "audit" ? { one_off: true, report_due_by: iso(row.starts_at + 2 * DAY_MS) } : { ends_at: iso(last.ends_at) }), auto_renew: false,
         ...(plan === "audit" ? {} : { renew: `${resourceUrl}?enrollment=${e.id}${qs}` }), endpoints: planEndpoints(e, plan, per ? qty.endpoints : null).map(epView),
         seller_page: `${base}/v1/monitor/sellers/${e.id}`, status_page: `${base}/v1/monitor/status/${e.id}`, badge: `${base}/v1/monitor/badge/${e.id}.svg`,
