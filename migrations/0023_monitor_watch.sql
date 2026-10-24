@@ -1,7 +1,7 @@
 -- Per-endpoint Watch plans (Watch $5 / Watch Plus $12 / Watch Pro $20 per endpoint per 30 days), the free Watch tier,
 -- the one-per-seller 14-day Watch Plus trial, and daily uptime rollups from the operator-box quote probe.
 -- Additive only: existing monitor / monitor_plus / audit rows are untouched and keep working to their term end.
--- Numbered 0022 because other local branches already use 0015-0021; renumber if needed when merging.
+-- Numbered 0023: 0015-0022 are taken on other local branches (scanner-kit-v0 uses 0015-0022, free-check-priority 0022). Renumber when merging.
 -- NOT applied anywhere yet. Apply to prod D1 BEFORE deploying the Worker that writes these columns.
 
 -- Endpoint count a Watch plan row covers (NULL = legacy semantics: plan id decides) and its per-endpoint price.
