@@ -3,7 +3,7 @@
  * used by the Worker entry (src/index.ts) and the Node server (src/node.ts).
  */
 
-import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCOME_FIELDS, OUTCOME_RETENTION_DAYS, type OutcomeStore } from "./trust/outcomes";
+import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCOME_FIELDS, OUTCOME_RETENTION_DAYS, OUTCOME_SUMMARY_RETENTION, type OutcomeStore } from "./trust/outcomes";
 import { createBadges } from "./trust/badge";
 import { setPrivateNames } from "./sanitize";
 import { loadConfig, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, type Config, type Env, type PaidRoute } from "./config";
@@ -797,7 +797,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       let body: unknown; try { body = JSON.parse(text); } catch { body = null; }
       const p = parseOutcome(body);
       if (!p.ok) return json(400, { ...p, allowed: OUTCOME_FIELDS, note: "Tier 1 accepts only an anonymous delivery outcome. Nothing was stored." }, noStore);
-      return json(202, { ok: true, status: outcomes.record(p), stored: "aggregate_counter_only", note: "Not linked to you; not a scoring input. Turn off with LUMI_CHECK_TELEMETRY=off or `lumi-scan telemetry off`." }, noStore);
+      const status = outcomes.record(p);
+      if (ctx && outcomes.due()) ctx.waitUntil(outcomes.flush().catch(() => 0));
+      return json(202, { ok: true, status, stored: "aggregate_counter_only", note: "Not linked to you; not a scoring input. Turn off with LUMI_CHECK_TELEMETRY=off or `lumi-scan telemetry off`." }, noStore);
     }
     // Lumi Check v0: free signed pre-pay check, signing keys, earned-only signed badge.
     if (request.method === "GET" || request.method === "HEAD") {
@@ -838,7 +840,12 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       if (!(await ownerReq(request))) return json(401, { error: "owner_key_required" }, { "Cache-Control": "no-store", "WWW-Authenticate": "Bearer" });
       await outcomes.flush();
       const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") ?? "7") || 7));
-      return json(200, { kind: "lumi_check_outcomes", retention_days: OUTCOME_RETENTION_DAYS, rows: await outcomes.store.list(new Date(now() - days * 86_400_000).toISOString().slice(0, 10), 1000) }, { "Cache-Control": "no-store" });
+      const sdays = Math.min(3650, Math.max(1, Number(url.searchParams.get("summary_days") ?? "30") || 30));
+      const since = (n: number) => new Date(now() - n * 86_400_000).toISOString().slice(0, 10);
+      return json(200, {
+        kind: "lumi_check_outcomes", retention_days: OUTCOME_RETENTION_DAYS, summaries_kept: OUTCOME_SUMMARY_RETENTION,
+        rows: await outcomes.store.list(since(days), 1000), summaries: await outcomes.store.summaries(since(sdays), 5000),
+      }, { "Cache-Control": "no-store" });
     }
     // Owner-only sales ledger summary (Authorization: Bearer <OWNER_MCP_KEY>). Excludes Lumi's own test wallets.
     if (path === "/v1/owner/sales") {
@@ -1197,8 +1204,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     async scheduled() {
       // Contributor retention purge: once a day (03:07 UTC tick of the per-minute cron).
       const d = new Date(now());
-      const contribPurge = d.getUTCHours() === 3 && d.getUTCMinutes() === 7 ? contributors.purge().catch(() => {}) : Promise.resolve();
-      const prune = Promise.all([trafficBuf.flush().catch(trafficErr), outcomes.flush().then(() => outcomes.purge()).catch(() => {}), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge]);
+      const nightly = d.getUTCHours() === 3 && d.getUTCMinutes() === 7;
+      const contribPurge = nightly ? contributors.purge().catch(() => {}) : Promise.resolve();
+      const prune = Promise.all([trafficBuf.flush().catch(trafficErr), (nightly ? outcomes.nightly().then((r) => deps.log?.({ event: "check_outcomes_nightly", ...r, rolled: r.rolled.length, rerolled: r.rerolled.length, purged_days: r.purged_days.length })) : outcomes.flush()).catch(() => {}), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge]);
       const [probes, cat, , com] = await Promise.allSettled([trust.runProbes(), catalog.cron(), prune, commerce.cron(config.publicBaseUrl ?? "https://api.lumitrades.io")]);
       return {
         probes: probes.status === "fulfilled" ? probes.value : { error: String(probes.reason) },
