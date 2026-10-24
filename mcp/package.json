@@ -48,10 +48,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cypher-osiris/lumi-api.git",
+    "url": "git+https://github.com/lumitrades/lumi-api.git",
     "directory": "mcp"
   },
   "homepage": "https://lumitrades.io/agents/",
+  "bugs": {
+    "url": "https://github.com/lumitrades/lumi-api/issues"
+  },
   "license": "MIT",
   "engines": {
     "node": ">=20"

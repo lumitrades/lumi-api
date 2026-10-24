@@ -4,7 +4,7 @@
   "title": "Lumi Trades: x402 seller checks, market data, Market Ideas",
   "description": "Lumi: x402 seller checks, crypto market data, signals for 51 coins (paper-trade analysis)",
   "repository": {
-    "url": "https://github.com/cypher-osiris/lumi-api",
+    "url": "https://github.com/lumitrades/lumi-api",
     "source": "github",
     "subfolder": "mcp"
   },
