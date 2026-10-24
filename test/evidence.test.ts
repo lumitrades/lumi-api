@@ -174,9 +174,12 @@ describe("evidence: lookups and trust/check", () => {
     expect(await r.json()).toMatchObject({ received: 2, matched: 1, unmatched_keys: ["unknown.example/x"] });
     const free = await get("/v1/trust/vendors?url=" + encodeURIComponent("https://api.bseller.com/v1/q"));
     expect(free.body.catalog.entries[0].third_party.vet402).toMatchObject({ license: "CC BY 4.0", l0: { verdict: "fail" } });
+    // The free lookup by exact URL already sends the priority signal (same rule as the paid check since Oct 23 2026).
+    expect(ev.queue.get("https://api.bseller.com/v1/q")).toMatchObject({ status: "queued", hits: 1 });
     const u = "/v1/trust/check?url=" + encodeURIComponent("https://api.bseller.com/v1/q");
-    await req(u); // unpaid quote: never queues
-    expect(ev.queue.size).toBe(0);
+    await req(u); // unpaid quote: never queues or adds hits
+    expect(ev.queue.size).toBe(1);
+    expect(ev.queue.get("https://api.bseller.com/v1/q")!.hits).toBe(1);
     const paid = await buy(u);
     expect(paid.body.reasons.find((x: any) => x.code === "vet402_l0_fail")?.severity).toBe("warn");
     expect(paid.body.reasons.map((x: any) => x.code)).toContain("no_bazaar_usage");
@@ -184,6 +187,7 @@ describe("evidence: lookups and trust/check", () => {
     const q = await get("/v1/trust/catalog/buy-queue", owner);
     expect(q.body.rows[0]).toMatchObject({ resource: "https://api.bseller.com/v1/q", status: "queued", network: "eip155:8453" });
     expect(q.body.rows[0].reasons).toContain("vet402_l0_fail");
+    expect(q.body.rows[0].hits).toBe(1); // same seller, same UTC day: the paid check adds nothing
     const sum = await get("/v1/trust/catalog");
     expect(JSON.stringify(sum.body)).not.toMatch(/vet402.*purchase_verified/);
   });
