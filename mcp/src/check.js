@@ -1,5 +1,5 @@
 /**
- * Lumi Check from code, for agents that pay x402 sellers themselves (branch scanner-kit-v0, unpublished).
+ * Lumi Check from code, for agents that pay x402 sellers themselves (unpublished).
  *   import { lumiCheckHooks } from "lumi-trades-mcp/src/check.js";
  *   const { lumi, x402Hook, mcpHook } = await lumiCheckHooks();
  *   x402Client.onBeforePaymentCreation(x402Hook);     // aborts when Lumi says "block"

@@ -809,7 +809,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const r = await trust.handle(request, path, base);
       if (r) return r;
     }
-    // Lumi Check v0 (DRAFT, branch scanner-kit-v0): contributor-signed receipts + owner key management.
+    // Lumi Check v0 (DRAFT, not deployed): contributor-signed receipts + owner key management.
     if (path.startsWith("/v1/contrib/") || path === "/v1/owner/contributors" || path.startsWith("/v1/owner/contributors/")) {
       const r = await contributors.handle(request, path);
       if (r) return r;
