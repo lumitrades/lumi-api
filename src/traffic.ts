@@ -66,6 +66,20 @@ export function uaClass(ua: string | null | undefined): string {
   return "other";
 }
 
+/** Short UA family: the "(compatible; Name/1.0" product for Mozilla-style bot UAs, else the first product token. */
+export function uaFamily(ua: string | null | undefined): string {
+  const u = (ua ?? "").trim();
+  if (!u) return "none";
+  const compat = /\(compatible;\s*([^;)\s]+)/i.exec(u);
+  const tok = compat && /^mozilla\//i.test(u) ? compat[1] : u.split(/[\s(]/)[0];
+  return tok.replace(/[^\x21-\x7e]/g, "").slice(0, 28) || "other";
+}
+
+/** Client type stored on each sale: "<ua_class>: <UA family>", at most 40 chars. Built from the User-Agent only (no IP). */
+export function clientLabel(ua: string | null | undefined): string {
+  return `${uaClass(ua)}: ${uaFamily(ua)}`.slice(0, 40);
+}
+
 /** Pathname with secrets stripped: /mcp/<owner key> becomes /mcp/:key. Capped at 200 chars. */
 export function safePath(pathname: string): string {
   const p = pathname.startsWith("/mcp/") ? "/mcp/:key" : pathname;

@@ -68,7 +68,7 @@ const SKILLS: SkillDef[] = [
   { id: "slate", route: "slate", name: "Lumi Market Ideas: paper-trade slate (current ideas)", tags: ["crypto", "trade-ideas", "paper-trading", "market-ideas", "paid"], examples: ["current trade ideas"], match: /\b(slate|ideas?|setups?)\b/i },
   { id: "market", route: "market", name: "BTC + macro market backdrop", tags: ["crypto", "bitcoin", "macro", "paid"], examples: ["BTC macro backdrop"], match: /\b(market|backdrop|macro|dominance)\b/i },
   { id: "macro_yen", route: "yen", name: "Yen carry-trade watch (USD/JPY, Nikkei)", tags: ["macro", "yen", "carry-trade", "japan", "paid"], examples: ["yen carry trade risk"], match: /\b(yen|jpy|usd\/?jpy|nikkei|carry|japan|boj)\b/i },
-  { id: "funding", route: "funding", name: "Perpetual funding rates (50 coins)", tags: ["crypto", "funding", "perpetuals", "derivatives", "paid"], examples: ["funding rates"], match: /\bfunding\b/i },
+  { id: "funding", route: "funding", name: "Perpetual funding rates (OKX perps)", tags: ["crypto", "funding", "perpetuals", "derivatives", "paid"], examples: ["funding rates"], match: /\bfunding\b/i },
   { id: "fear_greed", route: "fear_greed", name: "Fear & Greed (CoinMarketCap, with history)", tags: ["crypto", "sentiment", "fear-greed", "paid"], examples: ["fear and greed index"], match: /\bfear\b.*\bgreed\b|\bfear[-_ ]?greed\b/i },
   { id: "events_48h", route: "events_48h", name: "Events in the next 48 hours", tags: ["macro", "events", "calendar", "48h", "paid"], examples: ["what's scheduled in the next 48 hours?"], match: /\b(48 ?h(ours)?|next two days|tomorrow)\b/i },
   { id: "sentiment", route: "sentiment", name: "Crypto sentiment (Fear & Greed, funding)", tags: ["crypto", "sentiment", "fear-greed", "funding", "paid"], examples: ["fear and greed"], match: /\b(sentiment|fear|greed|funding|mood)\b/i },
@@ -96,7 +96,7 @@ const SKILLS: SkillDef[] = [
 
 const FREE_DESCRIPTIONS: Record<string, string> = {
   catalog: "Lists every Lumi endpoint with live prices on every payment network (XRP Ledger, Base, Stellar), the MCP and A2A endpoints, and the no-charge-when-stale guarantee.",
-  coins: "The 50 coins Lumi covers (tickers and CoinGecko ids). Lumi Market Ideas (paper-trade analysis, not investment advice): signals for all, levels for the watchlist and majors.",
+  coins: "The 51 coins Lumi covers (tickers and CoinGecko ids). Lumi Market Ideas (paper-trade analysis, not investment advice): signals for all 51; levels only for the 14 watchlist and major coins.",
   vendor_trust:
     "Check an x402 seller before paying it: {\"url\":\"...\"}, {\"domain\":\"...\"} or {\"payTo\":\"...\"} (case-insensitive) looks it up in the full CDP x402 Bazaar catalog (free quote checks of listings on a rotating schedule: 'quote-verified, low confidence'; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys ('purchase-verified', counted per chain: Base USDC for Bazaar listings, XRPL for a small curated list). Answer-only; tx evidence is in the paid trust check. With no arguments: curated XRPL vendor observations; {\"vendor_id\":\"...\"} for one vendor's summary. Observations, not ratings; no match is not a negative signal.",
   samples: "Free, clearly labelled SAMPLE previews of every paid product (truncated, up to 10 minutes old), with the USD price of each. Use it to see the output shape before paying.",
@@ -140,7 +140,7 @@ export function agentCard(cfg: Config, base: string) {
       "(free lookup, paid check, vendor reports); signed delivery receipts come with paid vendor reports and Feed catalog lookups, verifiable free. " +
       "Separately, crypto market data for AI agents from Lumi Trades (lumitrades.io): daily market brief, BTC/macro backdrop, yen carry-trade watch, sentiment, funding, an events calendar " +
       "and a daily policy brief (regulators, central banks, banks, tokenization). " +
-      `And ${MARKET_IDEAS_NAME}, a separate product line (${MARKET_IDEAS_NOTICE}): per-coin signals, lite reads, the all-coins scan, support/resistance levels and paper-trade ideas and history (signals cover the top 50 coins; levels and paper trades cover 13 tracked coins). ` +
+      `And ${MARKET_IDEAS_NAME}, a separate product line (${MARKET_IDEAS_NOTICE}): per-coin signals, lite reads, the all-coins scan, support/resistance levels and paper-trade ideas and history (signals cover 51 coins; levels and paper trades cover 14 watchlist and major coins). ` +
       `Pay per call over x402 v2 with no API key or account, in ${settledIn(cfg)}. Also available as a remote MCP server. Analytics only, not financial advice.`,
     // A2A 1.0
     supportedInterfaces: A2A_VERSIONS.map((v) => ({ url: a2aUrl, protocolBinding: "JSONRPC", protocolVersion: v })),

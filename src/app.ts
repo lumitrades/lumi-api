@@ -44,7 +44,7 @@ import { D1LiveStore, MemoryLiveStore, refreshLive, isFresh, LIVE_UNIVERSE, LIVE
 import { mcpServerCard, agentsJson } from "./wellknown";
 import { MARKET_IDEAS_HEADERS, MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, MARKET_IDEAS_PATH_RE, TRUST_DISCLAIMER } from "./lines";
 import { D1IdempotencyStore, MemoryIdempotencyStore, type IdempotencyStore } from "./idempotency";
-import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, type SalesStore, type AlertConfig } from "./sales";
+import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, type SalesStore, type AlertConfig } from "./sales";
 
 export interface AppOptions {
   fetch?: typeof fetch;
@@ -208,8 +208,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     ...deps,
     onSale: async (sale) => {
       const row = toRow(sale, now(), extraTestWallets);
-      const inserted = await sales.insert(row).catch((e) => {
-        deps.log?.({ event: "sale_record_error", tx: row.tx, error: String(e) });
+      const inserted = await insertWithRetry(sales, row).catch((e) => {
+        // Both attempts failed: log the whole row (public addresses only, no IP) so it can be backfilled from Workers Logs.
+        deps.log?.({ event: "sale_record_error", tx: row.tx, error: String(e), row });
         return true;
       });
       if (inserted && alertEnabled(alertCfg)) {

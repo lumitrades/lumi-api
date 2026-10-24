@@ -120,7 +120,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   levels: {
     description:
-      "Lumi Market Ideas. Support and resistance levels for one of 13 tracked coins (XRP, BTC, ETH, HBAR, XLM and more), with a bias label, rule-based 7-day bull/base/bear scenario levels (not forecasts), commentary, dated catalysts and cited sources. Use for price reference levels on one coin. Paper-trade analysis, not investment advice. Lumi does not trade real money. Other coins return 404 without charge; see /v1/coins. Not charged on stale data.",
+      "Lumi Market Ideas. Support and resistance levels for one of 14 watchlist and major coins (XRP, BTC, ETH, HBAR, XLM and more), with a bias label, rule-based 7-day bull/base/bear scenario levels (not forecasts), commentary, dated catalysts and cited sources. Use for price reference levels on one coin. Paper-trade analysis, not investment advice. Lumi does not trade real money. Other coins return 404 without charge; see /v1/coins. Not charged on stale data.",
     routeTemplate: "/v1/levels/:coin",
     pathParam: COIN_PARAM,
     example: {
@@ -155,12 +155,12 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   market: {
     description:
-      "Crypto market backdrop in one call: BTC support/resistance and bias, macro context (total market cap, BTC dominance, Fear & Greed, USD/JPY note, BTC perpetual funding and open interest) and 24h breadth across 13 tracked coins. Use when an agent needs the overall market context before analysing individual coins. Analytics only, not financial advice. Not charged on stale data.",
+      "Crypto market backdrop in one call: BTC support/resistance and bias, macro context (total market cap, BTC dominance, Fear & Greed, USD/JPY note, BTC perpetual funding and open interest) and 24h breadth across 14 tracked coins. Use when an agent needs the overall market context before analysing individual coins. Analytics only, not financial advice. Not charged on stale data.",
     example: {
       kind: "market",
       btc_backdrop: { bias: "soft", support: [80000, 81000], resistance: [82500, 84800] },
       macro: { total_mcap_usd: 2742576601668, btc_dominance_pct: 60.04, fear_greed: { value: 49, classification: "Neutral" } },
-      breadth: { coins_tracked: 13, up_24h: 1, down_24h: 12 },
+      breadth: { coins_tracked: 14, up_24h: 1, down_24h: 13 },
       ...FRESH("2026-10-22T11:05:00Z", "2026-10-22T23:05:00Z"),
       payment: pay("market"),
     },
@@ -202,7 +202,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
       fear_greed: { value: 49, classification: "Neutral", previous: 54, change: -5 },
       derivatives: { instrument: "BTC-USDT-SWAP (OKX)", funding_rate_pct: 0.00657, open_interest_usd: 2462680121 },
       global: { total_mcap_usd: 2742576601668, btc_dominance_pct: 60.04 },
-      breadth: { coins_tracked: 13, up_24h: 1, down_24h: 12 },
+      breadth: { coins_tracked: 14, up_24h: 1, down_24h: 13 },
       ...FRESH("2026-10-22T11:05:00Z", "2026-10-22T23:05:00Z"),
       payment: pay("sentiment"),
     },
@@ -333,7 +333,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   funding: {
     description:
-      "Perpetual funding rates for the top-50 coins listed on OKX USDT swaps: rate, 8h-normalised rate, annualised rate, next funding time and a plain-English read, plus the BTC read, the median and the most positive and negative coins (XRP, BTC, ETH and the rest). Positive means longs pay shorts. Refreshed every 15 minutes. Use when an agent needs derivatives positioning data across many coins. Analytics only, not financial advice. Not charged on stale data.",
+      "Perpetual funding rates for every Lumi coin listed on OKX USDT swaps: rate, 8h-normalised rate, annualised rate, next funding time and a plain-English read, plus the BTC read, the median and the most positive and negative coins (XRP, BTC, ETH and the rest). Positive means longs pay shorts. Refreshed every 15 minutes. Use when an agent needs derivatives positioning data across many coins. Analytics only, not financial advice. Not charged on stale data.",
     example: {
       kind: "funding",
       venue: "OKX USDT perpetual swaps",
@@ -449,10 +449,10 @@ const HEADLINES: Record<PaidRoute, (subject?: string) => string> = {
   trades: () => "Crypto paper-trade history (entries, stops, targets, status)",
   institutional: () => "Daily institutional & policy brief for digital assets (regulators, banks, tokenization)",
   vendor_report: (v) => `x402 vendor trust report${v ? ` for ${v}` : ""} (uptime, latency, test-buys)`,
-  scan: () => "Crypto market scan: buy/sell signals for 50 coins in one call",
+  scan: () => "Crypto market scan: buy/sell signals for 50 large-cap coins in one call",
   lite: (c) => (c ? `${c} lite trading signal (label, score, price)` : "Crypto lite trading signal (label, score, price)"),
   trust_check: () => "Should I pay this x402 URL? allow/warn/block check",
-  funding: () => "Crypto perpetual funding rates (50 coins, OKX)",
+  funding: () => "Crypto perpetual funding rates (OKX perps)",
   fear_greed: () => "Crypto Fear & Greed index (CoinMarketCap, 30-day history)",
   events_48h: () => "Crypto and macro events in the next 48 hours",
 };

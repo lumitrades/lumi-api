@@ -57,7 +57,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     template: "/v1/scan",
     summary:
       MARKET_IDEAS_LABEL + " " +
-      "Use this when you need to screen the whole market in one call instead of 50: label, score, 1h/4h/1d labels, 1h RSI, price and 24h change for every top-50 coin (GET /v1/coins), strongest first, plus label counts and breadth. Computed live; 1h refreshed about every 13 minutes; freshness fields reflect the oldest coin included. Not sold when fewer than 40 coins are fresh. " + NOT_CHARGED,
+      "Use this when you need to screen the whole market in one call instead of 50: label, score, 1h/4h/1d labels, 1h RSI, price and 24h change for every coin in the live 50-coin universe (GET /v1/coins lists all 51 covered coins), strongest first, plus label counts and breadth. Computed live; 1h refreshed about every 13 minutes; freshness fields reflect the oldest coin included. Not sold when fewer than 40 coins are fresh. " + NOT_CHARGED,
     example: "/v1/scan",
   },
   {
@@ -139,12 +139,12 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "funding",
-    name: "Lumi perpetual funding rates (50 coins)",
+    name: "Lumi perpetual funding rates (OKX perps)",
     method: "GET",
     path: "/v1/funding",
     template: "/v1/funding",
     summary:
-      "Use this when you need derivatives positioning: the current perpetual funding rate for every top-50 coin listed on OKX (rate, 8h-normalised, annualised, next funding time, plain-English read), BTC read, median and the most positive/negative. Refreshed every 15 minutes; positive = longs pay shorts. " + NOT_CHARGED,
+      "Use this when you need derivatives positioning: the current perpetual funding rate for every Lumi coin listed on OKX (rate, 8h-normalised, annualised, next funding time, plain-English read), BTC read, median and the most positive/negative. Refreshed every 15 minutes; positive = longs pay shorts. " + NOT_CHARGED,
     example: "/v1/funding",
   },
   {

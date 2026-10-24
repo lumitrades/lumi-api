@@ -40,7 +40,7 @@ export const TRIAL_EXCLUDED: PaidRoute[] = [];
 export const TRIAL_STATEMENT = "Lumi API free trial: sign to prove you control this wallet. This is not a payment and moves no funds.";
 
 export const TRIAL_SUMMARY =
-  `Free trial: ${TRIAL_LIMITS.perWallet} free calls per new wallet on every paid endpoint. ` +
+  `Free trial: ${TRIAL_LIMITS.perWallet} free calls per new wallet in total (not per endpoint), usable on any paid endpoint. ` +
   `Send the request with header X-Lumi-Trial: 1 and the 402 also carries extensions["sign-in-with-x"] (x402 SIWX, CAIP-122): sign it with a ` +
   `Base wallet holding at least 0.01 USDC (EIP-4361, @x402/extensions wrapFetchWithSIWx does this) or an activated XRP Ledger account ` +
   `(type "xrpl", ripple-keypairs signature plus publicKey) and retry with the SIGN-IN-WITH-X header. ` +

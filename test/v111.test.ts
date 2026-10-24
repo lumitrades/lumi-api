@@ -20,7 +20,7 @@ describe("v1.1.1 discovery files", () => {
       const r = await get(p);
       expect(r.status, p).toBe(200);
       const c = await r.json();
-      expect(c).toMatchObject({ name: "io.github.cypher-osiris/lumi-trades-mcp", version: "1.1.6", remotes: [{ type: "streamable-http", url: `${BASE}/mcp` }] });
+      expect(c).toMatchObject({ name: "io.github.cypher-osiris/lumi-trades-mcp", version: "1.1.7", remotes: [{ type: "streamable-http", url: `${BASE}/mcp` }] });
       expect(c.$schema).toMatch(/server-card/);
       expect(c.description).toMatch(/^Lumi Trust/);
     }

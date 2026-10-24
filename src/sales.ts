@@ -11,6 +11,7 @@ export const OWN_WALLETS = [
   "rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM", // XRPL main (pay-to)
   "rpvsTYDZmX1j1ndmEFG6YjjZZwp6VRtQRz", // XRPL demo buyer (test-buys)
   "GCKTH26VNR4H4WLCXS5DX6563XRQQXWP5QKQWFD6CHOGTZJ2N5GKBU2L", // Stellar wallet (pay-to + test-buyer)
+  "4LDMGj8V3zCtsXhcNynncstLbfncPhF3GG46eken8EFC", // Solana buyer (test-buys; public address)
 ];
 
 export interface SaleEvent {
@@ -25,11 +26,14 @@ export interface SaleEvent {
   payer?: string;
   tx: string;
   facilitator?: string;
+  /** Client type of the paying request: "<ua_class>: <UA family>" (<= 40 chars, from the User-Agent; never an IP). */
+  client?: string;
   ts?: number;
 }
 
-export interface SaleRow extends Required<Omit<SaleEvent, "routeKey" | "usd" | "payer" | "facilitator">> {
+export interface SaleRow extends Required<Omit<SaleEvent, "routeKey" | "usd" | "payer" | "facilitator" | "client">> {
   routeKey: string | null;
+  client: string | null;
   usd: number | null;
   payer: string | null;
   facilitator: string | null;
@@ -56,17 +60,29 @@ export class MemorySalesStore implements SalesStore {
 export class D1SalesStore implements SalesStore {
   constructor(private db: D1Like) {}
   async insert(r: SaleRow): Promise<boolean> {
-    const res = (await this.db
-      .prepare(
-        "INSERT OR IGNORE INTO sales (ts, route, route_key, rail, network, asset, amount, usd, payer, tx, facilitator, is_test) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-      )
-      .bind(r.ts, r.route, r.routeKey, r.rail, r.network, r.asset, r.amount, r.usd, r.payer, r.tx, r.facilitator, r.isTest ? 1 : 0)
-      .run()) as { meta?: { changes?: number } } | undefined;
+    let res: { meta?: { changes?: number } } | undefined;
+    try {
+      res = (await this.db
+        .prepare(
+          "INSERT OR IGNORE INTO sales (ts, route, route_key, rail, network, asset, amount, usd, payer, tx, facilitator, is_test, client) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(r.ts, r.route, r.routeKey, r.rail, r.network, r.asset, r.amount, r.usd, r.payer, r.tx, r.facilitator, r.isTest ? 1 : 0, r.client)
+        .run()) as { meta?: { changes?: number } } | undefined;
+    } catch (e) {
+      // Migration 0023 (sales.client) not applied yet: record the sale without the client column rather than lose it.
+      if (!/no (such )?column|has no column named client/i.test(String(e))) throw e;
+      res = (await this.db
+        .prepare(
+          "INSERT OR IGNORE INTO sales (ts, route, route_key, rail, network, asset, amount, usd, payer, tx, facilitator, is_test) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        )
+        .bind(r.ts, r.route, r.routeKey, r.rail, r.network, r.asset, r.amount, r.usd, r.payer, r.tx, r.facilitator, r.isTest ? 1 : 0)
+        .run()) as { meta?: { changes?: number } } | undefined;
+    }
     return (res?.meta?.changes ?? 1) > 0;
   }
   async since(tsMs: number): Promise<SaleRow[]> {
     const out = (await this.db
-      .prepare("SELECT ts, route, route_key, rail, network, asset, amount, usd, payer, tx, facilitator, is_test FROM sales WHERE ts >= ? ORDER BY ts DESC LIMIT 5000")
+      .prepare("SELECT * FROM sales WHERE ts >= ? ORDER BY ts DESC LIMIT 5000")
       .bind(tsMs)
       .all()) as { results?: Record<string, unknown>[] };
     return (out.results ?? []).map((x) => ({
@@ -81,8 +97,20 @@ export class D1SalesStore implements SalesStore {
       payer: (x.payer as string) ?? null,
       tx: String(x.tx),
       facilitator: (x.facilitator as string) ?? null,
+      client: (x.client as string) ?? null,
       isTest: Number(x.is_test) === 1,
     }));
+  }
+}
+
+/** Record a sale, retrying once on a transient D1 error (a single D1 "internal error" lost the first Stellar sale row).
+ *  Returns true when the row was written or already existed; throws only when both attempts fail. */
+export async function insertWithRetry(store: SalesStore, row: SaleRow, waitMs = 250): Promise<boolean> {
+  try {
+    return await store.insert(row);
+  } catch {
+    await new Promise((r) => setTimeout(r, waitMs));
+    return store.insert(row);
   }
 }
 
@@ -105,6 +133,7 @@ export function toRow(e: SaleEvent, now: number, extraTestWallets: string[] = []
     payer: e.payer ?? null,
     tx: e.tx,
     facilitator: e.facilitator ?? null,
+    client: e.client ? e.client.slice(0, 40) : null,
     isTest: isOwnWallet(e.payer, extraTestWallets),
   };
 }
@@ -150,6 +179,7 @@ export async function salesSummary(store: SalesStore, now: number, opts: { inclu
       usd: r.usd,
       payer: r.payer,
       tx: r.tx,
+      ...(r.client ? { client: r.client } : {}),
       ...(r.isTest ? { is_test: true } : {}),
     })),
     note: "usd_list_total sums each sale's USD value: stablecoins at face value, XRP at the XRP actually received times the XRP/USD rate at settlement. Test wallets (Lumi's own wallets and demo buyers) are excluded from revenue.",

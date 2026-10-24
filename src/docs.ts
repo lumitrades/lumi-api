@@ -88,7 +88,7 @@ export const RECEIPT_DELIVERY_SCHEMA = {
   required: ["observed_at", "http_status", "data_returned", "outcome"],
 } as const;
 
-export const VERSION = "1.1.6";
+export const VERSION = "1.1.7";
 
 /** accepts[] indices: USDC on Base first (when configured), then XRP, then the XRPL stablecoins. */
 export function acceptsIndex(cfg: Config) {
@@ -721,7 +721,7 @@ lumitrades.io publishes market data, signals and analysis four times a day (6 AM
 
 ## Free trial: ${TRIAL_LIMITS.perWallet} calls per new wallet (Base or XRPL)
 
-Every paid endpoint (including \`/v1/institutional\`) can be tried for free, ${TRIAL_LIMITS.perWallet} calls per wallet, using the
+Any paid endpoint (including \`/v1/institutional\`) can be tried for free: ${TRIAL_LIMITS.perWallet} calls per wallet in total (not per endpoint), using the
 x402 **sign-in-with-x** extension (CAIP-122). Nothing is charged and no funds move. It works with a Base wallet or an XRP Ledger
 wallet; it is one trial per wallet (one shared ledger and the same caps for both chains, not 3 per chain).
 
@@ -755,6 +755,7 @@ ${xrplTrialSnippet(base, cfg.network)}
 ## How payment works
 
 \`accepts[]\` order: ${acceptsOrder(cfg)}. Choose by \`network\` + \`asset\`, not by position; all options share one invoice that can be paid once.
+**Pay address:** always take Lumi's pay address (\`payTo\`) from the live 402 payment response or \`${base}/.well-known/x402\`, never from transaction history or a past transfer.
 ${cfg.evm ? `Most x402 clients (\`@x402/fetch\` + \`@x402/evm\`) simply take \`accepts[0]\`, USDC on ${cfg.evm.networkName}: see "Paying with USDC" below. The XRPL flow:
 ` : ""}
 1. \`GET ${base}/v1/signal/${EXAMPLE_COIN}\` with no payment -> **HTTP 402**. The body (and the base64 \`PAYMENT-REQUIRED\` header) is an x402 v2 \`PaymentRequired\`:
@@ -952,7 +953,7 @@ export function indexHtml(cfg: Config, base: string, coins: CoinRef[]): string {
   const title = "Lumi API: x402 seller checks, crypto market data and Lumi Market Ideas (pay on XRPL, Base or Stellar)";
   const desc =
     "Free x402 vendor trust observations and paid pay-checks (Lumi Trust), crypto market data (daily market brief, funding, Fear & Greed, sentiment, events) " +
-    "and Lumi Market Ideas (signals for 50 coins, scan, levels, paper trades; paper-trade analysis, not investment advice) for AI agents. No API key: most calls cost $0.003-$0.02 with x402 in USDC on Base, XRP/RLUSD/USDC on the XRP Ledger or USDC on Stellar, and new wallets get 3 free trial calls (a Base wallet holding at least 0.01 USDC or an activated XRP Ledger account; one trial per wallet).";
+    "and Lumi Market Ideas (signals for 51 coins, scan, levels, paper trades; paper-trade analysis, not investment advice) for AI agents. No API key: most calls cost $0.003-$0.02 with x402 in USDC on Base, XRP/RLUSD/USDC on the XRP Ledger or USDC on Stellar, and new wallets get 3 free trial calls in total, not per endpoint (a Base wallet holding at least 0.01 USDC or an activated XRP Ledger account; one trial per wallet).";
   const rowOf = (p: ReturnType<typeof priceTable>[number]) => {
     const usd = p.price_base_usdc ?? p.price_rlusd ?? p.price_usdc;
     return `<tr><td><code>${esc(`${p.method} ${p.path}`)}</code></td><td>${usd ? `$${esc(String(usd))}` : ""}</td><td>${esc(p.price_xrp)} XRP</td><td>${esc(p.summary)}</td></tr>`;
@@ -1098,11 +1099,12 @@ footer{margin:48px 0 0;padding:22px 0 40px;border-top:1px solid var(--line);colo
 <a href="${esc(base)}/llms.txt">llms.txt</a> &middot; <a href="${esc(base)}/openapi.json">OpenAPI</a> &middot;
 <a href="${esc(base)}/.well-known/agent-card.json">A2A card</a> &middot; MCP <code>${esc(base)}/mcp</code><br>
 <strong>Daily market brief:</strong> <a href="${esc(base)}/v1/brief">GET /v1/brief</a> ($${usdPrice(cfg, "brief")}, returns HTTP 402 with the price until paid).<br>
-<strong>Free trial:</strong> ${TRIAL_LIMITS.perWallet} free calls per new wallet on every paid endpoint, including <code>/v1/institutional</code>: send <code>X-Lumi-Trial: 1</code> and sign the 402's <code>sign-in-with-x</code> challenge with ${cfg.evm ? "a Base wallet holding at least 0.01 USDC or " : ""}an activated XRP Ledger account (no payment, nothing moves; one trial per wallet). <a href="#trial">How</a>.<br>
+<strong>Free trial:</strong> ${TRIAL_LIMITS.perWallet} free calls per new wallet in total (not per endpoint), usable on any paid endpoint including <code>/v1/institutional</code>: send <code>X-Lumi-Trial: 1</code> and sign the 402's <code>sign-in-with-x</code> challenge with ${cfg.evm ? "a Base wallet holding at least 0.01 USDC or " : ""}an activated XRP Ledger account (no payment, nothing moves; one trial per wallet). <a href="#trial">How</a>.<br>
 <strong>New:</strong> <a href="${esc(base)}/v1/trust/check?url=https%3A%2F%2Fapi.example.com%2Fv1%2Fdata">/v1/trust/check</a> (should I pay this x402 URL? allow / warn / block, $${usdPrice(cfg, "trust_check")}) &middot;
 <a href="${esc(base)}/v1/funding">/v1/funding</a> &middot; <a href="${esc(base)}/v1/fear-greed">/v1/fear-greed</a> &middot; <a href="${esc(base)}/v1/events/next48h">/v1/events/next48h</a><br>
 <strong>${esc(MARKET_IDEAS_NAME)}</strong> (${esc(MARKET_IDEAS_NOTICE)}): <a href="${esc(base)}/v1/scan">/v1/scan</a> (all ${coins.length} coins in one call, $${usdPrice(cfg, "scan")}) &middot;
-<a href="${esc(base)}/v1/lite/${EXAMPLE_COIN}">/v1/lite/{coin}</a> &middot; <a href="#lumi-market-ideas">all ${esc(MARKET_IDEAS_NAME)} endpoints</a></p></div>
+<a href="${esc(base)}/v1/lite/${EXAMPLE_COIN}">/v1/lite/{coin}</a> &middot; <a href="#lumi-market-ideas">all ${esc(MARKET_IDEAS_NAME)} endpoints</a><br>
+<strong>Pay address:</strong> always take Lumi's pay address (<code>payTo</code>) from the live 402 payment response or <a href="${esc(base)}/.well-known/x402">/.well-known/x402</a>, never from transaction history or a past transfer.</p></div>
 <h2>For agents</h2>
 <div class="qls">
 ${quickHtml}

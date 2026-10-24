@@ -61,7 +61,7 @@ export function agentsJson(base: string) {
       flow("trust_check", "Should I pay this x402 URL?", "allow / warn / block with coded reasons for one x402 resource URL, optionally checking the quoted payTo and USD amount.", "trust_check"),
       flow("vendor_report", "x402 vendor report", "Full observation history for one curated vendor: quote checks, test-buys with tx hashes, uptime and latency.", "vendor_report"),
       flow("brief", "Daily crypto market brief", "BTC levels and read, sentiment, funding, movers, key levels, yen watch and next-48h events in one call.", "brief"),
-      flow("signal", `${MARKET_IDEAS_NAME}: coin signal`, `Rule-based buy/sell read for one of 50 coins with 1h/4h/1d labels and indicators. ${MARKET_IDEAS_NOTICE}`, "signal"),
+      flow("signal", `${MARKET_IDEAS_NAME}: coin signal`, `Rule-based buy/sell read for one of 51 coins with 1h/4h/1d labels and indicators. ${MARKET_IDEAS_NOTICE}`, "signal"),
       flow("levels", `${MARKET_IDEAS_NAME}: coin levels`, `Support/resistance and rule-based 7-day scenario levels (not forecasts) for one coin. ${MARKET_IDEAS_NOTICE}`, "levels"),
       flow("scan", `${MARKET_IDEAS_NAME}: all-coins scan`, `50 live signals in one call, strongest first. ${MARKET_IDEAS_NOTICE}`, "scan"),
       flow("institutional", "Institutional & policy brief", "Daily dated, sourced moves by regulators, central banks and banks mapped to XRP, XLM, XDC, QNT, AXL and HBAR.", "institutional"),

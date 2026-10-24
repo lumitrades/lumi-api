@@ -17,6 +17,7 @@
  */
 
 import type { SaleEvent } from "./sales";
+import { clientLabel } from "./traffic";
 import type { Config, DurableObjectNamespaceLike, IouOption, KVLike } from "./config";
 import { isPaymentPayloadV2 } from "@x402/core/schemas";
 import { cdpAuthHeaders, decodeExtensionResponses } from "./cdp";
@@ -543,6 +544,12 @@ export async function requirePayment(
   quote: Quote,
   serve: (settlement: Settlement, paid: PaymentRequirements) => Promise<Response> | Response,
 ): Promise<Response> {
+  // Every recorded sale carries the paying client's type (User-Agent class + family, no IP).
+  if (deps.onSale) {
+    const onSale = deps.onSale;
+    const client = clientLabel(request.headers.get("user-agent"));
+    deps = { ...deps, onSale: (sale) => onSale({ ...sale, client: sale.client ?? client }) };
+  }
   const header = request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT);
   const store = deps.idempotency;
   if (!header) return requirePaymentOnce(request, cfg, deps, quote, serve);
