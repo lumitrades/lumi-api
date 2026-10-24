@@ -1,9 +1,12 @@
--- Lumi Check v0: contributor keys and contributed test data. DRAFT on branch scanner-kit-v0; NOT applied to production.
+-- Lumi Check v0: contributor keys and contributed test data. DRAFT (Lumi Check branch); NOT applied to production.
+-- Numbered 0016 on purpose: 0015 is taken by the unsettled-attempts migration on the payers/trust-attempts branches.
 -- Write cost per ACCEPTED submission: 1 row + 2 index entries in contributor_submissions, plus 1 row on the
 -- contributions-only daily counter (meta k = 'contrib_writes:YYYY-MM-DD'). That counter is separate from the catalog
 -- 'writes:' counter, so contributions can never use up catalog ingest/probe/evidence budget. Inserts go through the
 -- lumi-contrib-writes queue in batches when it is bound. Rejected submissions write nothing.
--- Credits are derived (SUM over submissions): no credits table and no cash payout of any kind.
+-- Rewards are badges only (derived from submissions): no credits, no money, no payout of any kind.
+-- Data minimisation: no payment amount or asset is stored. payer (the paying wallet, read from the public ledger) is
+-- kept for the anti-gaming checks only and is never returned by any public route.
 CREATE TABLE IF NOT EXISTS contributor_keys (
   key_id TEXT PRIMARY KEY,                 -- lck_<16 hex>
   label TEXT NOT NULL,                     -- owner-chosen name, e.g. "Lumi Scout"
@@ -13,7 +16,7 @@ CREATE TABLE IF NOT EXISTS contributor_keys (
   daily_cap INTEGER,                       -- optional per-key override of accepted submissions per UTC day
   share_demand INTEGER NOT NULL DEFAULT 0, -- 1 = contributor opted in to aggregate-only demand stats
   status TEXT NOT NULL DEFAULT 'active',   -- active | revoked
-  forfeited INTEGER NOT NULL DEFAULT 0,    -- 1 = unpaid credits forfeited (fraud/abuse)
+  forfeited INTEGER NOT NULL DEFAULT 0,    -- 1 = badge removed by the owner (fraud/abuse)
   created_at INTEGER NOT NULL,
   revoked_at INTEGER,
   revoke_reason TEXT
@@ -40,10 +43,8 @@ CREATE TABLE IF NOT EXISTS contributor_submissions (
   endpoint_key TEXT NOT NULL,              -- first 32 hex of sha256(endpoint)
   domain TEXT,
   network TEXT NOT NULL,
-  asset TEXT NOT NULL,
-  amount TEXT NOT NULL,
-  pay_to TEXT NOT NULL,
-  payer TEXT NOT NULL,
+  pay_to TEXT NOT NULL,                    -- seller's receiving address (public, from the receipt)
+  payer TEXT NOT NULL,                     -- paying wallet from the ledger; internal anti-gaming use only
   source TEXT NOT NULL,                    -- payer's funding source (anti-boost)
   new_wallet INTEGER NOT NULL DEFAULT 0,   -- payer funded < 30 days before the submission
   receipt_hash TEXT NOT NULL,
@@ -53,11 +54,9 @@ CREATE TABLE IF NOT EXISTS contributor_submissions (
   wanted INTEGER NOT NULL DEFAULT 0,
   demand_opt_in INTEGER NOT NULL DEFAULT 0,
   ledger_ts INTEGER,
-  credit_uusd INTEGER NOT NULL DEFAULT 0,  -- credits in micro-USD units (credits only, never cash)
-  credit_note TEXT,
   dispute TEXT,                            -- JSON {at, reason, by} when the seller disputes
   metrics TEXT,                            -- JSON, validated and clamped (<= 2 KB)
-  receipt TEXT NOT NULL                    -- the signed receipt JSON
+  receipt TEXT NOT NULL                    -- the signed receipt JSON (payment block: chain + tx hash only)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS contributor_submissions_key_day ON contributor_submissions (key_id, day);
 CREATE INDEX IF NOT EXISTS contributor_submissions_ep_day ON contributor_submissions (endpoint_key, day);

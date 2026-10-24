@@ -127,7 +127,7 @@ export interface App {
   logTraffic(request: Request, response: Response, ctx?: WaitUntil): void;
   /** Write this isolate's buffered traffic counts now. */
   flushTraffic(): Promise<void>;
-  /** Lumi Check contributions (keys, submissions, credits). */
+  /** Lumi Check contributions (keys, submissions, badges). */
   contributors: Contributors;
   /** Queue consumer for lumi-contrib-writes: batched contribution writes. */
   contribQueue(bodies: unknown[]): Promise<number>;
@@ -319,14 +319,6 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     now,
     ownerKey: env.OWNER_MCP_KEY,
     adminKey: env.CONTRIB_ADMIN_KEY,
-    creditsEnabled: env.CONTRIB_CASH_BOUNTIES_ENABLED === "true",
-    checkCreditsPerReceipt: env.CONTRIB_CHECK_CREDITS_PER_RECEIPT,
-    checkCreditPrices: env.CONTRIB_CHECK_CREDIT_PRICES,
-    // Free Lumi Check credits buy the same body as the x402 route. onPaid (Lumi's own follow-up test-buy) is NOT run for credits.
-    redeem: async (product, input, base) => {
-      const p = product === "trust_check" ? await prepareTrustCheck(new URLSearchParams(input).toString(), base) : await prepareVendorReport(String(input.vendor_id ?? input.id ?? ""), base);
-      return p.ok ? { ok: true as const, body: p.body } : { ok: false as const, status: p.status, error: p.error };
-    },
     // Contributed receipts are mainnet-only (xrpl:0), whatever network this deployment sells on.
     xrplRpc: split(env.XRPL_RPC_URLS).length && config.network === "xrpl:0" ? split(env.XRPL_RPC_URLS) : DEFAULT_XRPL_RPC["xrpl:0"],
     baseRpc,
@@ -342,7 +334,6 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     rateLimiter: env.CONTRIB_RATE_LIMITER,
     queue: opts.contribQueue === null ? undefined : opts.contribQueue ?? (env.CONTRIB_QUEUE ? { send: (b: unknown) => env.CONTRIB_QUEUE!.send(b) } : undefined),
     log: (e) => deps.log?.(e),
-    credits: env.CONTRIB_CREDITS,
     caps: env.CONTRIB_CAPS,
     minKit: env.CONTRIB_KIT_MIN_VERSION,
     retiredKits: env.CONTRIB_KIT_RETIRED,
@@ -428,10 +419,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const lerr = lookupError({ ...(clean ? { url: clean } : {}), ...(payTo ? { payTo } : {}) }, { url: !!clean, payTo: payTo !== undefined }, "check");
     if (lerr) return json(400, lerr, noStore);
     if (amountRaw && !(amountUsd !== undefined && Number.isFinite(amountUsd) && amountUsd >= 0 && amountUsd < 1e6)) return bad("amount must be a USD number, e.g. 0.01.");
-    // Contributors with a verified receipt (signed request) get a higher per-key limit instead of the anonymous IP limit.
-    const perk = await contributors.checkPerk(request);
-    if (perk && !perk.ok) return perk.res;
-    const limit = perk ? null : await trust.freeLimit(request, "lookup");
+    // One free limit for everyone: contributors get no rate-limit or other perk.
+    const limit = await trust.freeLimit(request, "lookup");
     if (limit) return limit;
     const network = sp.get("network")?.slice(0, 40) || undefined;
     const { verdict, host } = clean ? await checkVerdict({ url: clean, payTo, amountUsd, network }, base, true) : await payToVerdict({ payTo: payTo!, amountUsd, network }, base);

@@ -1,4 +1,4 @@
--- Lumi Check v0 (DRAFT, branch scanner-kit-v0; NOT applied to production).
+-- Lumi Check v0 (DRAFT; NOT applied to production).
 -- Nightly rollup of tier-1 raw counters (check_outcomes) into long-term daily summaries, kept forever.
 -- Raw rows are deleted after 90 days, and only for days recorded here as rolled up and clean (dirty = 0).
 -- D1 cost: all access is by primary key or the two partial indexes below; no full-table scans.

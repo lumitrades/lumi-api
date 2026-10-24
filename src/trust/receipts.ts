@@ -76,7 +76,11 @@ export interface ReceiptCheck {
 }
 
 /** Offline checks: shape, hash, signature, signer = payer. No network. */
-export async function verifyReceipt(r: any): Promise<ReceiptCheck> {
+/**
+ * minimalPayment: contributed receipts (Lumi Check tier 2) carry only payment.network and payment.tx_hash. The amount is
+ * not required, and the signer-is-payer check moves on-ledger (the caller must confirm the signer sent the tx).
+ */
+export async function verifyReceipt(r: any, opts: { minimalPayment?: boolean } = {}): Promise<ReceiptCheck> {
   const errors: string[] = [];
   const out: ReceiptCheck = { ok: false, hash_ok: false, signature_ok: false, signer_is_payer: false, errors };
   if (!r || typeof r !== "object") { errors.push("not_an_object"); return out; }
@@ -89,7 +93,7 @@ export async function verifyReceipt(r: any): Promise<ReceiptCheck> {
   if (p.network === "stellar:pubnet" && !STELLAR_TX_RE.test(String(p.tx_hash))) errors.push("payment.tx_hash");
   if (p.network === "xrpl:0" && !XRPL_TX_RE.test(String(p.tx_hash))) errors.push("payment.tx_hash");
   if (p.network === "eip155:8453" && !EVM_TX_RE.test(String(p.tx_hash))) errors.push("payment.tx_hash");
-  if (!/^[0-9]+(\.[0-9]+)?$/.test(String(p.amount))) errors.push("payment.amount");
+  if (!opts.minimalPayment && !/^[0-9]+(\.[0-9]+)?$/.test(String(p.amount))) errors.push("payment.amount");
   if (!RECEIPT_OUTCOMES.includes(r.delivery?.outcome)) errors.push("delivery.outcome");
   if (r.delivery?.outcome === "inconclusive" ? r.delivery?.data_returned !== null : typeof r.delivery?.data_returned !== "boolean") errors.push("delivery.data_returned");
   if (r.supersedes != null && !/^[0-9a-f]{64}$/.test(String(r.supersedes?.receipt_hash))) errors.push("supersedes.receipt_hash");
@@ -121,7 +125,7 @@ export async function verifyReceipt(r: any): Promise<ReceiptCheck> {
   // I-2: a valid signature over a stated hash that does not match the body proves nothing about this body.
   if (out.signature_ok && !out.hash_ok) { out.signature_ok = false; errors.push("signature_not_over_body"); }
   else if (!out.signature_ok) errors.push("signature_invalid");
-  if (!out.signer_is_payer) errors.push("signer_not_payer");
+  if (!out.signer_is_payer && !opts.minimalPayment) errors.push("signer_not_payer");
   out.ok = !errors.length;
   return out;
 }

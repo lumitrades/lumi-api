@@ -24,6 +24,11 @@ interface Wallet { seed: string; address: string; publicKey: string; privateKey:
 const wallet = (n: number): Wallet => { const seed = generateSeed({ entropy: new Uint8Array(16).fill(n) }); const k = deriveKeypair(seed); return { seed, ...k, address: deriveAddress(k.publicKey) }; };
 const ckey = (n: number) => { const priv = new Uint8Array(32).fill(n); return { priv: Buffer.from(priv).toString("hex"), pub: Buffer.from(ed25519.getPublicKey(priv)).toString("hex") }; };
 const txh = (n: number) => n.toString(16).toUpperCase().padStart(64, "0");
+const CONTRIB_MIGRATIONS = ["0016_contributors.sql", "0017_contrib_retention.sql", "0020_contrib_activity.sql", "0021_contrib_published.sql", "0022_contrib_antigaming.sql"];
+/** Own badge view from /v1/contrib/me (badge only: no credits, rank or perks exist). */
+const badgeOf = async (s: any, k: any) => ((await (await s.signed(k, "GET", "/v1/contrib/me")).json()) as any).badge;
+/** Every contributor with at least one verified contribution (server-side table; there is no public ranking). */
+const board = async (s: any) => s.app.contributors.badgeTable();
 
 /** Fake XRPL RPC: tx hash -> payment on mainnet. */
 function ledger() {
@@ -100,7 +105,9 @@ describe("contributor keys (owner only)", () => {
     expect(c.key_id).toMatch(/^lck_[0-9a-f]{16}$/);
     const list: any = await (await s.owner("GET", "/v1/owner/contributors")).json();
     expect(list.keys).toHaveLength(1);
-    expect(list.keys[0].credits_state).toBe("disabled"); // Lumi Check: credits off by default
+    expect(list.keys[0]).toMatchObject({ submissions: 0, badge_removed: false });
+    expect(list.rules.rewards).toBe("badge_only");
+    expect(JSON.stringify(list)).not.toMatch(/"[a-z_]*(credit|leaderboard|perk)[a-z_]*"\s*:/i); // no such fields
     expect(JSON.stringify(list)).not.toContain(c.priv);
     expect((await s.signed(c, "GET", "/v1/contrib/me")).status).toBe(200);
     expect((await s.owner("POST", `/v1/owner/contributors/${c.key_id}/revoke`, { reason: "test" })).status).toBe(200);
@@ -120,16 +127,21 @@ describe("contributor keys (owner only)", () => {
 });
 
 describe("signed submissions", () => {
-  it("passive receipt from the kit: verified on-ledger, extra fields stored, credits weighted (XRPL + wanted) when credits are re-enabled", async () => {
-    const s = setup({ env: { CONTRIB_CASH_BOUNTIES_ENABLED: "true" } });
+  it("passive receipt from the kit: payment block is chain + tx hash only, verified on-ledger, extra fields stored", async () => {
+    const s = setup();
     const w = wallet(1);
     const c = await s.issue(1, [w]);
     const r = await s.receipt(w, 1);
+    expect(r.payment).toEqual({ network: "xrpl:0", tx_hash: txh(1) });
+    expect(r.x_lumi_contrib.measurements.quotes).toBeUndefined();
     const { status, j } = await s.submit(c, r);
     expect(status, JSON.stringify(j)).toBe(202);
     expect(j.finding).toBe("counted");
-    expect(j.credit_uusd).toBe(20_000 * 1.5 * 2); // base x XRPL x wanted
+    expect(j.rewards).toBe("badge_only");
+    expect(JSON.stringify(j)).not.toMatch(/"[a-z_]*(credit|leaderboard|perk)[a-z_]*"\s*:/i);
     const row = await s.store.byTx(txh(1));
+    expect(row.amount).toBeUndefined();
+    expect(row.asset).toBeUndefined();
     expect(row.kit_version).toBe(kit.KIT_VERSION);
     const m = JSON.parse(row.metrics);
     expect(m).toMatchObject({ latency_ms: 420, response_bytes: 1234, schema_fingerprint: "b".repeat(32), facilitator: "t54", settlement_ms: 2100, freshness_s: 30 });
@@ -179,9 +191,13 @@ describe("signed submissions", () => {
     s.receiptStore.buys = [{ tx_hash: txh(22) } as any];
     expect((await s.submit(c, await s.receipt(w, 22, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }))).j.error).toBe("already_recorded_by_lumi");
     expect((await s.submit(c, await s.receipt(w, 23, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0], onLedger: false }))).j.error).toBe("ledger_tx_not_found");
+    // the ledger must show the SIGNING wallet paying the seller
     const r24 = await s.receipt(w, 24, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] });
-    s.L.txs.get(txh(24))!.value = "0.5";
-    expect((await s.submit(c, r24)).j.error).toBe("ledger_amount_mismatch");
+    s.L.txs.get(txh(24))!.from = wallet(9).address;
+    expect((await s.submit(c, r24)).j.error).toBe("ledger_no_transfer_from_signer_to_pay_to");
+    const r26 = await s.receipt(w, 26, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] });
+    s.L.txs.get(txh(26))!.value = "0";
+    expect((await s.submit(c, r26)).j.error).toMatch(/^ledger_(nothing_delivered|zero_amount)$/);
     s.L.setDown(true);
     const d = await s.submit(c, await s.receipt(w, 25, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }));
     expect(d.status).toBe(503);
@@ -244,17 +260,25 @@ describe("signed submissions", () => {
     expect(((await res.json()) as any).finding).toBe("contradicted");
   });
 
-  it("unlisted endpoints and repeats earn less; monthly cap; credits are not cash", async () => {
-    const s = setup({ env: { CONTRIB_CASH_BOUNTIES_ENABLED: "true", CONTRIB_CREDITS: JSON.stringify({ monthly_cap_uusd: 40_000 }), CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 5, source_endpoint_daily: 5 }) } });
+  it("receipts that carry an amount, asset or payer are refused; nothing about the payer or amount is shown back", async () => {
+    const s = setup();
     const a = await s.issue(1, [wallet(1)]);
-    const u = await s.submit(a, await s.receipt(wallet(1), 70, { endpoint: "https://unknown.example/x", payTo: wallet(9).address }));
-    expect(u.j).toMatchObject({ credit_uusd: 0, credit_note: "unlisted_endpoint" });
-    expect(u.j.note).toMatch(/not cash/);
-    const first = await s.submit(a, await s.receipt(wallet(1), 71));
-    expect(first.j.credit_uusd).toBe(40_000); // 60k capped by the 40k monthly cap
-    const rep = await s.submit(a, await s.receipt(wallet(1), 72, { ts: NOW - 300_000 })); // not a near-duplicate of 71
-    expect(rep.j.credit_uusd).toBe(0);
-    expect(rep.j.credit_note).toContain("repeat");
+    const r: any = await s.receipt(wallet(1), 70);
+    const { receipt_hash: _h, signer: _sg, ...body } = r;
+    const fat = await kit.signReceipt({ ...body, payment: { ...body.payment, amount: "0.001", asset: "RLUSD", payer: wallet(1).address } }, await kit.signerFor("xrpl:0", wallet(1).seed));
+    const bad = await s.submit(a, fat);
+    expect(bad.status).toBe(422);
+    expect(bad.j).toMatchObject({ error: "receipt_payment_fields_not_allowed", fields: ["amount", "asset", "payer"] });
+    expect((await s.submit(a, r)).status).toBe(202);
+    const me: any = await (await s.signed(a, "GET", "/v1/contrib/me")).json();
+    expect(me.submissions[0]).not.toHaveProperty("amount");
+    expect(me.submissions[0]).not.toHaveProperty("payer");
+    const own: any = await (await s.owner("GET", `/v1/owner/contributors/${a.key_id}/submissions`)).json();
+    expect(JSON.stringify(own)).not.toContain(wallet(1).address);
+    expect(JSON.stringify(own)).not.toContain("0.001");
+    const pub: any = await (await s.app.fetch(new Request(BASE + "/v1/contrib/badge/" + me.badge.handle))).json();
+    expect(JSON.stringify(pub)).not.toContain(wallet(1).address);
+    expect(JSON.stringify(pub)).not.toContain(txh(70));
   });
 
   it("anti-boost: an endpoint dominated by few funding sources is flagged and its findings held", async () => {
@@ -333,7 +357,7 @@ describe("D1 write budget and queue", () => {
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
-      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql", "0021_contrib_published.sql", "0022_contrib_antigaming.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
+      const sql = CONTRIB_MIGRATIONS.map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
       for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
       const store = new D1ContributorStore(db);
       const s = setup({ store });
@@ -345,13 +369,13 @@ describe("D1 write budget and queue", () => {
       expect(row?.demand_opt_in).toBe(true);
       expect(await store.getMeta(contribBudgetKey(NOW))).toBe("5"); // + activity touch
       expect((await store.getKey(a.key_id))?.last_active_day).toBe(new Date(NOW).toISOString().slice(0, 10));
-      const c = await store.counts({ key_id: a.key_id, endpoint_key: row!.endpoint_key, source: row!.source, day: row!.day, since_recent: "2026-01-01", since_month: "2026-10-01", tx_hash: txh(120) });
-      expect(c).toMatchObject({ key_day: 1, key_ep_day: 1, ep_day_sources: 1, dup: 1, month_credit: 0 }); // credits disabled by default
-      await store.addSpend({ id: "sp1", key_id: a.key_id, ts: NOW, day: "2026-10-23", product: "trust_check", cost: 1, ref: null });
-      expect((await store.spendsSince(a.key_id, "2026-01-01")).map((x) => x.cost)).toEqual([1]);
-      expect((await store.verifiedSince(a.key_id, "2026-01-01"))[0].finding).toBe("counted");
+      const c = await store.counts({ key_id: a.key_id, endpoint_key: row!.endpoint_key, source: row!.source, day: row!.day, tx_hash: txh(120) });
+      expect(c).toMatchObject({ key_day: 1, key_ep_day: 1, ep_day_sources: 1, dup: 1 });
+      const cols = (await db.prepare("PRAGMA table_info(contributor_submissions)").all()).results.map((x: any) => x.name);
+      expect(cols).not.toContain("amount");
+      expect(cols).not.toContain("asset");
+      expect(cols.filter((x: string) => x.startsWith("credit"))).toEqual([]);
       expect(await store.purge("2099-01-01")).toBe(1);
-      expect(await store.spendsSince(a.key_id, "2000-01-01")).toEqual([]);
       expect(await store.byTx(txh(120))).toBeNull();
       expect((await s.owner("POST", `/v1/owner/contributors/${a.key_id}/revoke`, { reason: "t", forfeit: true })).status).toBe(200);
       expect((await store.getKey(a.key_id))?.forfeited).toBe(true);
@@ -367,43 +391,46 @@ describe("helpers", () => {
     expect(cmpVersion("0.0.9", "0.1.0")).toBe(-1);
     expect(cmpVersion("1.0.0", "0.9.9")).toBe(1);
     expect(cleanMetrics({ latency_ms: -1, response_sha256: "nothex", quotes: new Array(20).fill({ network: "xrpl:0" }) })).toMatchObject({ latency_ms: undefined, response_sha256: undefined });
-    expect((cleanMetrics({ quotes: new Array(20).fill({ network: "xrpl:0" }) }) as any).quotes).toHaveLength(6);
+    // prices, amounts and pay_to addresses are never kept from measurements
+    expect((cleanMetrics({ quotes: [{ network: "xrpl:0", amount: "0.01", pay_to: "rX" }] }) as any).quotes).toBeUndefined();
   });
 });
 
 describe("Lumi Check: rewards, privacy and integrity", () => {
-  it("cash credits are off by default: no credit_uusd fields; rewards are check credits, badges + leaderboard", async () => {
+  it("rewards are badge-only: a public badge and a verified-contribution count, nothing of monetary value", async () => {
     const s = setup();
     const a = await s.issue(1, [wallet(1)]);
     const { status, j } = await s.submit(a, await s.receipt(wallet(1), 300));
     expect(status, JSON.stringify(j)).toBe(202);
-    expect(j.credit_uusd).toBeUndefined();
-    expect(j.rewards).toBe("check_credits_badges_leaderboard");
-    expect(j.note).toMatch(/No cash/);
-    expect((await s.store.byTx(txh(300))).credit_uusd).toBe(0);
+    expect(j.rewards).toBe("badge_only");
+    expect(j.note).toMatch(/nothing of monetary value/);
     const me: any = await (await s.signed(a, "GET", "/v1/contrib/me")).json();
-    expect(me.credits_month_usd).toBeUndefined();
-    expect(me.badges).toContain("first_receipt");
-    expect(me.leaderboard.rank).toBe(1);
+    expect(me.rewards).toBe("badge_only");
+    expect(me.badge).toMatchObject({ badges: ["first_receipt"], verified_contributions: 1 });
+    expect(me.badge.handle).toMatch(/^contrib-[0-9a-f]{8}$/);
+    expect(JSON.stringify(me)).not.toMatch(/"[a-z_]*(credit|leaderboard|rank|perk|early_access)[a-z_]*"\s*:/i);
   });
 
-  it("leaderboard: verified receipts only, pseudonymous, one per endpoint per day, revoked keys drop off", async () => {
+  it("public badge: verified receipts only, pseudonymous, one per endpoint per day, no ranking, revoked keys drop off", async () => {
     const s = setup({ env: { CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 5, source_endpoint_daily: 5, endpoint_daily_sources: 9 }) } });
     const a = await s.issue(1, [wallet(1)]);
     const b = await s.issue(2, [wallet(2)]);
     await s.submit(a, await s.receipt(wallet(1), 310));
-    await s.submit(a, await s.receipt(wallet(1), 311)); // same endpoint, same day: counts once
+    await s.submit(a, await s.receipt(wallet(1), 311, { ts: NOW - 300_000 })); // same endpoint, same day: counts once
     await s.submit(a, await s.receipt(wallet(1), 312, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }));
     await s.submit(b, await s.receipt(wallet(2), 313, { outcome: "no_data", status: 200 })); // unconfirmed negative: not verified
-    const lb: any = await (await s.app.fetch(new Request(BASE + "/v1/contrib/leaderboard"))).json();
-    expect(lb.rows).toHaveLength(1);
-    expect(lb.rows[0]).toMatchObject({ rank: 1, verified_receipts: 2, endpoints: 2, badges: ["first_receipt"] });
-    expect(lb.rows[0].handle).toMatch(/^contrib-[0-9a-f]{8}$/);
-    expect(JSON.stringify(lb)).not.toContain(a.key_id);
-    expect(JSON.stringify(lb)).not.toContain(wallet(1).address);
-    expect(lb.note).toMatch(/No cash/);
+    const handle = (await badgeOf(s, a)).handle;
+    const res = await s.app.fetch(new Request(BASE + "/v1/contrib/badge/" + handle));
+    expect(res.status).toBe(200);
+    const pub: any = await res.json();
+    expect(pub).toMatchObject({ kind: "contributor_badge", handle, badges: ["first_receipt"], verified_contributions: 2 });
+    expect(pub.rank).toBeUndefined();
+    expect(JSON.stringify(pub)).not.toContain(a.key_id);
+    expect(JSON.stringify(pub)).not.toContain(wallet(1).address);
+    expect((await badgeOf(s, b)).verified_contributions).toBe(0);
+    expect((await s.app.fetch(new Request(BASE + "/v1/contrib/badge/" + (await badgeOf(s, b)).handle))).status).toBe(404);
     await s.owner("POST", `/v1/owner/contributors/${a.key_id}/revoke`, { reason: "t" });
-    expect(((await (await s.app.fetch(new Request(BASE + "/v1/contrib/leaderboard"))).json()) as any).rows).toHaveLength(0);
+    expect((await s.app.fetch(new Request(BASE + "/v1/contrib/badge/" + handle))).status).toBe(404);
   });
 
   it("query strings are stripped from stored endpoints and receipt copies, and cannot dodge per-endpoint caps", async () => {
@@ -461,96 +488,8 @@ describe("Lumi Check: rewards, privacy and integrity", () => {
   });
 });
 
-describe("free Lumi Check credits (no cash)", () => {
-  const credits = async (s: any, k: any) => (await (await s.signed(k, "GET", "/v1/contrib/credits")).json()) as any;
-  it("earn one per seller per day for verified receipts only; self-dealt, duplicate and unconfirmed earn nothing", async () => {
-    const s = setup({ env: { CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 5, source_endpoint_daily: 5, endpoint_daily_sources: 9 }) } });
-    const w = wallet(1);
-    const a = await s.issue(1, [w], { own_domains: ["myshop.example"] });
-    expect((await credits(s, a)).balance).toBe(0);
-    const r = await s.receipt(w, 400);
-    expect((await s.submit(a, r)).status).toBe(202);
-    expect((await credits(s, a))).toMatchObject({ balance: 5, earned: 5, earning_slots: 1, per_verified_receipt: 5 });
-    await s.submit(a, await s.receipt(w, 401)); // same seller, same day
-    expect((await s.submit(a, r)).j.error).toBe("duplicate");
-    expect((await s.submit(a, await s.receipt(w, 402, { payTo: w.address }))).j.error).toBe("self_testing");
-    expect((await s.submit(a, await s.receipt(w, 403, { endpoint: "https://api.myshop.example/data", payTo: wallet(6).address }))).j.error).toBe("self_testing");
-    expect((await credits(s, a)).earned).toBe(5);
-    await s.submit(a, await s.receipt(w, 404, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0], outcome: "no_data", status: 200 })); // unconfirmed negative
-    expect((await credits(s, a)).earned).toBe(5);
-    expect((await s.app.fetch(new Request(BASE + "/v1/contrib/credits"))).status).toBe(401);
-  });
-
-  it("per-receipt value is configurable (placeholder default 5)", async () => {
-    const s = setup({ env: { CONTRIB_CHECK_CREDITS_PER_RECEIPT: "2" } });
-    const a = await s.issue(1, [wallet(1)]);
-    await s.submit(a, await s.receipt(wallet(1), 410));
-    expect((await credits(s, a))).toMatchObject({ earned: 2, per_verified_receipt: 2 });
-  });
-
-  it("spend on a detailed check: same body as the paid route, balance drops, errors and overdraft spend nothing", async () => {
-    const s = setup({ env: { CONTRIB_CHECK_CREDIT_PRICES: JSON.stringify({ trust_check: 3 }) } });
-    const a = await s.issue(1, [wallet(1)]);
-    await s.submit(a, await s.receipt(wallet(1), 420));
-    expect((await (await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "nope" })).json() as any).error).toBe("unknown_product");
-    const bad = await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: "nope" } });
-    expect(bad.status).toBe(400);
-    expect((await credits(s, a)).balance).toBe(5);
-    const ok = await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP + "?q=private" } });
-    const j: any = await ok.json();
-    expect(ok.status, JSON.stringify(j)).toBe(200);
-    expect(["allow", "warn", "block"]).toContain(j.verdict);
-    expect(j.lumi_receipt.kind).toBe("trust_check");
-    expect(JSON.stringify(j)).not.toContain("private");
-    expect(j.lumi_credits).toMatchObject({ spent: 3, balance: 2 });
-    const again = await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP } });
-    expect(again.status).toBe(402);
-    const b: any = await credits(s, a);
-    expect(b).toMatchObject({ balance: 2, spent: 3 });
-    expect(b.spends).toHaveLength(1);
-  });
-
-  it("credits expire 90 days after they were earned; spends use the oldest lot first (FIFO); legacy spends are allocated FIFO", async () => {
-    const s = setup({ env: { CONTRIB_CHECK_CREDIT_PRICES: JSON.stringify({ trust_check: 3 }) } });
-    const a = await s.issue(1, [wallet(1)]);
-    await s.submit(a, await s.receipt(wallet(1), 470));
-    const base = await s.store.byTx(txh(470));
-    const day = (n: number) => new Date(NOW - n * 86_400_000).toISOString().slice(0, 10);
-    for (const [i, ago] of [[1, 89], [2, 10], [3, 91]] as const) {
-      const r = { ...base, tx_hash: `LOT${i}`.padEnd(64, "0"), day: day(ago), created_at: NOW - ago * 86_400_000 };
-      s.store.subs.set(r.tx_hash, r);
-    }
-    let b: any = await credits(s, a);
-    expect(b).toMatchObject({ balance: 15, earned: 15, earning_slots: 3, expires_after_days: 90 }); // the 91-day-old lot has expired
-    expect(b.next_expiry).toEqual({ on: day(89 - 91), credits: 5 });
-    expect(b.expiring_within_7_days).toBe(5);
-    expect((await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP } })).status).toBe(200);
-    expect((await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP } })).status).toBe(200);
-    const allocs = [...s.store.spends.values()].sort((x: any, y: any) => x.ts - y.ts || x.id.localeCompare(y.id)).map((x: any) => x.alloc);
-    const dom = (base.domain as string).toLowerCase();
-    expect(allocs.flat()).toEqual(expect.arrayContaining([{ lot: `${dom}:${day(89)}`, n: 3 }]));
-    expect(allocs.flat().filter((x: any) => x.lot === `${dom}:${day(89)}`).reduce((t: number, x: any) => t + x.n, 0)).toBe(5); // oldest lot used up first
-    expect(allocs.flat().filter((x: any) => x.lot === `${dom}:${day(10)}`).reduce((t: number, x: any) => t + x.n, 0)).toBe(1);
-    b = await credits(s, a);
-    expect(b).toMatchObject({ balance: 9, spent: 6, expiring_within_7_days: 0 });
-    expect(b.next_expiry).toEqual({ on: day(10 - 91), credits: 4 });
-    // The oldest lot ages out: what was spent from it stays spent, the rest of the balance is untouched.
-    for (const r of s.store.subs.values()) if (r.day === day(89)) r.day = day(91);
-    for (const sp of s.store.spends.values()) sp.alloc = sp.alloc.map((x: any) => (x.lot.endsWith(day(89)) ? { ...x, lot: `${dom}:${day(91)}` } : x));
-    expect(await credits(s, a)).toMatchObject({ balance: 9, earned: 10, earning_slots: 2 });
-    // An unspent lot that ages out is lost (expired), not carried over.
-    for (const r of s.store.subs.values()) if (r.day === day(0)) r.day = day(91);
-    expect((await credits(s, a)).balance).toBe(4);
-    // Legacy spend rows without an allocation are charged oldest first.
-    const s2 = setup({ env: { CONTRIB_CHECK_CREDIT_PRICES: JSON.stringify({ trust_check: 3 }) } });
-    const a2 = await s2.issue(1, [wallet(1)]);
-    await s2.submit(a2, await s2.receipt(wallet(1), 471));
-    await s2.store.addSpend({ id: "legacy", key_id: a2.key_id, ts: NOW - 1000, day: day(0), product: "trust_check", cost: 4, ref: null });
-    expect(await credits(s2, a2)).toMatchObject({ balance: 1, spent: 4 });
-    expect((await s2.signed(a2, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP } })).status).toBe(402);
-  });
-
-  it("accounts are kept while active: receipts and signed checks record activity; the inactive review is a non-destructive placeholder", async () => {
+describe("badge only: no credits, perks or rankings", () => {
+  it("accounts are kept while active: receipts record activity; the inactive review is a non-destructive placeholder", async () => {
     const s = setup();
     const a = await s.issue(1, [wallet(1)]);
     const b = await s.issue(2, [wallet(2)]);
@@ -572,44 +511,34 @@ describe("free Lumi Check credits (no cash)", () => {
     expect((await s.app.fetch(new Request(BASE + "/v1/owner/contributors/inactive"))).status).toBe(401);
   });
 
-  it("perks: contributors with a verified receipt get early access + a higher /v1/check limit; cash bounties are a disabled stub", async () => {
+  it("no perks: contributors get the same /v1/check limit as everyone; credit, bounty and leaderboard routes do not exist", async () => {
     const s = setup();
     const a = await s.issue(1, [wallet(1)]);
-    const none: any = await credits(s, a);
-    expect(none.perks).toEqual({ early_access: false, higher_rate_limit: null });
     await s.submit(a, await s.receipt(wallet(1), 430));
-    expect(((await credits(s, a)) as any).perks.higher_rate_limit.checks_per_minute).toBe(120);
     const q = "/v1/check?url=" + encodeURIComponent("https://unknown.example/x");
     let anonLimited = false;
     for (let i = 0; i < 31; i++) if ((await s.app.fetch(new Request(BASE + q))).status === 429) anonLimited = true;
     expect(anonLimited).toBe(true);
-    expect((await s.signed(a, "GET", q)).status).toBe(200);
-    // A signed check counts as activity (at most one write per key per day).
-    const b = await s.issue(2, [wallet(2)]);
-    expect((await s.store.getKey(b.key_id)).last_active_day ?? null).toBeNull();
-    const w0 = s.store.writes;
-    for (let i = 0; i < 3; i++) await s.signed(b, "GET", q);
-    expect((await s.store.getKey(b.key_id)).last_active_day).toBe(new Date(NOW).toISOString().slice(0, 10));
-    expect(s.store.writes - w0).toBe(1);
-    const bounties: any = await (await s.app.fetch(new Request(BASE + "/v1/contrib/bounties"))).json();
-    expect(bounties).toMatchObject({ enabled: false, payout: "none", wanted: [] });
+    expect((await s.signed(a, "GET", q)).status).toBe(429); // a contributor signature changes nothing
+    for (const [m, p] of [["GET", "/v1/contrib/credits"], ["POST", "/v1/contrib/credits/spend"]] as const) expect((await s.signed(a, m, p, m === "POST" ? { product: "trust_check" } : undefined)).status).toBe(404);
+    for (const p of ["/v1/contrib/bounties", "/v1/contrib/leaderboard"]) expect((await s.app.fetch(new Request(BASE + p))).status).toBe(401);
+    expect(s.app.contributors.rules.rewards).toBe("badge_only");
   });
 });
 
 describe("account deletion (contributor self-service + owner on email request)", () => {
-  const lb = async (s: any) => ((await (await s.app.fetch(new Request(BASE + "/v1/contrib/leaderboard"))).json()) as any).rows;
+  const lb = board;
   async function seeded(s: any) {
     const a = await s.issue(1, [wallet(1)], { share_demand: true, own_domains: ["mine.example"] });
     const b = await s.issue(2, [wallet(2)]);
     await s.submit(a, await s.receipt(wallet(1), 700));
     await s.submit(a, await s.receipt(wallet(1), 701, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }));
     await s.submit(b, await s.receipt(wallet(2), 702, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }));
-    expect((await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP } })).status).toBe(200);
     expect((await s.owner("POST", `/v1/owner/contributors/findings/${txh(701)}`, { action: "mark_published" })).status).toBe(200);
     return { a, b };
   }
 
-  it("self-service: needs the signed key and a typed confirm; deletes profile, wallets, credits, leaderboard entry and unpublished rows; anonymises published ones", async () => {
+  it("self-service: needs the signed key and a typed confirm; deletes profile, wallets, badge and unpublished rows; anonymises published ones", async () => {
     const s = setup();
     const { a, b } = await seeded(s);
     expect((await lb(s))).toHaveLength(2);
@@ -623,17 +552,16 @@ describe("account deletion (contributor self-service + owner on email request)",
     const res = await s.signed(a, "DELETE", "/v1/contrib/me", { confirm: a.key_id });
     const j: any = await res.json();
     expect(res.status, JSON.stringify(j)).toBe(200);
-    expect(j).toMatchObject({ deleted: true, status: "deleted", submissions_deleted: 1, submissions_anonymised: 1, credit_spends_deleted: 1, wallets_deleted: 1 });
+    expect(j).toMatchObject({ deleted: true, status: "deleted", submissions_deleted: 1, submissions_anonymised: 1, wallets_deleted: 1 });
 
     // profile gone: tombstone only
     const k = s.store.keys.get(a.key_id);
     expect(k).toMatchObject({ status: "deleted", label: "", public_key: "", wallets: [], own_domains: [], share_demand: false, last_active_day: null, revoke_reason: "deleted_by_contributor" });
     expect(await s.store.wallets([wallet(1).address])).toEqual([]);
-    expect([...s.store.spends.values()].filter((x: any) => x.key_id === a.key_id)).toEqual([]);
     // unpublished row deleted; published row kept without any contributor link
     expect(s.store.subs.get(txh(700))).toBeUndefined();
     const kept: any = s.store.subs.get(txh(701));
-    expect(kept).toMatchObject({ key_id: "deleted", payer: "", source: "", demand_opt_in: false, credit_uusd: 0, kit_version: null });
+    expect(kept).toMatchObject({ key_id: "deleted", payer: "", source: "", demand_opt_in: false, kit_version: null });
     expect(kept.published_at).toBe(NOW);
     const all = JSON.stringify([...s.store.subs.values()].filter((x: any) => x.key_id !== b.key_id)) + JSON.stringify([...s.store.keys.values()].filter((x: any) => x.key_id !== b.key_id));
     expect(all).not.toContain(wallet(1).address);
@@ -644,7 +572,7 @@ describe("account deletion (contributor self-service + owner on email request)",
     expect(rc.payment.payer).toBeUndefined();
     expect(rc.payment.tx_hash).toBe(txh(701));
     expect(rc.x_lumi_stored.anonymised_at).toBeTruthy();
-    // leaderboard entry gone, other contributor untouched
+    // badge gone, other contributor untouched
     const rows = await lb(s);
     expect(rows).toHaveLength(1);
     expect(s.store.subs.get(txh(702))?.key_id).toBe(b.key_id);
@@ -690,21 +618,20 @@ describe("account deletion (contributor self-service + owner on email request)",
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
-      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql", "0021_contrib_published.sql", "0022_contrib_antigaming.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
+      const sql = CONTRIB_MIGRATIONS.map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
       for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
       const store = new D1ContributorStore(db);
       const s = setup({ store });
       const { a, b } = await seeded(s);
       expect((await store.byTx(txh(701)))?.published_at).toBe(NOW);
       const j: any = await (await s.signed(a, "DELETE", "/v1/contrib/me", { confirm: a.key_id })).json();
-      expect(j).toMatchObject({ deleted: true, submissions_deleted: 1, submissions_anonymised: 1, credit_spends_deleted: 1, wallets_deleted: 1 });
+      expect(j).toMatchObject({ deleted: true, submissions_deleted: 1, submissions_anonymised: 1, wallets_deleted: 1 });
       expect(await store.byTx(txh(700))).toBeNull();
       const kept = await store.byTx(txh(701));
       expect(kept).toMatchObject({ key_id: "deleted", payer: "", source: "" });
       expect(kept!.receipt).not.toContain(wallet(1).address);
       expect(await store.getKey(a.key_id)).toMatchObject({ status: "deleted", label: "", public_key: "", wallets: [], own_domains: [] });
       expect(await store.wallets([wallet(1).address])).toEqual([]);
-      expect(await store.spendsSince(a.key_id, "2000-01-01")).toEqual([]);
       expect((await store.byTx(txh(702)))?.key_id).toBe(b.key_id);
       expect((await s.signed(a, "GET", "/v1/contrib/me")).status).toBe(403);
     } finally {
@@ -714,8 +641,6 @@ describe("account deletion (contributor self-service + owner on email request)",
 });
 
 describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wallets, near-duplicates", () => {
-  const credits = async (s: any, k: any) => (await (await s.signed(k, "GET", "/v1/contrib/credits")).json()) as any;
-  const board = async (s: any) => ((await (await s.app.fetch(new Request(BASE + "/v1/contrib/leaderboard"))).json()) as any).rows;
   const loose = { CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 9, source_endpoint_daily: 9, endpoint_daily_sources: 9 }) };
 
   it("(1) registration needs a wallet-control proof bound to the contributor key; fake or replayed proofs are refused", async () => {
@@ -755,7 +680,7 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
     expect(verifyWalletProof(pk, g, null)).toBe(false);
   });
 
-  it("(1) allow_unproven wallets get zero weight (no credits, no leaderboard) until a proof is sent", async () => {
+  it("(1) allow_unproven wallets get zero weight (no badge progress) until a proof is sent", async () => {
     const s = setup();
     const k = ckey(1), w = wallet(1);
     const res = await s.owner("POST", "/v1/owner/contributors", { label: "x", public_key: k.pub, wallets: [w.address], allow_unproven: true });
@@ -766,7 +691,7 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
     const r = await s.submit(a, await s.receipt(w, 900));
     expect(r.status).toBe(202);
     expect(r.j).toMatchObject({ weight: 0, weight_note: "wallet_unproven", counts: false });
-    expect((await credits(s, a)).balance).toBe(0);
+    expect((await badgeOf(s, a)).verified_contributions).toBe(0);
     expect(await board(s)).toHaveLength(0);
     // prove it later: wrong proof refused, right proof accepted, next receipt counts
     expect((await s.signed(a, "POST", "/v1/contrib/me/wallet-proof", await kit.walletProof(await kit.signerFor("xrpl:0", wallet(2).seed), k.pub))).status).toBe(403);
@@ -776,7 +701,7 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
     expect(pr.status).toBe(200);
     const r2 = await s.submit(a, await s.receipt(w, 901, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }));
     expect(r2.j.weight).toBe(1);
-    expect((await credits(s, a)).balance).toBe(5);
+    expect((await badgeOf(s, a)).verified_contributions).toBe(1);
     expect(await board(s)).toHaveLength(1);
   });
 
@@ -798,7 +723,7 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
     expect(await fundingOf(down, { xrplRpc: [], stellarHorizon: "https://h" }, me)).toEqual({ funder: null, funded_at: null });
   });
 
-  it("(2) wallets sharing a funder form one cluster: one earning per seller per day across keys; lookups are cached", async () => {
+  it("(2) wallets sharing a funder form one cluster: one count per seller per day across keys; lookups are cached", async () => {
     const s = setup({ env: loose });
     const F = wallet(50).address;
     s.L.funders.set(wallet(1).address, F); s.L.funders.set(wallet(2).address, F);
@@ -810,9 +735,9 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
     const sib = await s.submit(b, await s.receipt(wallet(2), 911, { endpoint: new URL(EP).origin + "/cluster-other" }));
     expect(sib.status).toBe(202);
     expect(sib.j).toMatchObject({ weight: 0, weight_note: "same_cluster" });
-    expect((await credits(s, a)).balance).toBe(5);
-    expect((await credits(s, b)).balance).toBe(0);
-    expect((await board(s)).map((r: any) => r.verified_receipts)).toEqual([1]);
+    expect((await badgeOf(s, a)).verified_contributions).toBe(1);
+    expect((await badgeOf(s, b)).verified_contributions).toBe(0);
+    expect((await board(s)).map((r: any) => r.verified)).toEqual([1]);
     // a different seller still counts for the sibling
     expect((await s.submit(b, await s.receipt(wallet(2), 912, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }))).j.weight).toBe(1);
     // seller pay_to funding looked up once, then served from the cache
@@ -836,13 +761,13 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
     expect(b.key_id).not.toBe(a.key_id);
   });
 
-  it("(3) receipts from wallets funded by the seller's pay_to (or its funder) get zero weight and no credits; ignored funders don't link", async () => {
+  it("(3) receipts from wallets funded by the seller's pay_to (or its funder) get zero weight; ignored funders don't link", async () => {
     const s = setup({ env: loose });
     s.L.funders.set(wallet(1).address, VPAY); // seller funded the buyer directly
     const a = await s.issue(1, [wallet(1)]);
     const r = await s.submit(a, await s.receipt(wallet(1), 920));
     expect(r.j).toMatchObject({ weight: 0, weight_note: "seller_funded" });
-    expect((await credits(s, a)).balance).toBe(0);
+    expect((await badgeOf(s, a)).verified_contributions).toBe(0);
     expect(await board(s)).toHaveLength(0);
     // seller and buyer share a funder (the seller's cluster)
     const X = wallet(70).address;
@@ -867,14 +792,15 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
     expect((await s.store.byTx(txh(930)))?.finding).toBe("unconfirmed");
   });
 
-  it("(4) near-duplicates: same payer + seller + amount inside the window is refused, stored or still queued", async () => {
+  it("(4) near-duplicates: same paying wallet + seller inside the window is refused, stored or still queued", async () => {
     const s = setup({ env: loose });
     const a = await s.issue(1, [wallet(1)]);
     expect((await s.submit(a, await s.receipt(wallet(1), 940, { ts: NOW - 600_000 }))).status).toBe(202);
     const nd = await s.submit(a, await s.receipt(wallet(1), 941, { ts: NOW - 540_000 })); // new tx hash, 60s later
     expect(nd.status).toBe(409);
     expect(nd.j).toMatchObject({ error: "near_duplicate", window_s: 120 });
-    expect((await s.submit(a, await s.receipt(wallet(1), 942, { ts: NOW - 540_000, value: "0.002" }))).status).toBe(202); // different amount
+    // amounts are not part of the receipt any more, so a different amount inside the window is still one purchase
+    expect((await s.submit(a, await s.receipt(wallet(1), 942, { ts: NOW - 540_000, value: "0.002" }))).j.error).toBe("near_duplicate");
     expect((await s.submit(a, await s.receipt(wallet(1), 943, { ts: NOW - 300_000 }))).status).toBe(202); // outside the window
     const sent: any[] = [];
     const q = setup({ env: loose, contribQueue: { send: async (b: unknown) => { sent.push(b); } } });
@@ -899,7 +825,7 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
     expect((await s2.signed(b, "GET", "/v1/contrib/me")).status).toBe(429);
   });
 
-  it("anonymous tier-1 outcome counts never feed scores, credits or the leaderboard", async () => {
+  it("anonymous tier-1 outcome counts never feed scores or badges", async () => {
     const s = setup();
     const a = await s.issue(1, [wallet(1)]);
     for (let i = 0; i < 5; i++) {
@@ -907,7 +833,7 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
       expect(r.status).toBe(202);
     }
     expect(await board(s)).toHaveLength(0);
-    expect((await credits(s, a)).balance).toBe(0);
+    expect((await badgeOf(s, a)).verified_contributions).toBe(0);
     expect(s.store.subs.size).toBe(0);
   });
 
@@ -917,7 +843,7 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
-      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql", "0021_contrib_published.sql", "0022_contrib_antigaming.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
+      const sql = CONTRIB_MIGRATIONS.map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
       for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
       const store = new D1ContributorStore(db);
       const s = setup({ store, env: loose });
@@ -931,11 +857,10 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
       expect((await s.submit(a, await s.receipt(wallet(1), 950))).j.weight).toBe(1);
       expect((await s.submit(a, await s.receipt(wallet(1), 951, { ts: NOW - 560_000 }))).j.error).toBe("near_duplicate");
       expect((await s.submit(b, await s.receipt(wallet(2), 952, { endpoint: new URL(EP).origin + "/cluster-other" }))).j.weight_note).toBe("same_cluster");
-      expect((await store.byTx(txh(952)))).toMatchObject({ weight: 0, weight_note: "same_cluster", credit_uusd: 0 });
-      expect((await store.verifiedSince(b.key_id, "2026-01-01"))[0].weight).toBe(0);
+      expect((await store.byTx(txh(952)))).toMatchObject({ weight: 0, weight_note: "same_cluster" });
       // index plan: nearDup on (key_id, day), clusterSeller on (source, day): no table scan
       const plan = async (q: string) => JSON.stringify((await db.prepare("EXPLAIN QUERY PLAN " + q).all()).results);
-      expect(await plan("SELECT COUNT(*) FROM contributor_submissions WHERE key_id = 'k' AND day >= 'd' AND payer = 'p' AND pay_to = 'q' AND amount = '1' AND ABS(ledger_ts - 1) <= 2")).toMatch(/USING INDEX/);
+      expect(await plan("SELECT COUNT(*) FROM contributor_submissions WHERE key_id = 'k' AND day >= 'd' AND payer = 'p' AND pay_to = 'q' AND ABS(ledger_ts - 1) <= 2")).toMatch(/USING INDEX/);
       expect(await plan("SELECT COUNT(*) FROM contributor_submissions WHERE source = 's' AND day = 'd' AND key_id != 'k' AND weight != 0 AND (pay_to = 'q' OR domain = 'x')")).toMatch(/contributor_submissions_source_day/);
     } finally { await mf.dispose(); }
   });

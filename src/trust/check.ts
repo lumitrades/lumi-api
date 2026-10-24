@@ -12,7 +12,7 @@
  * Privacy: only origin + path of the checked URL is used or echoed (query strings and fragments are dropped before any
  * lookup, signing or logging), and nothing about the query is logged.
  * Integrity: the badge decision takes ONLY the live score inputs (score value, confidence, sample counts, latest
- * conclusive test-buy). It has no access to monitoring plans, payments to Lumi or contributor credits.
+ * conclusive test-buy). It has no access to monitoring plans, payments to Lumi or contributor badges.
  */
 import { esc } from "./badge";
 
@@ -32,7 +32,7 @@ export function originPath(u: string | null | undefined): string | null {
 
 export const CHECK_SIGNED_TTL_SEC = 15 * 60;
 export const BADGE_SIGNED_TTL_SEC = 15 * 60;
-/** Badge thresholds (the owner approved earned-only + auto-removal on Oct 23 2026; the numbers are a DRAFT for his approval). */
+/** Badge thresholds (earned-only + auto-removal approved by the owner on Oct 23 2026; the numbers are a DRAFT pending owner approval). */
 export const BADGE_MIN_SCORE = 80;
 export const BADGE_MIN_PAID_TESTS = 3;
 export const BADGE_CACHE = "public, max-age=300, s-maxage=300";

@@ -1,4 +1,4 @@
--- DRAFT (branch scanner-kit-v0, not applied to production): account deletion support.
+-- Lumi Check v0 (DRAFT; NOT applied to production): account deletion support.
 -- published_at: set by the owner when a contributor receipt is cited in a published, dated test result.
 -- On account deletion those rows are kept with the contributor link stripped; every other row of the account is deleted.
 -- Deleted accounts leave a tombstone key row (status 'deleted', no label/public key/wallets/domains) so the random
