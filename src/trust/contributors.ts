@@ -1,6 +1,6 @@
 /**
  * Lumi Check v0, server side: contributor keys, contributed receipts, caps and contributor badges.
- * DRAFT on branch scanner-kit-v0. Not deployed.
+ * DRAFT. Not deployed.
  *
  * The open kit (packages/scanner-kit) only checks quotes, optionally makes capped test-buys, signs receipts with the
  * contributor's own wallet and submits them here. Everything that decides what counts (which sellers to test,

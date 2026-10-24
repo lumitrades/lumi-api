@@ -1,5 +1,5 @@
 /**
- * Lumi Check tools (branch scanner-kit-v0, unpublished): lumi_check (free signed pre-pay check), lumi_scan_seller
+ * Lumi Check tools (unpublished): lumi_check (free signed pre-pay check), lumi_scan_seller
  * (free quote + dry-run plan) and lumi_report_receipt (passive: sign a receipt for a purchase you already made; submitting
  * is tier 2 and needs receipt sharing turned on: LUMI_SHARE_RECEIPTS=1 or `lumi-scan sharing on`).
  * The kit is loaded lazily: the published package would depend on lumi-scanner-kit; in the repo it is ../../packages/scanner-kit.
