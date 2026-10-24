@@ -1,3 +1,4 @@
+import { originPath } from "./origin.js";
 /**
  * Contributor receipt: AgenticRiskStandard `counterparty_delivery_receipt` v0.1 plus an `x_lumi_contrib` extension block.
  * The paying wallet signs `lumi-receipt:<network>:<tx_hash>:<receipt_hash>`; the hash covers the whole body incl. the extension.
@@ -28,7 +29,8 @@ export function buildReceiptBody(p, { api = DEFAULT_API, issuedAt = new Date().t
     receipt_id: `contrib-${chain}-${p.tx_hash}`,
     issued_at: issuedAt,
     issuer: { name: p.label ? `Lumi Check contributor (${String(p.label).slice(0, 40)})` : "Lumi Check contributor", methodology_url: `${api}/v1/trust/methodology`, methodology_version: "v0" },
-    seller: { endpoint: p.endpoint, domain, pay_to: p.pay_to },
+    // origin + path only: query strings (which may carry the buyer's search terms) never leave the machine.
+    seller: { endpoint: originPath(p.endpoint) ?? p.endpoint, domain, pay_to: p.pay_to },
     payment: {
       network: p.network, asset: p.asset, ...(p.issuer ? { issuer: p.issuer } : {}), amount: String(Number(p.amount)), tx_hash: p.tx_hash, payer: p.payer,
       ledger_result: p.ledger_result ?? "tesSUCCESS",
