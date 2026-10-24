@@ -1,6 +1,6 @@
 {
   "name": "lumi-trades-mcp",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Lumi Trades MCP server: x402 seller trust checks, crypto market data and briefs, and separately Lumi Market Ideas (signals for 50 coins; paper-trade analysis, not investment advice). Pay per call with your own wallet on Base or the XRP Ledger.",
   "mcpName": "io.github.cypher-osiris/lumi-trades-mcp",
   "type": "module",

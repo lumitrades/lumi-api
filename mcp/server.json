@@ -9,12 +9,12 @@
     "subfolder": "mcp"
   },
   "websiteUrl": "https://api.lumitrades.io/skill.md",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "lumi-trades-mcp",
-      "version": "0.9.1",
+      "version": "0.9.2",
       "transport": {
         "type": "stdio"
       },
