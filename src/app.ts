@@ -3,6 +3,7 @@
  * used by the Worker entry (src/index.ts) and the Node server (src/node.ts).
  */
 
+import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCOME_FIELDS, OUTCOME_RETENTION_DAYS, OUTCOME_SUMMARY_RETENTION, type OutcomeStore } from "./trust/outcomes";
 import { createBadges } from "./trust/badge";
 import { setPrivateNames } from "./sanitize";
 import { loadConfig, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, type Config, type Env, type PaidRoute } from "./config";
@@ -25,7 +26,7 @@ import { createTrust, TRUST_POST_PATHS, REPORT_FRESH_MS, type Trust } from "./tr
 import { createCommerce, D1CommerceStore, MemoryCommerceStore, type Commerce } from "./commerce";
 import type { CommerceStore } from "./commerce/store";
 import { TEST_PRICE_USD } from "./commerce/plans";
-import { VENDORS } from "./vendors";
+import { VENDORS, vendorById } from "./vendors";
 import { D1TrustStore, MemoryTrustStore, type TrustStore } from "./trust/store";
 import { SEED_OBSERVATIONS } from "./trust/seed";
 import { isStorageQuotaError, storageUnavailableBody } from "./trust/storage_errors";
@@ -33,12 +34,16 @@ import { D1CatalogStore, MemoryCatalogStore, type CatalogStore } from "./trust/c
 import { createCatalog, buyCandidate, type Catalog, type CatalogJob, type QueueLike } from "./trust/catalog_service";
 import { D1EvidenceStore, MemoryEvidenceStore, type EvidenceStore } from "./trust/evidence";
 import { D1ReceiptStore, MemoryReceiptStore, type ReceiptStore } from "./trust/receipts";
+import { createContributors, D1ContributorStore, MemoryContributorStore, type ContributorStore, type Contributors, type ContribQueue } from "./trust/contributors";
 import { productSample, sampleEntry, SAMPLE_ARGS, SAMPLE_LABEL } from "./samples";
 import { applyRate, createXrpPricer, type XrpPricer } from "./pricing";
 import { D1TrafficStore, MemoryTrafficStore, TRAFFIC_RETENTION_DAYS, TrafficBuffer, trafficRow, trafficSummary, type TrafficStore } from "./traffic";
 import { D1FeedStore, MemoryFeedStore, FEEDS, dueFeed, refreshFeed, feedFresh, type FeedStore } from "./feeds";
 import { liteView, scanView, fundingView, fearGreedView, fearGreedFromContext, events48View, trustVerdict } from "./quick";
 import { lookupError } from "./trust/index";
+import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
+import { originPath, checkPayload, badgeDecision, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_MIN_SCORE, BADGE_MIN_PAID_TESTS, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
+import { curatedByHost } from "./trust/badge";
 import type { LookupQuery } from "./trust/catalog";
 import { D1LiveStore, MemoryLiveStore, refreshLive, isFresh, LIVE_UNIVERSE, LIVE_MAX_AGE_MS, LIVE_CYCLE_MS, type LiveStore } from "./live";
 import { mcpServerCard, agentsJson } from "./wellknown";
@@ -51,6 +56,8 @@ export interface AppOptions {
   log?: (event: Record<string, unknown>) => void;
   /** Clock (ms), injectable for tests. */
   now?: () => number;
+  /** Tier-1 check outcome store override (tests). */
+  outcomeStore?: OutcomeStore;
   /** Trust-layer store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory seeded store. */
   trustStore?: TrustStore;
   /** Sales ledger override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
@@ -76,6 +83,10 @@ export interface AppOptions {
   commerceStore?: CommerceStore;
   /** Idempotent-retry cache override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   idempotencyStore?: IdempotencyStore;
+  /** Lumi Check contributor store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
+  contributorStore?: ContributorStore;
+  /** Contributions write queue override (tests). Default: env.CONTRIB_QUEUE; absent = writes inline. */
+  contribQueue?: ContribQueue | null;
 }
 
 /** Lumi's own Base wallets (receiving + test-buyer). Addresses only. */
@@ -117,6 +128,10 @@ export interface App {
   logTraffic(request: Request, response: Response, ctx?: WaitUntil): void;
   /** Write this isolate's buffered traffic counts now. */
   flushTraffic(): Promise<void>;
+  /** Lumi Check contributions (keys, submissions, badges). */
+  contributors: Contributors;
+  /** Queue consumer for lumi-contrib-writes: batched contribution writes. */
+  contribQueue(bodies: unknown[]): Promise<number>;
   /** Free public "Tested by Lumi" badge + result page (read-only, no D1 writes). Null for other paths. */
   badge(request: Request): Promise<Response | null>;
 }
@@ -290,6 +305,41 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       return isOwnerKey(m?.[1], env.OWNER_MCP_KEY);
     },
   });
+  // Lumi Check tier-1 anonymous delivery outcomes (aggregate counters only; never a scoring input).
+  const outcomes = createOutcomes(opts.outcomeStore ?? (env.TRUST_DB ? new D1OutcomeStore(env.TRUST_DB) : new MemoryOutcomeStore()), now);
+  const outcomeHits = new Map<string, { t: number; n: number }>();
+  /** Per-isolate, in-memory only: 120 outcome reports per minute per connecting IP. The IP is never stored or logged. */
+  const outcomeLimited = (request: Request) => {
+    const ip = request.headers.get("CF-Connecting-IP") ?? "local", t = now(), h = outcomeHits.get(ip);
+    if (outcomeHits.size > 20_000) outcomeHits.clear();
+    if (!h || t - h.t > 60_000) { outcomeHits.set(ip, { t, n: 1 }); return false; }
+    return ++h.n > 120;
+  };
+  const contributors = createContributors({
+    store: opts.contributorStore ?? (env.TRUST_DB ? new D1ContributorStore(env.TRUST_DB) : new MemoryContributorStore()),
+    fetch: doFetch,
+    now,
+    ownerKey: env.OWNER_MCP_KEY,
+    adminKey: env.CONTRIB_ADMIN_KEY,
+    // Contributed receipts are mainnet-only (xrpl:0), whatever network this deployment sells on.
+    xrplRpc: split(env.XRPL_RPC_URLS).length && config.network === "xrpl:0" ? split(env.XRPL_RPC_URLS) : DEFAULT_XRPL_RPC["xrpl:0"],
+    baseRpc,
+    stellarHorizon,
+    catalogStore,
+    receipts: receiptStore,
+    self: {
+      domains: ["lumitrades.io", "api.lumitrades.io"],
+      pay_to: [config.payTo, ...xrplBuyers, ...(config.evm ? [config.evm.payTo] : []), ...(config.stellar ? [config.stellar.payTo] : []), ...evmBuyers, ...stellarBuyers],
+    },
+    ignoreFunders: split(env.CONTRIB_FUNDER_IGNORE),
+    baseExplorer: env.CONTRIB_BASE_EXPLORER_API || undefined,
+    rateLimiter: env.CONTRIB_RATE_LIMITER,
+    queue: opts.contribQueue === null ? undefined : opts.contribQueue ?? (env.CONTRIB_QUEUE ? { send: (b: unknown) => env.CONTRIB_QUEUE!.send(b) } : undefined),
+    log: (e) => deps.log?.(e),
+    caps: env.CONTRIB_CAPS,
+    minKit: env.CONTRIB_KIT_MIN_VERSION,
+    retiredKits: env.CONTRIB_KIT_RETIRED,
+  });
   const trust = createTrust({
     store: trustStore,
     fetch: doFetch,
@@ -321,6 +371,95 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     selfDomains: ["lumitrades.io", "www.lumitrades.io", "api.lumitrades.io", ...(config.publicBaseUrl ? [new URL(config.publicBaseUrl).hostname] : [])],
     log: (e) => deps.log?.(e),
   });
+
+  // Lumi Check v0: dedicated ed25519 response-signing key (Worker secret LUMI_CHECK_SIGNING_KEY; never logged).
+  let signKeyMemo: Promise<SigningKey | null> | undefined;
+  const signKey = () => (signKeyMemo ??= signingKeyFrom(env.LUMI_CHECK_SIGNING_KEY));
+
+  /** Live score summary for a host or vendor id (curated vendors only; everything else is "not_scored"). */
+  async function liveScore(keyOrHost: string) {
+    const k = keyOrHost.toLowerCase();
+    const ids = vendorById(k) ? [k] : curatedByHost(k).map((v) => v.id);
+    if (ids.length !== 1) return null;
+    return trust.vendorScore(ids[0]);
+  }
+  const scoreView = (s: Awaited<ReturnType<typeof liveScore>>, tier: unknown) => s
+    ? { scored: true, vendor_id: s.vendor_id, value: s.score.value, confidence: s.score.confidence, tier: tier ?? null, paid_test_buys: s.score.samples.paid_test_buys }
+    : { scored: false, value: null, confidence: null, tier: tier ?? null, note: "Numeric scores exist for curated vendors only; the tier comes from the catalog." };
+
+  async function checkVerdict(input: { url: string; payTo?: string; amountUsd?: number; network?: string }, base: string, free: boolean) {
+    const exact = (await trust.lookup({ url: input.url } as LookupQuery, base, free ? { free: true } : undefined)) as any;
+    const hasExact = !!exact?.self || (exact?.catalog?.entries?.length ?? 0) > 0;
+    const host = new URL(input.url).hostname.toLowerCase();
+    const dom = hasExact ? null : ((await trust.lookup({ domain: host } as LookupQuery, base, free ? { free: true } : undefined)) as any);
+    return { verdict: trustVerdict(input, exact, dom, base) as Record<string, any>, exact, host };
+  }
+
+  /** payTo-only verdict (MCP tool payments): who is this address, per the catalog and Lumi's curated vendors. */
+  async function payToVerdict(input: { payTo: string; amountUsd?: number; network?: string }, base: string) {
+    const doc = (await trust.lookup({ payTo: input.payTo } as LookupQuery, base, { free: true })) as any;
+    const first = doc?.catalog?.entries?.[0]?.resource as string | undefined;
+    const cur = doc?.curated?.[0]?.id as string | undefined;
+    let host: string | null = cur ?? null;
+    if (!host && first) { try { host = new URL(first).hostname.toLowerCase(); } catch { host = null; } }
+    const verdict = trustVerdict({ url: first ?? "", ...input } as any, doc, null, base) as Record<string, any>;
+    if (verdict.matched) verdict.matched.exact = false;
+    return { verdict, exact: doc, host };
+  }
+
+  async function freeCheck(request: Request, url: URL, base: string): Promise<Response> {
+    const noStore = { "Cache-Control": "no-store" };
+    const sp = url.searchParams;
+    const raw = sp.get("url")?.trim() ?? "";
+    const clean = originPath(raw);
+    const payTo = sp.get("payTo")?.trim() || sp.get("pay_to")?.trim() || undefined;
+    const amountRaw = sp.get("amount")?.trim();
+    const amountUsd = amountRaw ? Number(amountRaw.replace(/^\$/, "")) : undefined;
+    const bad = (detail: string) => json(400, { error: "invalid_query", detail, example: `${base}/v1/check?url=https://api.example.com/v1/data&payTo=0x...&amount=0.01` }, noStore);
+    // payTo-only checks exist for MCP tool payments, whose resource is mcp://tool/<name> rather than an http(s) URL.
+    if (!clean && !(payTo && !raw)) return bad("url is required (or payTo alone for MCP tool payments): the absolute http(s) x402 resource URL you are about to pay (query strings are ignored).");
+    const lerr = lookupError({ ...(clean ? { url: clean } : {}), ...(payTo ? { payTo } : {}) }, { url: !!clean, payTo: payTo !== undefined }, "check");
+    if (lerr) return json(400, lerr, noStore);
+    if (amountRaw && !(amountUsd !== undefined && Number.isFinite(amountUsd) && amountUsd >= 0 && amountUsd < 1e6)) return bad("amount must be a USD number, e.g. 0.01.");
+    // One free limit for everyone: contributors get no rate-limit or other perk.
+    const limit = await trust.freeLimit(request, "lookup");
+    if (limit) return limit;
+    const network = sp.get("network")?.slice(0, 40) || undefined;
+    const { verdict, host } = clean ? await checkVerdict({ url: clean, payTo, amountUsd, network }, base, true) : await payToVerdict({ payTo: payTo!, amountUsd, network }, base);
+    const score = host ? scoreView(await liveScore(host), verdict.matched?.tier) : null;
+    const link = host ? `${base}/trust/v/${encodeURIComponent(host)}` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(payTo!)}`;
+    const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict, score, link, paid: false });
+    const t = now();
+    const receipt = await signResponse("lumi_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
+    return json(200, {
+      kind: "lumi_check", ...payload, receipt,
+      detail: clean ? `${base}/v1/trust/check?url=${encodeURIComponent(clean)} (x402, adds reason details and next steps)` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(payTo!)}`,
+      note: "Free pre-pay check. Paying Lumi (checks, monitoring, reports) never changes a score, tier, ranking or badge. Only origin + path of the URL is used; nothing about the query is stored.",
+    }, noStore);
+  }
+
+  /** Earned-only "Tested by Lumi" badge: decision from the live score only, signed and short-lived. */
+  async function earnedBadge(key: string, ext: "json" | "svg", base: string): Promise<Response> {
+    const s = await liveScore(key);
+    const d = s ? badgeDecision({ score: s.score, last_conclusive: s.last_conclusive, status: s.status }) : { earned: false as const, reason: "not_scored" };
+    const live = `${base}/trust/v/${encodeURIComponent(s?.vendor_id ?? key)}`;
+    const headers = { "Cache-Control": BADGE_CACHE, "Access-Control-Allow-Origin": "*" };
+    if (ext === "svg") {
+      const svg = d.earned && s ? earnedBadgeSvg(s.score.value!, new Date(now()).toISOString().slice(0, 10)) : noBadgeSvg(d.reason === "not_scored" ? "not scored" : "no badge");
+      return new Response(svg, { status: 200, headers: { ...headers, "Content-Type": "image/svg+xml; charset=utf-8", Link: `<${live}>; rel="related"` } });
+    }
+    const payload = {
+      subject: s ? { vendor_id: s.vendor_id, name: s.name } : { key: key.slice(0, 200) },
+      earned: d.earned, reason: d.reason,
+      score: s ? { value: s.score.value, confidence: s.score.confidence, paid_test_buys: s.score.samples.paid_test_buys } : null,
+      threshold: { min_score: BADGE_MIN_SCORE, min_paid_test_buys: BADGE_MIN_PAID_TESTS, latest_test_buy: "delivered" },
+      live_report: live,
+      embed: d.earned ? `<a href="${live}"><img src="${base}/v1/badge/${encodeURIComponent(s?.vendor_id ?? key)}.svg" alt="Tested by Lumi (live score)"></a>` : null,
+      purchasable: false,
+    };
+    const signed = await signResponse("tested_badge", payload, await signKey(), now(), BADGE_SIGNED_TTL_SEC);
+    return json(200, { kind: "tested_badge_verdict", ...payload, signed, note: "Earned only, never sold. Re-evaluated from the live score on every request and removed automatically when it drops below the threshold. Check the signature and expires_at; a copied image proves nothing." }, headers);
+  }
   const ownHosts = new Set(["api.lumitrades.io", ...(config.publicBaseUrl ? [new URL(config.publicBaseUrl).hostname] : [])]);
   const commerce = createCommerce({
     store: commerceStore,
@@ -519,11 +658,12 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     let host = "";
     try { host = new URL(url).hostname.toLowerCase(); } catch { return bad("url must be an absolute http(s) URL."); }
     try {
-      const exact = (await trust.lookup({ url } as LookupQuery, base)) as any;
-      const hasExact = !!exact?.self || (exact?.catalog?.entries?.length ?? 0) > 0;
-      const dom = hasExact ? null : ((await trust.lookup({ domain: host } as LookupQuery, base)) as any);
-      const body = trustVerdict({ url, payTo, amountUsd, network: sp.get("network") ?? undefined }, exact, dom, base);
+      const clean = originPath(url) ?? url;
+      const network = sp.get("network") ?? undefined;
+      const { verdict: body, exact } = await checkVerdict({ url: clean, payTo, amountUsd, network }, base, false);
       const t = now();
+      const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: body, score: scoreView(await liveScore(host), (body as any).matched?.tier), link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: true });
+      (body as any).lumi_receipt = await signResponse("trust_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
       const meta = metaFrom(t, t + 86_400_000, t + 30 * 60_000, t);
       const cand = buyCandidate(body as any, exact);
       return { ok: true, route: "trust_check", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)), ...(cand ? { onPaid: () => catalog.queueBuy(cand) } : {}) };
@@ -641,6 +781,26 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         });
       }
     }
+    // Lumi Check tier 1: anonymous delivery outcome (seller host or vendor id + delivered yes/no + coarse status class only).
+    if (path === "/v1/check/outcome" && request.method === "POST") {
+      const noStore = { "Cache-Control": "no-store" };
+      if (outcomeLimited(request)) return json(429, { error: "rate_limited", retry_after_s: 60 }, { ...noStore, "Retry-After": "60" });
+      const text = await request.text().catch(() => "");
+      if (text.length > 512) return json(413, { error: "body_too_large", max_bytes: 512 }, noStore);
+      let body: unknown; try { body = JSON.parse(text); } catch { body = null; }
+      const p = parseOutcome(body);
+      if (!p.ok) return json(400, { ...p, allowed: OUTCOME_FIELDS, note: "Tier 1 accepts only an anonymous delivery outcome. Nothing was stored." }, noStore);
+      const status = outcomes.record(p);
+      if (ctx && outcomes.due()) ctx.waitUntil(outcomes.flush().catch(() => 0));
+      return json(202, { ok: true, status, stored: "aggregate_counter_only", note: "Not linked to you; not a scoring input. Turn off with LUMI_CHECK_TELEMETRY=off or `lumi-scan telemetry off`." }, noStore);
+    }
+    // Lumi Check v0: free signed pre-pay check, signing keys, earned-only signed badge.
+    if (request.method === "GET" || request.method === "HEAD") {
+      if (path === "/v1/check") return freeCheck(request, url, base);
+      if (path === "/v1/check/keys" || path === "/.well-known/lumi-keys.json") return json(200, keysDoc(await signKey(), base), { "Cache-Control": "public, max-age=3600" });
+      const eb = /^\/v1\/badge\/([^/]{1,200})\.(json|svg)$/.exec(path);
+      if (eb) { const k = safeDecode(eb[1]); if (k) return earnedBadge(k, eb[2] as "json" | "svg", base); }
+    }
     // Seller monitoring + data licence feed (free docs/signup, x402 plans, keyed feed, owner routes).
     {
       const r = await commerce.handle(request, path, base, ctx);
@@ -649,6 +809,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     // Trust layer: free GETs, rate-limited public POSTs, owner-only ingest.
     if (path.startsWith("/v1/trust") || path === "/v1/reports" || path === "/v1/tips") {
       const r = await trust.handle(request, path, base);
+      if (r) return r;
+    }
+    // Lumi Check v0 (DRAFT, not deployed): contributor-signed receipts + owner key management.
+    if (path.startsWith("/v1/contrib/") || path === "/v1/owner/contributors" || path.startsWith("/v1/owner/contributors/")) {
+      const r = await contributors.handle(request, path);
       if (r) return r;
     }
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -662,6 +827,18 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       }
       const days = Number(url.searchParams.get("days") ?? "7");
       return json(200, { ...(await trafficSummary(traffic, now(), days)), logging: trafficOn }, { "Cache-Control": "no-store" });
+    }
+    // Owner-only tier-1 delivery outcome aggregates (counters per day per seller host).
+    if (path === "/v1/owner/check-outcomes") {
+      if (!(await ownerReq(request))) return json(401, { error: "owner_key_required" }, { "Cache-Control": "no-store", "WWW-Authenticate": "Bearer" });
+      await outcomes.flush();
+      const days = Math.min(90, Math.max(1, Number(url.searchParams.get("days") ?? "7") || 7));
+      const sdays = Math.min(3650, Math.max(1, Number(url.searchParams.get("summary_days") ?? "30") || 30));
+      const since = (n: number) => new Date(now() - n * 86_400_000).toISOString().slice(0, 10);
+      return json(200, {
+        kind: "lumi_check_outcomes", retention_days: OUTCOME_RETENTION_DAYS, summaries_kept: OUTCOME_SUMMARY_RETENTION,
+        rows: await outcomes.store.list(since(days), 1000), summaries: await outcomes.store.summaries(since(sdays), 5000),
+      }, { "Cache-Control": "no-store" });
     }
     // Owner-only sales ledger summary (Authorization: Bearer <OWNER_MCP_KEY>). Excludes Lumi's own test wallets.
     if (path === "/v1/owner/sales") {
@@ -986,6 +1163,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     config,
     pricer,
     trust,
+    contributors,
+    contribQueue: (bodies: unknown[]) => contributors.consume(bodies),
     sales,
     catalog,
     commerce,
@@ -997,7 +1176,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         .catch(trafficErr);
       if (ctx) ctx.waitUntil(p);
     },
-    flushTraffic: () => trafficBuf.flush().catch(trafficErr),
+    flushTraffic: () => Promise.all([trafficBuf.flush().catch(trafficErr), outcomes.flush().catch(() => 0)]).then(() => undefined),
     live,
     feeds,
     async liveRefresh() {
@@ -1016,7 +1195,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       return r;
     },
     async scheduled() {
-      const prune = Promise.all([trafficBuf.flush().catch(trafficErr), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {})]);
+      // Contributor retention purge: once a day (03:07 UTC tick of the per-minute cron).
+      const d = new Date(now());
+      const nightly = d.getUTCHours() === 3 && d.getUTCMinutes() === 7;
+      const contribPurge = nightly ? contributors.purge().catch(() => {}) : Promise.resolve();
+      const prune = Promise.all([trafficBuf.flush().catch(trafficErr), (nightly ? outcomes.nightly().then((r) => deps.log?.({ event: "check_outcomes_nightly", ...r, rolled: r.rolled.length, rerolled: r.rerolled.length, purged_days: r.purged_days.length })) : outcomes.flush()).catch(() => {}), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge]);
       const [probes, cat, , com] = await Promise.allSettled([trust.runProbes(), catalog.cron(), prune, commerce.cron(config.publicBaseUrl ?? "https://api.lumitrades.io")]);
       return {
         probes: probes.status === "fulfilled" ? probes.value : { error: String(probes.reason) },

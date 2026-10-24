@@ -101,6 +101,10 @@ export interface Trust {
   /** Lookup by resource URL, domain or payTo across the curated list and the catalog. */
   /** free=true: answer-only (no tx hashes / evidence detail) for free surfaces; default full for paid /v1/trust/check. */
   lookup(q: LookupQuery, base: string, opts?: { free?: boolean }): Promise<Record<string, unknown>>;
+  /** Live score of one curated vendor (same inputs as the public score: probes, Lumi test-buys, verified reports). Null = unknown id. */
+  vendorScore(id: string): Promise<{ vendor_id: string; name: string; score: ScoreResult; status: string; last_conclusive: "delivered" | "not_delivered" | null } | null>;
+  /** Free-route rate limit (same buckets as free lookups). Null = allowed. */
+  freeLimit(request: Request, bucket: "lookup"): Promise<Response | null>;
 }
 
 /** Read url / domain / payTo lookup parameters (payTo matched case-insensitively). */
@@ -1403,5 +1407,18 @@ export function createTrust(deps: TrustDeps): Trust {
     return null;
   }
 
-  return { handle, runProbes, vendorsDoc, vendorDoc, vendorReport, lookup };
+  async function vendorScore(id: string) {
+    const v = vendorById(id);
+    if (!v) return null;
+    const [g, reach] = await Promise.all([gather(v), reachability(v)]);
+    const last = g.obs.map(deliveryState).find((d) => d !== "inconclusive") ?? null;
+    return { vendor_id: v.id, name: v.name, score: g.score, status: reach.status, last_conclusive: last as "delivered" | "not_delivered" | null };
+  }
+
+  async function freeLimit(request: Request, bucket: "lookup") {
+    const l = FREE_LIMITS[bucket];
+    return limited(bucket, await ipHash(request), l.perMinute, l.perDay, l.globalPerDay);
+  }
+
+  return { handle, runProbes, vendorsDoc, vendorDoc, vendorReport, lookup, vendorScore, freeLimit };
 }

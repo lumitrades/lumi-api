@@ -32,6 +32,9 @@ use this package when you want paid tools to pay automatically from your own wal
 | `lumi_vendor_scores` | free | `url?` `domain?` `payTo?` `vendor_id?` | Look up any x402 seller before paying: tier (catalogued / quote-verified, low confidence / purchase-verified), last free 402-quote check, price and payTo vs its Bazaar listing, on-chain test-buy evidence. No args: Lumi's curated vendor scores |
 | `lumi_seller_monitoring` | free | `enrollment_id?` | Seller monitoring plans (Monitor $9/30d, Monitor Plus $29/30d, Audit $99 one-off), enrolment steps; with an id, that seller's public entry and badge. Paying never changes a score |
 | `lumi_trust_feed` | free | – | Trust data feed plans (free key 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d) and licence terms |
+| `lumi_check` | free | `url?` `pay_to?` `amount_usd?` `network?` | **Lumi Check** before you pay any x402 seller: allow / warn / block with reasons, the seller's score and a link to its live report. Signed by Lumi and verified locally. Only origin + path of the URL is sent. Fail-open: warn if Lumi is unreachable within 2.5 s |
+| `lumi_scan_seller` | free | `url` | Fetch an x402 seller's 402 quote without paying, plus a dry-run test-buy plan against local caps |
+| `lumi_report_receipt` | free | `endpoint` `network` `tx_hash` … | Sign a receipt for a purchase you already made. `submit: true` is tier 2 sharing: off by default, needs `LUMI_SHARE_RECEIPTS=1` or `lumi-scan sharing on`. Shares the payment's chain and transaction ID, which is public on-chain and linkable to the paying wallet. Verified receipts earn a public badge only |
 | `lumi_trust_check` | paid | $0.004 | Pre-payment check of any x402 URL you are about to pay: payTo/price mismatches vs listings and Lumi's observations. `url` required |
 | `lumi_vendor_report` | paid | $0.02 | Full observation history for one x402 vendor on Lumi's trust list: every quote check (90 days) and paid test-buy with tx hash and delivered yes/no, latency stats and trend, uptime %, verified agent reports, vendor replies, confidence labels. `vendor_id` required |
 
@@ -99,6 +102,29 @@ Claude Code: `claude mcp add lumi-trades -e EVM_PRIVATE_KEY=0x... -- npx -y lumi
 
 Without a wallet the free tools work and paid tools return the price quote instead of paying.
 
+## Lumi Check from your own code (x402 / MCP hooks)
+
+```js
+import { lumiCheckHooks } from "lumi-trades-mcp/src/check.js";
+const { lumi, x402Hook, mcpHook } = await lumiCheckHooks();   // options: { failMode: "open"|"closed", timeoutMs, publicKeys }
+
+x402Client.onBeforePaymentCreation(x402Hook);   // @x402 core: returns { abort: true, reason } on "block"
+mcpClient.onPaymentRequired(mcpHook);           // @x402/mcp: returns { abort: true } on "block" (checked by payTo)
+const v = await lumi.check({ url, payTo, amountUsd: 0.01 }); // { decision, reasons, score, link, verified }
+```
+
+Defaults (pending owner approval): **fail-open** (a timeout or an unverifiable answer gives `warn`, payment goes ahead) and a
+**2.5 s timeout**. Set `failMode: "closed"` to block instead. Paying Lumi never changes any seller's score, tier, ranking or badge.
+The adapters come from `lumi-scanner-kit` (Apache-2.0); scoring and verification stay on Lumi's servers.
+
+What the kit shares: **nothing until the user says yes.** The `lumi-scan` CLI asks once, after the first check ("Share your
+results to help improve Lumi's public trust list? [Y/n]"). The MCP server cannot ask, so here sharing stays off and one hint is
+written to stderr; turn it on with `LUMI_CHECK_TELEMETRY=on` or `lumi-scan telemetry on`. **Tier 1** is only an anonymous delivery
+outcome after a paid call: seller host, delivered yes/no, a coarse status class and a random one-time token. No wallet, amount,
+tx hash, query string or stable ID. Sharing never changes any score. **Tier 2** (off by default) sends full signed receipts.
+Each receipt shares the payment's chain and transaction ID (no amount or wallet field); a transaction ID is public on-chain and
+can be linked to the paying wallet. Contributors get a public badge only, nothing of monetary value. See the kit README.
+
 ## Configuration (environment)
 
 | Variable | Default | Meaning |
@@ -112,6 +138,11 @@ Without a wallet the free tools work and paid tools return the price quote inste
 | `XRPL_NETWORK` | `xrpl:0` | `xrpl:0` mainnet, `xrpl:1` testnet |
 | `LUMI_API_URL` | `https://api.lumitrades.io` | API base URL |
 | `LUMI_EXPECTED_PAY_TO` | Lumi's wallets on the official API: `rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM` (XRPL mainnet), `0x5E617bac19912e6d212CB303ae84655E9E203532` (Base) | Refuse to pay any other address |
+| `LUMI_CHECK_API` | `LUMI_API_URL` | Base URL for `lumi_check` |
+| `LUMI_KIT_HOME` / `LUMI_KIT_CONFIG` | `~/.lumi-scanner-kit/config.json` | Kit config (saved sharing answer, telemetry and sharing switches) |
+| `LUMI_CHECK_TELEMETRY` | off (until the user says yes) | `on` enables tier 1 outcome reports, `off` disables them; overrides the saved answer |
+| `LUMI_SHARE_RECEIPTS` | off | `1` enables tier 2 receipt submission |
+| `LUMI_CONTRIB_KEY_FILE` | – | Contributor key for tier 2 submissions (`lumi-scan keygen`) |
 | `XRPL_WS_URL` | `wss://xrplcluster.com` / `wss://testnet.xrpl-labs.com` | Ledger connection used to autofill and sign |
 
 Safety: before signing, the server checks network, scheme, asset, payee, per-call cap and session budget. Anything off and it
