@@ -401,7 +401,12 @@ describe("Lumi Check: rewards, privacy and integrity", () => {
   it("query strings are stripped from stored endpoints and receipt copies, and cannot dodge per-endpoint caps", async () => {
     const s = setup({ env: { CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 1 }) } });
     const a = await s.issue(1, [wallet(1)]);
-    const r1 = await s.submit(a, await s.receipt(wallet(1), 320, { endpoint: EP + "?email=buyer@example.com" }));
+    // The kit already keeps origin + path; simulate an older or third-party client that signs the full URL.
+    const kitR: any = await s.receipt(wallet(1), 320, { endpoint: EP + "?email=buyer@example.com" });
+    expect(kitR.seller.endpoint).toBe(EP);
+    const { receipt_hash: _h, signer: _sg, ...body } = kitR;
+    const raw = await kit.signReceipt({ ...body, seller: { ...body.seller, endpoint: EP + "?email=buyer@example.com" } }, await kit.signerFor("xrpl:0", wallet(1).seed));
+    const r1 = await s.submit(a, raw);
     expect(r1.status, JSON.stringify(r1.j)).toBe(202);
     const row = await s.store.byTx(txh(320));
     expect(row.endpoint).not.toContain("?");
