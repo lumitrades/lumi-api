@@ -97,3 +97,15 @@ describe("Lumi Check signing key: pinned public key, separate from the admin cre
     expect(keys.keys.some((k: any) => k.key_id === "lsk_5c8c2f54fd228547" && k.pinned && k.status === "active")).toBe(true);
   });
 });
+
+describe("item 4: the same Lumi keys are pinned in the API, the kit and the MCP", () => {
+  it("three pin lists are identical", async () => {
+    const { LUMI_SIGNING_KEYS } = await import("../src/trust/lumi_keys");
+    // @ts-expect-error plain JS module
+    const kitKeys = (await import("../packages/scanner-kit/src/lumi_keys.js")).LUMI_SIGNING_KEYS;
+    // @ts-expect-error plain JS module
+    const mcpKeys = (await import("../mcp/src/lumi_keys.js")).LUMI_SIGNING_KEYS;
+    expect(kitKeys).toEqual(LUMI_SIGNING_KEYS);
+    expect(mcpKeys).toEqual(LUMI_SIGNING_KEYS);
+  });
+});
