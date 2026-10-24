@@ -1,7 +1,10 @@
-/** D1 + in-memory stores for seller monitoring and the licence feed (migration 0011). */
+/** D1 + in-memory stores for seller monitoring and the licence feed (migrations 0011, 0025). */
 import type { D1Like } from "../config";
 
-export interface MonitorEndpoint { url: string; method: "GET" | "POST"; body?: Record<string, unknown>; price_usd: string | null; asset: string | null; amount: string | null; checked_at: number | null; source: "seller" | "catalog" }
+/** A payment option seen in the endpoint's 402 at enrolment. Only the enrolled network's payTo is proven by signature;
+ *  other chains are observed (used for chain rotation on Watch Plus / Pro and for payTo-change alerts on that chain). */
+export interface EndpointChain { network: string; pay_to: string; usd: number | null; asset: string | null; proven: boolean }
+export interface MonitorEndpoint { url: string; method: "GET" | "POST"; body?: Record<string, unknown>; price_usd: string | null; asset: string | null; amount: string | null; checked_at: number | null; source: "seller" | "catalog"; chains?: EndpointChain[] }
 export interface Enrollment {
   id: string; network: string; pay_to: string; pay_to_lc: string; domain: string | null; proof: string; nonce: string;
   endpoints: MonitorEndpoint[]; webhook_url: string | null; webhook_secret: string | null; email: string | null; token_hash: string; is_test: boolean; created_at: number;
@@ -9,6 +12,13 @@ export interface Enrollment {
 export interface PlanRow {
   id: string; enrollment_id: string; plan: string; starts_at: number; ends_at: number; paid_tx: string; paid_network: string; paid_asset: string; paid_amount: string;
   payer: string | null; usd: number | null; budget_usd: number; spent_usd: number; is_test: boolean; reminded: number; created_at: number;
+  /** Watch tiers: endpoints covered and per-endpoint list price (migration 0025). Null/absent on legacy rows. */
+  endpoints?: number | null; unit_usd?: number | null;
+}
+export interface TrialRow { id: string; enrollment_id: string; plan_id: string; domain_lc: string; pay_to_lc: string; nonce: string; proof: string; created_at: number }
+export interface UptimeRow {
+  enrollment_id: string; endpoint: string; day: string; checks: number; ok: number; p50_ms: number | null; p95_ms: number | null;
+  quote_amount: string | null; quote_asset: string | null; quote_pay_to: string | null;
 }
 export interface RunRow {
   id?: number; enrollment_id: string; plan_id: string; endpoint: string; ts: number; network: string | null; tx_hash: string | null; amount: string | null; asset: string | null;
@@ -48,6 +58,12 @@ export interface CommerceStore {
   report(planId: string): Promise<ReportRow | null>;
   addCorrection(c: CorrectionRow): Promise<number>;
   corrections(limit: number): Promise<CorrectionRow[]>;
+  /** One trial per domain and per payTo: "taken" when either (or the nonce) was used before. */
+  addTrial(t: TrialRow): Promise<"inserted" | "taken">;
+  trialFor(domainLc: string, payToLc: string): Promise<TrialRow | null>;
+  /** Upsert daily probe rollups (one row per enrolment/endpoint/day). */
+  putUptime(rows: UptimeRow[]): Promise<number>;
+  uptimeFor(enrollmentId: string, fromDay: string, toDay: string): Promise<UptimeRow[]>;
   // feed
   addKey(k: FeedKey): Promise<void>;
   keyById(id: string): Promise<FeedKey | null>;
@@ -80,6 +96,18 @@ export class MemoryCommerceStore implements CommerceStore {
   use = new Map<string, UsageRow>();
   pays: FeedPayment[] = [];
   changes: ChangeRow[] = [];
+  trials: TrialRow[] = [];
+  uptime = new Map<string, UptimeRow>();
+  async addTrial(t: TrialRow) {
+    if (this.trials.some((x) => x.domain_lc === t.domain_lc || x.pay_to_lc === t.pay_to_lc || x.nonce === t.nonce)) return "taken" as const;
+    this.trials.push({ ...t });
+    return "inserted" as const;
+  }
+  async trialFor(d: string, p: string) { return this.trials.find((x) => x.domain_lc === d || x.pay_to_lc === p) ?? null; }
+  async putUptime(rows: UptimeRow[]) { for (const r of rows) this.uptime.set(`${r.enrollment_id}|${r.endpoint}|${r.day}`, { ...r }); return rows.length; }
+  async uptimeFor(id: string, from: string, to: string) {
+    return [...this.uptime.values()].filter((r) => r.enrollment_id === id && r.day >= from && r.day <= to).sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : a.endpoint.localeCompare(b.endpoint)));
+  }
   async addEnrollment(e: Enrollment) {
     if ([...this.enrolls.values()].some((x) => x.nonce === e.nonce)) return "nonce_used" as const;
     this.enrolls.set(e.id, structuredClone(e));
@@ -163,9 +191,9 @@ export class D1CommerceStore implements CommerceStore {
   async enrollments(limit: number) { return (await this.all<any>("SELECT * FROM monitor_enrollments ORDER BY created_at DESC LIMIT ?1", limit)).map(enrollFrom); }
   async addPlan(p: PlanRow) {
     const r = await this.run(
-      `INSERT OR IGNORE INTO monitor_plans (id, enrollment_id, plan, starts_at, ends_at, paid_tx, paid_network, paid_asset, paid_amount, payer, usd, budget_usd, spent_usd, is_test, reminded, created_at)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)`,
-      p.id, p.enrollment_id, p.plan, p.starts_at, p.ends_at, p.paid_tx, p.paid_network, p.paid_asset, p.paid_amount, p.payer, p.usd, p.budget_usd, p.spent_usd, p.is_test ? 1 : 0, p.reminded, p.created_at,
+      `INSERT OR IGNORE INTO monitor_plans (id, enrollment_id, plan, starts_at, ends_at, paid_tx, paid_network, paid_asset, paid_amount, payer, usd, budget_usd, spent_usd, is_test, reminded, created_at, endpoints, unit_usd)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)`,
+      p.id, p.enrollment_id, p.plan, p.starts_at, p.ends_at, p.paid_tx, p.paid_network, p.paid_asset, p.paid_amount, p.payer, p.usd, p.budget_usd, p.spent_usd, p.is_test ? 1 : 0, p.reminded, p.created_at, p.endpoints ?? null, p.unit_usd ?? null,
     );
     return (r?.meta?.changes ?? 1) > 0 ? ("inserted" as const) : ("duplicate" as const);
   }
@@ -208,6 +236,25 @@ export class D1CommerceStore implements CommerceStore {
     return x?.id ?? 0;
   }
   async corrections(limit: number) { return this.all<CorrectionRow>("SELECT * FROM corrections ORDER BY id DESC LIMIT ?1", limit); }
+  async addTrial(t: TrialRow) {
+    const r = await this.run(
+      "INSERT OR IGNORE INTO monitor_trials (id, enrollment_id, plan_id, domain_lc, pay_to_lc, nonce, proof, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+      t.id, t.enrollment_id, t.plan_id, t.domain_lc, t.pay_to_lc, t.nonce, t.proof, t.created_at,
+    );
+    return (r?.meta?.changes ?? 1) > 0 ? ("inserted" as const) : ("taken" as const);
+  }
+  async trialFor(d: string, p: string) { return this.first<TrialRow>("SELECT * FROM monitor_trials WHERE domain_lc = ?1 OR pay_to_lc = ?2 LIMIT 1", d, p); }
+  async putUptime(rows: UptimeRow[]) {
+    if (!rows.length) return 0;
+    const sql = `INSERT INTO monitor_uptime_daily (enrollment_id, endpoint, day, checks, ok, p50_ms, p95_ms, quote_amount, quote_asset, quote_pay_to) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)
+      ON CONFLICT (enrollment_id, endpoint, day) DO UPDATE SET checks = ?4, ok = ?5, p50_ms = ?6, p95_ms = ?7, quote_amount = ?8, quote_asset = ?9, quote_pay_to = ?10`;
+    const l = rows.slice(0, 200);
+    await this.db.batch(l.map((r) => this.db.prepare(sql).bind(r.enrollment_id, r.endpoint, r.day, r.checks, r.ok, r.p50_ms, r.p95_ms, r.quote_amount, r.quote_asset, r.quote_pay_to)));
+    return l.length;
+  }
+  async uptimeFor(id: string, from: string, to: string) {
+    return this.all<UptimeRow>("SELECT * FROM monitor_uptime_daily WHERE enrollment_id = ?1 AND day >= ?2 AND day <= ?3 ORDER BY day DESC, endpoint LIMIT 2000", id, from, to);
+  }
   async addKey(k: FeedKey) {
     await this.run(
       `INSERT INTO feed_keys (id, key_hash, wallet, wallet_lc, network, plan, plan_ends_at, credits, is_test, webhook_url, webhook_secret, webhook_cursor, created_at, rotated_at)

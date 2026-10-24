@@ -33,8 +33,8 @@ export const MONITOR_METHODOLOGY = {
     "schema_changed: the structure (keys and types) of the paid response changed",
     "recovered: a previously failing endpoint delivers again",
   ],
-  cadence: { monitor: "1 endpoint, 1 test-buy per 30-day term (+1 recheck after a failure)", monitor_plus: "up to 20 endpoints, weekly", audit: "one-off: every listed endpoint once (catalog listings for the payTo + endpoints the seller names)" },
-  test_buy_cap: "Each test-buy is capped at $0.10 and funded from the plan fee; planned test-buy spend must stay within 50% of the fee. Endpoints above the cap are rejected at enrolment (Audit: quote-checked only, no buy).",
+  cadence: { watch: "per endpoint: hourly quote checks, a weekly test-buy", watch_plus: "per endpoint: quote checks every 30 min, a daily test-buy rotating across the chains it accepts", watch_pro: "per endpoint: quote checks every 15 min, daily buys on up to 3 chains, limited by the test-buy budget, a monthly signed report", watch_free: "1 endpoint, a daily quote check, no test-buys", watch_plus_trial: "14 days of Watch Plus quote checks, Lumi-funded test-buys capped at $0.25 in total. On day 14 the trial ends: nothing is charged, checks and test-buys stop, the Monitored badge comes off, and history freezes read-only. It never converts to a paid plan.", monitor: "legacy (grandfathered): 1 endpoint, 1 test-buy per 30-day term (+1 recheck after a failure)", monitor_plus: "legacy (grandfathered): up to 20 endpoints, weekly", audit: "one-off: every listed endpoint once (catalog listings for the payTo + endpoints the seller names)" },
+  test_buy_cap: "Each test-buy is capped at $0.10 ($0.05 on Watch) and funded from the plan fee (the free trial is Lumi-funded, capped at $0.25 in total); planned test-buy spend must stay within 50% of the fee. Endpoints above the cap are rejected at enrolment (Audit: quote-checked only, no buy).",
   safeguards: MONITOR_SAFEGUARDS,
   terms: MONITOR_TERMS.terms,
 };
