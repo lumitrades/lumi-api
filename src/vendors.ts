@@ -76,7 +76,7 @@ export const VENDORS: Vendor[] = [
     homepage: "https://monid-x402-xrpl-production.up.railway.app",
     pay_to: { xrpl: ["rGYbaZwYqA5XwFcmxWVdyyut4vUeTD7KcQ"] },
     endpoints: [
-      { url: "https://monid-x402-xrpl-production.up.railway.app/t/surf/exchange/funding-history", method: "GET", listed_price: "0.006", listed_asset: "RLUSD", test_buy: true },
+      { url: "https://monid-x402-xrpl-production.up.railway.app/t/surf/exchange/funding-history", method: "POST", body: { queryParams: { pair: "BTC/USDT", exchange: "binance", limit: 5 } }, listed_price: "0.006", listed_asset: "RLUSD", test_buy: true },
       { url: "https://monid-x402-xrpl-production.up.railway.app/t/api.strale.io/x402/fear-greed-index", method: "GET", listed_price: "0.0216", listed_asset: "RLUSD" },
     ],
   },

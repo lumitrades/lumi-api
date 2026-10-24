@@ -1,6 +1,6 @@
 {
   "name": "lumi-api",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "Pay-per-call x402 seller checks (Lumi Trust), crypto market data and Lumi Market Ideas (paper-trade analysis, not investment advice) from Lumi Trades for AI agents, paid via x402 on the XRP Ledger (XRP, RLUSD, USDC) or with USDC on Base. A2A agent card + remote MCP.",
   "main": "src/index.ts",
   "scripts": {

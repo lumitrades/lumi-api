@@ -88,7 +88,7 @@ export const RECEIPT_DELIVERY_SCHEMA = {
   required: ["observed_at", "http_status", "data_returned", "outcome"],
 } as const;
 
-export const VERSION = "1.1.4";
+export const VERSION = "1.1.5";
 
 /** accepts[] indices: USDC on Base first (when configured), then XRP, then the XRPL stablecoins. */
 export function acceptsIndex(cfg: Config) {
