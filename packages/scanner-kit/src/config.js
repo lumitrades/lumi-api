@@ -59,3 +59,13 @@ export const DISCLOSURE = [
   "  Tier 2 (OFF by default, opt-in): full signed delivery receipts. This is the only thing that earns free Lumi Check",
   "    credits. Turn on with `lumi-scan sharing on`; off with `lumi-scan sharing off`. No cash rewards.",
 ].join("\n");
+
+/** Shown by `lumi-scan account delete` before the confirm prompt. Keep in sync with README "Deleting your account" and TERMS. */
+export const ACCOUNT_DELETE_NOTICE = [
+  "Delete your Lumi Check contributor account. This cannot be undone.",
+  "Deleted now: your key (it can never sign again), label, public key, registered wallets, own domains, demand opt-in,",
+  "  activity date, free check credits (balance, earned batches and spends), your leaderboard entry, and every receipt you",
+  "  shared, except receipts Lumi already cited in a published, dated test result.",
+  "Kept, with no link to you: those cited receipts (your wallet signature, payer address and kit details are removed),",
+  "  and anonymous per-seller daily summaries (they never had a link to you). Payments on a public blockchain cannot be deleted by anyone.",
+].join("\n");

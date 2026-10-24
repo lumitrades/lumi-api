@@ -326,7 +326,7 @@ describe("D1 write budget and queue", () => {
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
-      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
+      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql", "0021_contrib_published.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
       for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
       const store = new D1ContributorStore(db);
       const s = setup({ store });
@@ -587,4 +587,121 @@ describe("free Lumi Check credits (no cash)", () => {
     const bounties: any = await (await s.app.fetch(new Request(BASE + "/v1/contrib/bounties"))).json();
     expect(bounties).toMatchObject({ enabled: false, payout: "none", wanted: [] });
   });
+});
+
+describe("account deletion (contributor self-service + owner on email request)", () => {
+  const lb = async (s: any) => ((await (await s.app.fetch(new Request(BASE + "/v1/contrib/leaderboard"))).json()) as any).rows;
+  async function seeded(s: any) {
+    const a = await s.issue(1, [wallet(1)], { share_demand: true, own_domains: ["mine.example"] });
+    const b = await s.issue(2, [wallet(2)]);
+    await s.submit(a, await s.receipt(wallet(1), 700));
+    await s.submit(a, await s.receipt(wallet(1), 701, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }));
+    await s.submit(b, await s.receipt(wallet(2), 702, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }));
+    expect((await s.signed(a, "POST", "/v1/contrib/credits/spend", { product: "trust_check", input: { url: EP } })).status).toBe(200);
+    expect((await s.owner("POST", `/v1/owner/contributors/findings/${txh(701)}`, { action: "mark_published" })).status).toBe(200);
+    return { a, b };
+  }
+
+  it("self-service: needs the signed key and a typed confirm; deletes profile, wallets, credits, leaderboard entry and unpublished rows; anonymises published ones", async () => {
+    const s = setup();
+    const { a, b } = await seeded(s);
+    expect((await lb(s))).toHaveLength(2);
+    // unsigned or wrong confirm: nothing happens
+    expect((await s.app.fetch(new Request(BASE + "/v1/contrib/me", { method: "DELETE", body: JSON.stringify({ confirm: a.key_id }) }))).status).toBe(401);
+    const bad = await s.signed(a, "DELETE", "/v1/contrib/me", { confirm: b.key_id });
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as any).error).toBe("confirm_key_id_required");
+    expect(s.store.subs.size).toBe(3);
+
+    const res = await s.signed(a, "DELETE", "/v1/contrib/me", { confirm: a.key_id });
+    const j: any = await res.json();
+    expect(res.status, JSON.stringify(j)).toBe(200);
+    expect(j).toMatchObject({ deleted: true, status: "deleted", submissions_deleted: 1, submissions_anonymised: 1, credit_spends_deleted: 1, wallets_deleted: 1 });
+
+    // profile gone: tombstone only
+    const k = s.store.keys.get(a.key_id);
+    expect(k).toMatchObject({ status: "deleted", label: "", public_key: "", wallets: [], own_domains: [], share_demand: false, last_active_day: null, revoke_reason: "deleted_by_contributor" });
+    expect(await s.store.wallets([wallet(1).address])).toEqual([]);
+    expect([...s.store.spends.values()].filter((x: any) => x.key_id === a.key_id)).toEqual([]);
+    // unpublished row deleted; published row kept without any contributor link
+    expect(s.store.subs.get(txh(700))).toBeUndefined();
+    const kept: any = s.store.subs.get(txh(701));
+    expect(kept).toMatchObject({ key_id: "deleted", payer: "", source: "", demand_opt_in: false, credit_uusd: 0, kit_version: null });
+    expect(kept.published_at).toBe(NOW);
+    const all = JSON.stringify([...s.store.subs.values()].filter((x: any) => x.key_id !== b.key_id)) + JSON.stringify([...s.store.keys.values()].filter((x: any) => x.key_id !== b.key_id));
+    expect(all).not.toContain(wallet(1).address);
+    expect(all).not.toContain(a.pub);
+    expect(all).not.toContain("mine.example");
+    const rc = JSON.parse(kept.receipt);
+    expect(rc.signer).toBeUndefined();
+    expect(rc.payment.payer).toBeUndefined();
+    expect(rc.payment.tx_hash).toBe(txh(701));
+    expect(rc.x_lumi_stored.anonymised_at).toBeTruthy();
+    // leaderboard entry gone, other contributor untouched
+    const rows = await lb(s);
+    expect(rows).toHaveLength(1);
+    expect(s.store.subs.get(txh(702))?.key_id).toBe(b.key_id);
+    // the key can never sign again
+    const after = await s.signed(a, "GET", "/v1/contrib/me");
+    expect(after.status).toBe(403);
+    expect(((await after.json()) as any).error).toBe("key_deleted");
+    // the wallet is free to register again under a new key
+    await s.issue(3, [wallet(1)]);
+  });
+
+  it("owner route for email requests: by key id or wallet, needs confirm: true; unknown is 404", async () => {
+    const s = setup();
+    const { a, b } = await seeded(s);
+    expect((await s.app.fetch(new Request(BASE + "/v1/owner/contributors/delete", { method: "POST", body: JSON.stringify({ key_id: a.key_id, confirm: true }) }))).status).toBe(401);
+    expect((await s.owner("POST", "/v1/owner/contributors/delete", { key_id: a.key_id })).status).toBe(400);
+    expect((await s.owner("POST", "/v1/owner/contributors/delete", { wallet: wallet(9).address, confirm: true })).status).toBe(404);
+    const r = await s.owner("POST", "/v1/owner/contributors/delete", { wallet: wallet(1).address, confirm: true, request_ref: "email 2026-10-23" });
+    const j: any = await r.json();
+    expect(r.status).toBe(200);
+    expect(j).toMatchObject({ deleted: true, submissions_deleted: 1, submissions_anonymised: 1, request_ref: "email 2026-10-23" });
+    expect(s.store.keys.get(a.key_id)?.revoke_reason).toBe("deleted_by_owner");
+    const r2: any = await (await s.owner("POST", "/v1/owner/contributors/delete", { key_id: b.key_id, confirm: true })).json();
+    expect(r2).toMatchObject({ deleted: true, submissions_deleted: 1, submissions_anonymised: 0 });
+    expect(await lb(s)).toEqual([]);
+    expect([...s.store.subs.keys()]).toEqual([txh(701)]);
+  });
+
+  it("a queued submission accepted before deletion is dropped, not resurrected", async () => {
+    const sent: any[] = [];
+    const s = setup({ contribQueue: { send: async (x: unknown) => { sent.push(x); } } });
+    const a = await s.issue(1, [wallet(1)]);
+    expect((await s.submit(a, await s.receipt(wallet(1), 710))).j.queued).toBe(true);
+    expect((await s.signed(a, "DELETE", "/v1/contrib/me", { confirm: a.key_id })).status).toBe(200);
+    await s.app.contribQueue(sent);
+    expect(s.store.subs.size).toBe(0);
+    expect(s.store.keys.get(a.key_id)?.last_active_day).toBeNull();
+  });
+
+  it("D1 store: erase in one batch, published rows anonymised (miniflare)", async () => {
+    const { Miniflare } = await import("miniflare");
+    const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('') } }", d1Databases: ["DB"] });
+    try {
+      const db: any = await mf.getD1Database("DB");
+      await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
+      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql", "0017_contrib_check_credits.sql", "0020_contrib_activity_credit_expiry.sql", "0021_contrib_published.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
+      for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
+      const store = new D1ContributorStore(db);
+      const s = setup({ store });
+      const { a, b } = await seeded(s);
+      expect((await store.byTx(txh(701)))?.published_at).toBe(NOW);
+      const j: any = await (await s.signed(a, "DELETE", "/v1/contrib/me", { confirm: a.key_id })).json();
+      expect(j).toMatchObject({ deleted: true, submissions_deleted: 1, submissions_anonymised: 1, credit_spends_deleted: 1, wallets_deleted: 1 });
+      expect(await store.byTx(txh(700))).toBeNull();
+      const kept = await store.byTx(txh(701));
+      expect(kept).toMatchObject({ key_id: "deleted", payer: "", source: "" });
+      expect(kept!.receipt).not.toContain(wallet(1).address);
+      expect(await store.getKey(a.key_id)).toMatchObject({ status: "deleted", label: "", public_key: "", wallets: [], own_domains: [] });
+      expect(await store.wallets([wallet(1).address])).toEqual([]);
+      expect(await store.spendsSince(a.key_id, "2000-01-01")).toEqual([]);
+      expect((await store.byTx(txh(702)))?.key_id).toBe(b.key_id);
+      expect((await s.signed(a, "GET", "/v1/contrib/me")).status).toBe(403);
+    } finally {
+      await mf.dispose();
+    }
+  }, 30_000);
 });

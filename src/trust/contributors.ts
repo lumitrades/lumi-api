@@ -12,6 +12,7 @@
  *     GET  /v1/contrib/wanted        what to test next (server-chosen, per key rotation)
  *     GET  /v1/contrib/me            own credits, caps left and own recent submissions
  *     POST /v1/contrib/me            { share_demand: boolean } (opt-in to aggregate-only demand stats)
+ *     DELETE /v1/contrib/me          { confirm: "<own key_id>" } delete the account (see eraseAccount)
  *   Seller (signed with the payTo wallet):
  *     POST /v1/contrib/disputes      { tx_hash, reason, signer } holds a contributed finding for review
  *   Owner (Authorization: Bearer <OWNER_MCP_KEY>, same check as the other owner routes):
@@ -22,6 +23,8 @@
  *     GET  /v1/owner/contributors/flags               endpoints dominated by few funding sources / new wallets
  *     GET  /v1/owner/contributors/demand              opt-in demand, aggregate only (>= 2 contributors per row)
  *     POST /v1/owner/contributors/findings/{tx}       { action: "confirm" | "contradict" | "clear_dispute" | "uphold_dispute" }
+ *     POST /v1/owner/contributors/findings/{tx}       { action: "mark_published" } receipt cited in a published, dated test result
+ *     POST /v1/owner/contributors/delete              { key_id | wallet, confirm: true, request_ref? } delete on an email request
  *     POST /v1/owner/contributors/reconcile           confirm unconfirmed negatives against Lumi's own re-buys
  *
  * D1: one row (+2 index entries) per accepted submission on its OWN daily counter `contrib_writes:<day>`
@@ -100,7 +103,7 @@ export function cmpVersion(a: string, b: string): number {
 
 export interface ContributorKey {
   key_id: string; label: string; public_key: string; wallets: string[]; own_domains: string[];
-  daily_cap: number | null; share_demand: boolean; status: "active" | "revoked"; forfeited: boolean;
+  daily_cap: number | null; share_demand: boolean; status: "active" | "revoked" | "deleted"; forfeited: boolean;
   created_at: number; revoked_at: number | null; revoke_reason: string | null;
   /** UTC day of the last accepted receipt or signed check (updated at most once per key per day). Accounts are kept while active. */
   last_active_day?: string | null;
@@ -112,6 +115,26 @@ export interface Submission {
   pay_to: string; payer: string; source: string; new_wallet: boolean; receipt_hash: string; http_status: number | null;
   outcome: string | null; finding: Finding; wanted: boolean; demand_opt_in: boolean; ledger_ts: number | null;
   credit_uusd: number; credit_note: string | null; dispute: string | null; metrics: string | null; receipt: string;
+  /** Set by the owner when the receipt is cited in a published, dated test result (migration 0021). */
+  published_at?: number | null;
+}
+export interface EraseResult { found: boolean; submissions_deleted: number; submissions_anonymised: number; credit_spends_deleted: number; wallets_deleted: number }
+/** Placeholder key id left on anonymised submissions and in the key tombstone's place: no link to the deleted contributor. */
+export const DELETED_CONTRIBUTOR = "deleted";
+/**
+ * Anonymised copy of a stored receipt kept for a published, dated test result after account deletion: the wallet
+ * signature, payer, kit details and anything else tying it to the contributor are removed. The tx hash stays (it is
+ * public on the ledger and is what the published result cites).
+ */
+export function anonymisedReceipt(raw: string, at: number): string {
+  let r: any; try { r = JSON.parse(raw); } catch { r = {}; }
+  const { signer: _s, x_lumi_contrib: x, x_lumi_stored: _st, ...rest } = r ?? {};
+  const payment = rest.payment ? (({ payer: _p, ...p }) => p)(rest.payment) : undefined;
+  return JSON.stringify({
+    ...rest, ...(payment ? { payment } : {}), issuer: { name: "Lumi Check contributor (deleted)" },
+    ...(x?.measurements ? { x_lumi_contrib: { measurements: x.measurements } } : {}),
+    x_lumi_stored: { anonymised_at: new Date(at).toISOString(), removed: ["signer", "payment.payer", "x_lumi_contrib.kit", "x_lumi_contrib.mode", "issuer.methodology"], note: "Contributor account deleted; kept only because a published, dated test result cites it." },
+  }).slice(0, 12_000);
 }
 /** One redemption of free Lumi Check credits (the earn side is derived from verified submissions, so disputes reverse it). */
 export interface CreditSpend { id: string; key_id: string; ts: number; day: string; product: string; cost: number; ref: string | null; alloc?: CreditAlloc[] | null }
@@ -130,6 +153,10 @@ export interface ContributorStore {
   wallets(addresses: string[]): Promise<WalletRow[]>;
   issue(k: ContributorKey, wallets: WalletRow[]): Promise<void>;
   revoke(id: string, at: number, reason: string, forfeit: boolean): Promise<boolean>;
+  /** Account deletion (contributor or owner request): see eraseAccount(). */
+  erase(id: string, at: number, reason: string): Promise<EraseResult>;
+  /** Owner: mark a submission as used in a published, dated test result (kept, anonymised, if the account is deleted). */
+  markPublished(tx: string, at: number): Promise<boolean>;
   setShareDemand(id: string, v: boolean): Promise<void>;
   /** Record activity (no-op if already recorded for that day or later). */
   touch(id: string, day: string): Promise<void>;
@@ -178,7 +205,23 @@ export class MemoryContributorStore implements ContributorStore {
     Object.assign(k, { status: "revoked", revoked_at: at, revoke_reason: reason, forfeited: k.forfeited || forfeit }); this.writes++; return true;
   }
   async setShareDemand(id: string, v: boolean) { const k = this.keys.get(id); if (k) k.share_demand = v; this.writes++; }
-  async touch(id: string, day: string) { const k = this.keys.get(id); if (k && (!k.last_active_day || k.last_active_day < day)) { k.last_active_day = day; this.writes++; } }
+  async touch(id: string, day: string) { const k = this.keys.get(id); if (k && k.status === "active" && (!k.last_active_day || k.last_active_day < day)) { k.last_active_day = day; this.writes++; } }
+  async erase(id: string, at: number, reason: string): Promise<EraseResult> {
+    const k = this.keys.get(id);
+    const out: EraseResult = { found: !!k, submissions_deleted: 0, submissions_anonymised: 0, credit_spends_deleted: 0, wallets_deleted: 0 };
+    if (!k) return out;
+    for (const [tx, r] of this.subs) {
+      if (r.key_id !== id) continue;
+      if (r.published_at) { this.subs.set(tx, { ...r, ...ANON_FIELDS, receipt: anonymisedReceipt(r.receipt, at) }); out.submissions_anonymised++; }
+      else { this.subs.delete(tx); out.submissions_deleted++; }
+    }
+    for (const [sid, sp] of this.spends) if (sp.key_id === id) { this.spends.delete(sid); out.credit_spends_deleted++; }
+    for (const [a, w] of this.walletRows) if (w.key_id === id) { this.walletRows.delete(a); out.wallets_deleted++; }
+    this.keys.set(id, tombstone(id, k, at, reason));
+    this.writes += out.submissions_deleted + out.submissions_anonymised + out.credit_spends_deleted + out.wallets_deleted + 1;
+    return out;
+  }
+  async markPublished(tx: string, at: number) { const r = this.subs.get(tx); if (!r) return false; r.published_at = r.published_at ?? at; this.writes++; return true; }
   async counts(q: Parameters<ContributorStore["counts"]>[0]): Promise<CapCounts> {
     const s = [...this.subs.values()];
     const epDay = s.filter((x) => x.endpoint_key === q.endpoint_key && x.day === q.day);
@@ -196,7 +239,7 @@ export class MemoryContributorStore implements ContributorStore {
     let rows = 0;
     for (const o of ops) {
       if (o.op === "insert") { if (!this.subs.has(o.row.tx_hash)) { this.subs.set(o.row.tx_hash, { ...o.row }); rows += ROWS_PER_SUBMISSION; } }
-      else if (o.op === "touch") { const k = this.keys.get(o.key_id); if (k && (!k.last_active_day || k.last_active_day < o.day)) { k.last_active_day = o.day; rows++; } }
+      else if (o.op === "touch") { const k = this.keys.get(o.key_id); if (k && k.status === "active" && (!k.last_active_day || k.last_active_day < o.day)) { k.last_active_day = o.day; rows++; } }
       else { const s = this.subs.get(o.tx_hash); if (s) { s.finding = o.finding; if (o.dispute !== undefined) s.dispute = o.dispute; rows++; } }
     }
     if (rows) { this.meta.set(budgetKey, String(Number(this.meta.get(budgetKey) ?? "0") + rows)); rows++; }
@@ -231,7 +274,13 @@ export class MemoryContributorStore implements ContributorStore {
   async spendsSince(id: string, d: string) { return [...this.spends.values()].filter((s) => s.key_id === id && s.day >= d).sort((a, b) => b.ts - a.ts).map((x) => ({ ...x, alloc: x.alloc ? x.alloc.map((a) => ({ ...a })) : null })); }
 }
 
-const TOUCH_SQL = "UPDATE contributor_keys SET last_active_day = ?2 WHERE key_id = ?1 AND (last_active_day IS NULL OR last_active_day < ?2)";
+const TOUCH_SQL = "UPDATE contributor_keys SET last_active_day = ?2 WHERE key_id = ?1 AND status = 'active' AND (last_active_day IS NULL OR last_active_day < ?2)";
+/** Submission fields cleared when a deleted contributor's published receipt is kept. */
+const ANON_FIELDS = { key_id: DELETED_CONTRIBUTOR, payer: "", source: "", new_wallet: false, demand_opt_in: false, credit_uusd: 0, credit_note: null, kit_version: null } as const;
+/** What is left of a deleted key: the random key id (so it can never be reused or re-authenticate), status and dates. No profile. */
+function tombstone(id: string, k: ContributorKey, at: number, reason: string): ContributorKey {
+  return { key_id: id, label: "", public_key: "", wallets: [], own_domains: [], daily_cap: null, share_demand: false, status: "deleted", forfeited: k.forfeited, created_at: k.created_at, revoked_at: at, revoke_reason: reason, last_active_day: null };
+}
 const SUB_COLS = "tx_hash, key_id, day, created_at, mode, kit_version, endpoint, endpoint_key, domain, network, asset, amount, pay_to, payer, source, new_wallet, receipt_hash, http_status, outcome, finding, wanted, demand_opt_in, ledger_ts, credit_uusd, credit_note, dispute, metrics, receipt";
 
 export class D1ContributorStore implements ContributorStore {
@@ -260,6 +309,35 @@ export class D1ContributorStore implements ContributorStore {
   }
   async setShareDemand(id: string, v: boolean) { await this.db.prepare("UPDATE contributor_keys SET share_demand = ?2 WHERE key_id = ?1").bind(id, v ? 1 : 0).run(); }
   async touch(id: string, day: string) { await this.db.prepare(TOUCH_SQL).bind(id, day).run(); }
+  /**
+   * One batch (one transaction). Index reads only: submissions and spends by (key_id, ...), wallets by primary key.
+   * Published rows are anonymised in place (receipt rewritten in JS); the rest are deleted.
+   */
+  async erase(id: string, at: number, reason: string): Promise<EraseResult> {
+    const k = await this.getKey(id);
+    const out: EraseResult = { found: !!k, submissions_deleted: 0, submissions_anonymised: 0, credit_spends_deleted: 0, wallets_deleted: 0 };
+    if (!k) return out;
+    const pub = ((await this.db.prepare("SELECT tx_hash, receipt FROM contributor_submissions WHERE key_id = ?1 AND published_at IS NOT NULL").bind(id).all<{ tx_hash: string; receipt: string }>()).results ?? []);
+    const t = tombstone(id, k, at, reason);
+    const st = [
+      ...pub.map((r) => this.db.prepare("UPDATE contributor_submissions SET key_id = ?2, payer = '', source = '', new_wallet = 0, demand_opt_in = 0, credit_uusd = 0, credit_note = NULL, kit_version = NULL, receipt = ?3 WHERE tx_hash = ?1 AND key_id = ?4").bind(r.tx_hash, DELETED_CONTRIBUTOR, anonymisedReceipt(r.receipt, at), id)),
+      this.db.prepare("DELETE FROM contributor_submissions WHERE key_id = ?1 AND published_at IS NULL").bind(id),
+      this.db.prepare("DELETE FROM contributor_credit_spends WHERE key_id = ?1").bind(id),
+      ...k.wallets.map((w) => this.db.prepare("DELETE FROM contributor_wallets WHERE address = ?1 AND key_id = ?2").bind(w, id)),
+      this.db.prepare("UPDATE contributor_keys SET label = '', public_key = '', wallets = '[]', own_domains = '[]', daily_cap = NULL, share_demand = 0, status = 'deleted', revoked_at = ?2, revoke_reason = ?3, last_active_day = NULL WHERE key_id = ?1").bind(id, t.revoked_at, reason),
+    ];
+    const res = (await this.db.batch(st)) as any[];
+    const ch = (i: number) => Number(res?.[i]?.meta?.changes ?? 0);
+    out.submissions_anonymised = pub.reduce((n, _, i) => n + ch(i), 0);
+    out.submissions_deleted = ch(pub.length);
+    out.credit_spends_deleted = ch(pub.length + 1);
+    out.wallets_deleted = k.wallets.reduce((n, _, i) => n + ch(pub.length + 2 + i), 0);
+    return out;
+  }
+  async markPublished(tx: string, at: number) {
+    const r: any = await this.db.prepare("UPDATE contributor_submissions SET published_at = COALESCE(published_at, ?2) WHERE tx_hash = ?1").bind(tx, at).run();
+    return Number(r?.meta?.changes ?? 0) > 0;
+  }
   async counts(q: Parameters<ContributorStore["counts"]>[0]): Promise<CapCounts> {
     // Every sub-select is served by (key_id, day), (endpoint_key, day) or the primary key: index reads only.
     const r = await this.db.prepare(
@@ -294,7 +372,7 @@ export class D1ContributorStore implements ContributorStore {
     }
     return rows;
   }
-  async byTx(tx: string) { const r = await this.db.prepare(`SELECT ${SUB_COLS} FROM contributor_submissions WHERE tx_hash = ?1`).bind(tx).first<any>(); return r ? parseSub(r) : null; }
+  async byTx(tx: string) { const r = await this.db.prepare(`SELECT ${SUB_COLS}, published_at FROM contributor_submissions WHERE tx_hash = ?1`).bind(tx).first<any>(); return r ? parseSub(r) : null; }
   async recentByKey(id: string, n: number) {
     return ((await this.db.prepare(`SELECT ${SUB_COLS} FROM contributor_submissions WHERE key_id = ?1 ORDER BY day DESC, created_at DESC LIMIT ?2`).bind(id, n).all<any>()).results ?? []).map(parseSub);
   }
@@ -536,6 +614,7 @@ export function createContributors(deps: ContributorDeps) {
     if (kv) return { ok: false, res: err(426, kv, { min_kit_version: minKit, hint: "Update Lumi Check." }) };
     const key = await store.getKey(id); // read every time: revocation is instant
     if (!key) return fail(401, "unknown_key");
+    if (key.status === "deleted") return fail(403, "key_deleted");
     if (key.status !== "active") return fail(403, "key_revoked");
     const u = new URL(req.url);
     const msg = signedMessage(req.method, u.pathname + u.search, ts, await sha256Hex(raw));
@@ -545,6 +624,21 @@ export function createContributors(deps: ContributorDeps) {
     const t = now(), m = minute.get(id);
     if (m && t - m.at < 60_000) { if (++m.n > CAPS.per_minute) return fail(429, "rate_limited"); } else minute.set(id, { at: t, n: 1 });
     return { ok: true, key };
+  }
+
+  /**
+   * Account deletion (self-service or owner on an email request). Deletes: the key's profile (label, public key,
+   * wallets, own domains, demand opt-in, activity date), registered wallet rows, every credit spend, and every
+   * submission row, which also removes the credit balance and lots (derived from them) and the leaderboard entry.
+   * Keeps, with the contributor link stripped: submissions the owner marked as cited in a published, dated test
+   * result (anonymisedReceipt). Untouched: tier-1 daily summaries and raw tier-1 rows, which never held a
+   * contributor link. Leaves a tombstone key row (status 'deleted', no personal data) so the key can never sign again.
+   */
+  async function eraseAccount(id: string, by: "contributor" | "owner") {
+    const r = await store.erase(id, now(), by === "contributor" ? "deleted_by_contributor" : "deleted_by_owner");
+    minute.delete(id);
+    if (r.found) deps.log?.({ event: "contrib_account_deleted", by, ...r }); // no key id or wallet in logs
+    return { deleted: r.found, status: "deleted", ...r, kept: { anonymised_published_receipts: r.submissions_anonymised, tier1_daily_summaries: "unchanged (never linked to a contributor)" }, note: "Payments on a public blockchain cannot be deleted by anyone." };
   }
 
   async function flush(ops: WriteOp[]) {
@@ -882,10 +976,24 @@ export function createContributors(deps: ContributorDeps) {
       if (!sub) return err(404, "not_found");
       let b: any; try { b = JSON.parse(raw || "{}"); } catch { return err(400, "invalid_json"); }
       const act = String(b?.action ?? "");
+      if (act === "mark_published") {
+        await store.markPublished(sub.tx_hash, now());
+        return json(200, { tx_hash: sub.tx_hash, published: true }, noStore);
+      }
       const next: Record<string, Finding> = { confirm: "confirmed", contradict: "contradicted", clear_dispute: isNegative(sub.outcome) ? "unconfirmed" : "counted", uphold_dispute: "contradicted", release_hold: isNegative(sub.outcome) ? "unconfirmed" : "counted" };
-      if (!next[act]) return err(400, "action_invalid", { allowed: Object.keys(next) });
+      if (!next[act]) return err(400, "action_invalid", { allowed: [...Object.keys(next), "mark_published"] });
       await write([{ op: "finding", tx_hash: sub.tx_hash, finding: next[act] }]);
       return json(200, { tx_hash: sub.tx_hash, finding: next[act] }, noStore);
+    }
+    if (path === "/v1/owner/contributors/delete" && m === "POST") {
+      let b: any; try { b = JSON.parse(raw || "{}"); } catch { return err(400, "invalid_json"); }
+      if (b?.confirm !== true) return err(400, "confirm_true_required");
+      let id = typeof b?.key_id === "string" ? b.key_id : "";
+      if (!id && typeof b?.wallet === "string") id = (await store.wallets([b.wallet.trim()]))[0]?.key_id ?? "";
+      if (!/^lck_[0-9a-f]{16}$/.test(id)) return err(404, "not_found");
+      const r = await eraseAccount(id, "owner");
+      if (!r.found) return err(404, "not_found");
+      return json(200, { ...r, request_ref: typeof b?.request_ref === "string" ? b.request_ref.slice(0, 200) : null }, noStore);
     }
     mm = /^\/v1\/owner\/contributors\/(lck_[0-9a-f]{16})\/revoke$/.exec(path);
     if (mm && m === "POST") {
@@ -957,6 +1065,11 @@ export function createContributors(deps: ContributorDeps) {
     }
     if (path === "/v1/contrib/credits" && req.method === "GET") return json(200, await creditBalance(key), noStore);
     if (path === "/v1/contrib/credits/spend" && req.method === "POST") return spendCredits(req, raw, key);
+    if (path === "/v1/contrib/me" && req.method === "DELETE") {
+      let b: any; try { b = JSON.parse(raw || "{}"); } catch { return err(400, "invalid_json"); }
+      if (b?.confirm !== key.key_id) return err(400, "confirm_key_id_required", { hint: "Send { confirm: \"<your key_id>\" } to delete this account. This cannot be undone." });
+      return json(200, await eraseAccount(key.key_id, "contributor"), noStore);
+    }
     if (path === "/v1/contrib/me" && req.method === "POST") {
       let b: any; try { b = JSON.parse(raw); } catch { return err(400, "invalid_json"); }
       if (typeof b?.share_demand !== "boolean") return err(400, "share_demand_boolean_required");
@@ -1121,7 +1234,14 @@ export function createContributors(deps: ContributorDeps) {
 
   /** Queue consumer for lumi-contrib-writes: every message's ops in ONE D1 batch. */
   async function consume(bodies: any[]) {
-    const ops: WriteOp[] = bodies.flatMap((b) => (b?.kind === "contrib_write" && Array.isArray(b.ops) ? b.ops : []));
+    let ops: WriteOp[] = bodies.flatMap((b) => (b?.kind === "contrib_write" && Array.isArray(b.ops) ? b.ops : []));
+    // A queued insert must not resurrect data for a key revoked or deleted after it was accepted.
+    const ids = [...new Set(ops.flatMap((o) => (o.op === "insert" ? [o.row.key_id] : [])))];
+    const live = new Set<string>();
+    for (const id of ids) if ((await store.getKey(id))?.status === "active") live.add(id);
+    const dropped = ops.filter((o) => o.op === "insert" && !live.has(o.row.key_id));
+    for (const o of dropped) if (o.op === "insert") pending.delete(o.row.tx_hash);
+    ops = ops.filter((o) => !(o.op === "insert" && !live.has(o.row.key_id)));
     if (!ops.length) return 0;
     const rows = await flush(ops);
     for (const o of ops) if (o.op === "insert") pending.delete(o.row.tx_hash);

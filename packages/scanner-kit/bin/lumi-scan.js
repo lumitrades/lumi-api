@@ -13,6 +13,7 @@
  *   telemetry on|off|status                     tier 1 anonymous delivery outcomes (ON by default)
  *   sharing on|off|status                       tier 2 full signed receipts (OFF by default; earns free check credits)
  *   credits | spend trust_check <url>           your free Lumi Check credits / spend one on a detailed check
+ *   account delete [--confirm <key_id>]         delete your contributor account (asks you to type your key id)
  * Env: LUMI_CHECK_TELEMETRY=off (tier 1 off), LUMI_SHARE_RECEIPTS=1 (tier 2 on), LUMI_KIT_CONFIG, LUMI_API, LUMI_KIT_KEY (contributor key file), LUMI_KIT_XRPL_SEED(_FILE), LUMI_KIT_STELLAR_SECRET(_FILE), LUMI_KIT_EVM_KEY(_FILE),
  *      LUMI_KIT_MAX_PER_BUY, LUMI_KIT_MAX_PER_DAY, LUMI_KIT_MAX_BUYS_PER_DAY.
  * Wallet secrets are read from env or a file and are never printed or sent anywhere.
@@ -75,6 +76,22 @@ async function main() {
     const lumi = kit.createLumiCheck({ api: process.env.LUMI_API });
     return out(await lumi.check({ url: pos[0], payTo: flag("pay-to"), amountUsd: flag("amount") ? Number(flag("amount")) : undefined, network: flag("network") }).then(({ receipt, ...r }) => r));
   }
+  if (cmd === "account" && pos[0] === "delete") {
+    const c = client(), id = kit.loadKey(keyPath()).key_id;
+    console.error(kit.ACCOUNT_DELETE_NOTICE + "\n");
+    let typed = flag("confirm");
+    if (typed === undefined) {
+      if (!process.stdin.isTTY) { console.error("Not a terminal: pass --confirm <your key_id> to delete. Nothing was sent."); process.exitCode = 2; return; }
+      const { createInterface } = await import("node:readline/promises");
+      const rl = createInterface({ input: process.stdin, output: process.stderr });
+      typed = (await rl.question(`Type your key id (${id}) to delete this account, or press Enter to cancel: `)).trim();
+      rl.close();
+    }
+    if (typed !== id) { console.error("Cancelled: the key id did not match. Nothing was sent."); process.exitCode = 1; return; }
+    const r = await c.deleteAccount(typed);
+    if (r.deleted) console.error(`Deleted. The key file ${keyPath()} can no longer sign anything; you can delete it.`);
+    return out(r);
+  }
   if (cmd === "credits") return out(await client().credits());
   if (cmd === "spend") return out(await client().spendCredits(pos[0], pos[0] === "vendor_report" ? { vendor_id: pos[1] } : { url: pos[1] }));
   if (cmd === "keygen") {
@@ -108,7 +125,7 @@ async function main() {
     if (!has("submit")) return out({ tx_hash: res.tx_hash, outcome: res.outcome, receipt, note: "Not submitted. Add --submit to send it to Lumi." });
     return out({ tx_hash: res.tx_hash, outcome: res.outcome, lumi: await client().submit(receipt, "test_buy") });
   }
-  console.log("usage: lumi-scan check <url> | setup | telemetry on|off|status | sharing on|off|status | credits | spend trust_check <url> | keygen | quote <url> | wanted | report ... | buy <url> [--live] | me | share-demand on|off");
+  console.log("usage: lumi-scan check <url> | setup | telemetry on|off|status | sharing on|off|status | credits | spend trust_check <url> | account delete | keygen | quote <url> | wanted | report ... | buy <url> [--live] | me | share-demand on|off");
   process.exitCode = cmd ? 2 : 0;
 }
 main().catch((e) => { console.error(kit.redact("error: " + (e?.message ?? e))); process.exitCode = 1; });
