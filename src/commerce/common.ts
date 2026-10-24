@@ -1,4 +1,5 @@
 /** Shared helpers for the commerce routes (monitoring + feed). */
+import type { SanctionsScreen } from "../sanctions";
 import type { Config } from "../config";
 import { b64decodeUtf8, json, type PaywallDeps } from "../x402";
 import type { SendEmailBinding } from "../sales";
@@ -29,6 +30,8 @@ export interface CommerceDeps {
   /** XRPL accounts whose signature Lumi accepts on audit reports (Lumi's payTo). */
   reportSigners: string[];
   log: (e: Record<string, unknown>) => void;
+  /** OFAC SDN screen (src/sanctions.ts): listed payTos are refused at enrolment and never test-bought. */
+  sanctions?: SanctionsScreen;
 }
 
 export const NO_STORE = { "Cache-Control": "no-store" };
