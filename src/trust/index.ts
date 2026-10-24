@@ -530,7 +530,9 @@ export function createTrust(deps: TrustDeps): Trust {
     if (!a.count || a.first == null || a.last == null) return null;
     return {
       status: "test_payment_not_accepted_yet",
+      label: "Test payment not accepted yet on XRPL",
       network: "xrpl:0",
+      network_name: "XRPL",
       count: a.count,
       first_attempt: new Date(a.first).toISOString(),
       last_attempt: new Date(a.last).toISOString(),

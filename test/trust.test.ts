@@ -575,7 +575,7 @@ describe("trust: opt-in unsettled payment attempts (payment_attempts)", () => {
     expect(dup.status).toBe(200);
     expect(((await dup.json()) as any).duplicate).toBe(true);
     const e = (await list(req)).find((v) => v.id === "edge-agents");
-    expect(e.payment_attempts).toMatchObject({ status: "test_payment_not_accepted_yet", network: "xrpl:0", count: 2, first_attempt: "2026-10-21T03:08:48.615Z", last_attempt: "2026-10-22T09:25:07.000Z" });
+    expect(e.payment_attempts).toMatchObject({ status: "test_payment_not_accepted_yet", label: "Test payment not accepted yet on XRPL", network: "xrpl:0", network_name: "XRPL", count: 2, first_attempt: "2026-10-21T03:08:48.615Z", last_attempt: "2026-10-22T09:25:07.000Z" });
     expect(e.payment_attempts.note).not.toMatch(/scam|fraud/i);
     // never an input to the score
     const { req: req2 } = setup();
