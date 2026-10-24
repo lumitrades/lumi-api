@@ -109,3 +109,16 @@ describe("item 4: the same Lumi keys are pinned in the API, the kit and the MCP"
     expect(mcpKeys).toEqual(LUMI_SIGNING_KEYS);
   });
 });
+
+describe("item 6: licenses (mcp MIT, kit Apache-2.0)", () => {
+  it("LICENSE files match package.json", async () => {
+    const { readFileSync } = await import("node:fs");
+    const mcpPkg = JSON.parse(readFileSync("mcp/package.json", "utf8"));
+    const kitPkg = JSON.parse(readFileSync("packages/scanner-kit/package.json", "utf8"));
+    expect(mcpPkg.license).toBe("MIT");
+    expect(readFileSync("mcp/LICENSE", "utf8")).toMatch(/^MIT License/);
+    expect(kitPkg.license).toBe("Apache-2.0");
+    expect(readFileSync("packages/scanner-kit/LICENSE", "utf8")).toMatch(/Apache License\s+Version 2\.0, January 2004/);
+    expect(kitPkg.files).toEqual(expect.arrayContaining(["LICENSE", "NOTICE"]));
+  });
+});
