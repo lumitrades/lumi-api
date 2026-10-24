@@ -93,7 +93,7 @@ describe("contributor keys (owner only)", () => {
     expect(c.key_id).toMatch(/^lck_[0-9a-f]{16}$/);
     const list: any = await (await s.owner("GET", "/v1/owner/contributors")).json();
     expect(list.keys).toHaveLength(1);
-    expect(list.keys[0].credits_state).toBe("earned_unpaid");
+    expect(list.keys[0].credits_state).toBe("disabled"); // Lumi Check: credits off by default
     expect(JSON.stringify(list)).not.toContain(c.priv);
     expect((await s.signed(c, "GET", "/v1/contrib/me")).status).toBe(200);
     expect((await s.owner("POST", `/v1/owner/contributors/${c.key_id}/revoke`, { reason: "test" })).status).toBe(200);
@@ -113,8 +113,8 @@ describe("contributor keys (owner only)", () => {
 });
 
 describe("signed submissions", () => {
-  it("passive receipt from the kit: verified on-ledger, extra fields stored, credits weighted (XRPL + wanted)", async () => {
-    const s = setup();
+  it("passive receipt from the kit: verified on-ledger, extra fields stored, credits weighted (XRPL + wanted) when credits are re-enabled", async () => {
+    const s = setup({ env: { CONTRIB_CREDITS_ENABLED: "true" } });
     const w = wallet(1);
     const c = await s.issue(1, [w]);
     const r = await s.receipt(w, 1);
@@ -238,7 +238,7 @@ describe("signed submissions", () => {
   });
 
   it("unlisted endpoints and repeats earn less; monthly cap; credits are not cash", async () => {
-    const s = setup({ env: { CONTRIB_CREDITS: JSON.stringify({ monthly_cap_uusd: 40_000 }), CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 5, source_endpoint_daily: 5 }) } });
+    const s = setup({ env: { CONTRIB_CREDITS_ENABLED: "true", CONTRIB_CREDITS: JSON.stringify({ monthly_cap_uusd: 40_000 }), CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 5, source_endpoint_daily: 5 }) } });
     const a = await s.issue(1, [wallet(1)]);
     const u = await s.submit(a, await s.receipt(wallet(1), 70, { endpoint: "https://unknown.example/x", payTo: wallet(9).address }));
     expect(u.j).toMatchObject({ credit_uusd: 0, credit_note: "unlisted_endpoint" });
@@ -326,7 +326,7 @@ describe("D1 write budget and queue", () => {
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
-      const sql = readFileSync("migrations/0015_contributors.sql", "utf8").replace(/--.*$/gm, "");
+      const sql = ["0015_contributors.sql", "0016_contrib_retention.sql"].map((f) => readFileSync("migrations/" + f, "utf8")).join(";\n").replace(/--.*$/gm, "");
       for (const st of sql.split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
       const store = new D1ContributorStore(db);
       const s = setup({ store });
@@ -338,7 +338,9 @@ describe("D1 write budget and queue", () => {
       expect(row?.demand_opt_in).toBe(true);
       expect(await store.getMeta(contribBudgetKey(NOW))).toBe("3");
       const c = await store.counts({ key_id: a.key_id, endpoint_key: row!.endpoint_key, source: row!.source, day: row!.day, since_recent: "2026-01-01", since_month: "2026-10-01", tx_hash: txh(120) });
-      expect(c).toMatchObject({ key_day: 1, key_ep_day: 1, ep_day_sources: 1, dup: 1, month_credit: 60_000 });
+      expect(c).toMatchObject({ key_day: 1, key_ep_day: 1, ep_day_sources: 1, dup: 1, month_credit: 0 }); // credits disabled by default
+      expect(await store.purge("2099-01-01")).toBe(1);
+      expect(await store.byTx(txh(120))).toBeNull();
       expect((await s.owner("POST", `/v1/owner/contributors/${a.key_id}/revoke`, { reason: "t", forfeit: true })).status).toBe(200);
       expect((await store.getKey(a.key_id))?.forfeited).toBe(true);
     } finally {
@@ -354,5 +356,90 @@ describe("helpers", () => {
     expect(cmpVersion("1.0.0", "0.9.9")).toBe(1);
     expect(cleanMetrics({ latency_ms: -1, response_sha256: "nothex", quotes: new Array(20).fill({ network: "xrpl:0" }) })).toMatchObject({ latency_ms: undefined, response_sha256: undefined });
     expect((cleanMetrics({ quotes: new Array(20).fill({ network: "xrpl:0" }) }) as any).quotes).toHaveLength(6);
+  });
+});
+
+describe("Lumi Check: rewards, privacy and integrity", () => {
+  it("credits are off by default: no credit fields, rewards are badges + leaderboard", async () => {
+    const s = setup();
+    const a = await s.issue(1, [wallet(1)]);
+    const { status, j } = await s.submit(a, await s.receipt(wallet(1), 300));
+    expect(status, JSON.stringify(j)).toBe(202);
+    expect(j.credit_uusd).toBeUndefined();
+    expect(j.rewards).toBe("badges_and_leaderboard");
+    expect(j.note).toMatch(/No cash/);
+    expect((await s.store.byTx(txh(300))).credit_uusd).toBe(0);
+    const me: any = await (await s.signed(a, "GET", "/v1/contrib/me")).json();
+    expect(me.credits_month_usd).toBeUndefined();
+    expect(me.badges).toContain("first_receipt");
+    expect(me.leaderboard.rank).toBe(1);
+  });
+
+  it("leaderboard: verified receipts only, pseudonymous, one per endpoint per day, revoked keys drop off", async () => {
+    const s = setup({ env: { CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 5, source_endpoint_daily: 5, endpoint_daily_sources: 9 }) } });
+    const a = await s.issue(1, [wallet(1)]);
+    const b = await s.issue(2, [wallet(2)]);
+    await s.submit(a, await s.receipt(wallet(1), 310));
+    await s.submit(a, await s.receipt(wallet(1), 311)); // same endpoint, same day: counts once
+    await s.submit(a, await s.receipt(wallet(1), 312, { endpoint: V2.endpoints[0].url, payTo: V2.pay_to.xrpl[0] }));
+    await s.submit(b, await s.receipt(wallet(2), 313, { outcome: "no_data", status: 200 })); // unconfirmed negative: not verified
+    const lb: any = await (await s.app.fetch(new Request(BASE + "/v1/contrib/leaderboard"))).json();
+    expect(lb.rows).toHaveLength(1);
+    expect(lb.rows[0]).toMatchObject({ rank: 1, verified_receipts: 2, endpoints: 2, badges: ["first_receipt"] });
+    expect(lb.rows[0].handle).toMatch(/^contrib-[0-9a-f]{8}$/);
+    expect(JSON.stringify(lb)).not.toContain(a.key_id);
+    expect(JSON.stringify(lb)).not.toContain(wallet(1).address);
+    expect(lb.note).toMatch(/No cash/);
+    await s.owner("POST", `/v1/owner/contributors/${a.key_id}/revoke`, { reason: "t" });
+    expect(((await (await s.app.fetch(new Request(BASE + "/v1/contrib/leaderboard"))).json()) as any).rows).toHaveLength(0);
+  });
+
+  it("query strings are stripped from stored endpoints and receipt copies, and cannot dodge per-endpoint caps", async () => {
+    const s = setup({ env: { CONTRIB_CAPS: JSON.stringify({ key_endpoint_daily: 1 }) } });
+    const a = await s.issue(1, [wallet(1)]);
+    const r1 = await s.submit(a, await s.receipt(wallet(1), 320, { endpoint: EP + "?email=buyer@example.com" }));
+    expect(r1.status, JSON.stringify(r1.j)).toBe(202);
+    const row = await s.store.byTx(txh(320));
+    expect(row.endpoint).not.toContain("?");
+    expect(row.receipt).not.toContain("buyer@example.com");
+    expect(JSON.parse(row.receipt).x_lumi_stored.redacted).toEqual(["seller.endpoint.query"]);
+    const r2 = await s.submit(a, await s.receipt(wallet(1), 321, { endpoint: EP + "?v=2" }));
+    expect(r2.j.error).toBe("key_endpoint_daily_cap");
+  });
+
+  it("scoped admin key: CONTRIB_ADMIN_KEY opens contributor admin, OWNER_MCP_KEY then does not", async () => {
+    const ADMIN = "a".repeat(52);
+    const s = setup({ env: { CONTRIB_ADMIN_KEY: ADMIN } });
+    expect((await s.owner("GET", "/v1/owner/contributors")).status).toBe(401);
+    const r = await s.app.fetch(new Request(BASE + "/v1/owner/contributors", { headers: { Authorization: `Bearer ${ADMIN}` } }));
+    expect(r.status).toBe(200);
+    // the contributor admin key is not an owner key elsewhere
+    expect((await s.app.fetch(new Request(BASE + "/v1/owner/traffic", { headers: { Authorization: `Bearer ${ADMIN}` } }))).status).toBe(401);
+  });
+
+  it("owner purge enforces the 90-day retention", async () => {
+    const s = setup();
+    const a = await s.issue(1, [wallet(1)]);
+    await s.submit(a, await s.receipt(wallet(1), 330));
+    const old = { ...(await s.store.byTx(txh(330))), tx_hash: "OLD".padEnd(64, "0"), day: "2026-01-01" };
+    s.store.subs.set(old.tx_hash, old);
+    const res: any = await (await s.owner("POST", "/v1/owner/contributors/purge")).json();
+    expect(res).toMatchObject({ retention_days: 90, deleted: 1 });
+    expect(await s.store.byTx(old.tx_hash)).toBeNull();
+    expect(await s.store.byTx(txh(330))).not.toBeNull();
+  });
+
+  it("tx hash case cannot create a duplicate", async () => {
+    const { normTx } = await import("../src/trust/contributors");
+    expect(normTx("eip155:8453", "0xABCdef")).toBe("0xabcdef");
+    expect(normTx("xrpl:0", "abcdef")).toBe("ABCDEF");
+    const s = setup();
+    const a = await s.issue(1, [wallet(1)]);
+    expect((await s.submit(a, await s.receipt(wallet(1), 340))).status).toBe(202);
+    // same payment re-signed with the hash in lower case
+    const r = await s.receipt(wallet(1), 340);
+    const lower = await kit.signReceipt({ ...Object.fromEntries(Object.entries(r).filter(([k]) => k !== "receipt_hash" && k !== "signer")), payment: { ...r.payment, tx_hash: r.payment.tx_hash.toLowerCase() } }, await kit.signerFor("xrpl:0", wallet(1).seed));
+    const d = await s.submit(a, lower);
+    expect(d.status).toBe(409);
   });
 });

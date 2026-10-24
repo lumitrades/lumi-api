@@ -305,6 +305,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     fetch: doFetch,
     now,
     ownerKey: env.OWNER_MCP_KEY,
+    adminKey: env.CONTRIB_ADMIN_KEY,
+    creditsEnabled: env.CONTRIB_CREDITS_ENABLED === "true",
     // Contributed receipts are mainnet-only (xrpl:0), whatever network this deployment sells on.
     xrplRpc: split(env.XRPL_RPC_URLS).length && config.network === "xrpl:0" ? split(env.XRPL_RPC_URLS) : DEFAULT_XRPL_RPC["xrpl:0"],
     baseRpc,
@@ -1138,7 +1140,10 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       return r;
     },
     async scheduled() {
-      const prune = Promise.all([trafficBuf.flush().catch(trafficErr), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {})]);
+      // Contributor retention purge: once a day (03:07 UTC tick of the per-minute cron).
+      const d = new Date(now());
+      const contribPurge = d.getUTCHours() === 3 && d.getUTCMinutes() === 7 ? contributors.purge().catch(() => {}) : Promise.resolve();
+      const prune = Promise.all([trafficBuf.flush().catch(trafficErr), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge]);
       const [probes, cat, , com] = await Promise.allSettled([trust.runProbes(), catalog.cron(), prune, commerce.cron(config.publicBaseUrl ?? "https://api.lumitrades.io")]);
       return {
         probes: probes.status === "fulfilled" ? probes.value : { error: String(probes.reason) },
