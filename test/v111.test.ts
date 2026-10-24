@@ -78,7 +78,7 @@ describe("v1.1.1 policies and metadata", () => {
     expect(t.extensions.bazaar.info.input.queryParams?.url ?? t.extensions.bazaar.info.input.queryParams).toBeTruthy();
     expect(JSON.stringify(t.extensions.bazaar.schema)).toContain('"required":["url"]');
     const s = await (await get("/v1/signal/xrp")).json();
-    expect(s.resource.serviceName).toBe("Lumi Trades");
+    expect(s.resource.serviceName).toBe("Lumi Market Ideas");
     for (const p of ["/v1/signal/btc", "/v1/lite/btc", "/v1/levels/btc", "/v1/scan"]) expect(JSON.stringify(await (await get(p)).json()), p).not.toMatch(/crypto crypto/i);
     for (const r of Object.values(BAZAAR_ROUTES)) expect(r.description.length).toBeLessThanOrEqual(500);
   });

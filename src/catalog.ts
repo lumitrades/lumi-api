@@ -2,6 +2,7 @@
 
 import type { Config, PaidRoute } from "./config";
 import { dropsToXrp } from "./config";
+import { LINE_LABEL, MARKET_IDEAS_LABEL, productLine } from "./lines";
 
 export interface PaidEndpoint {
   route: PaidRoute;
@@ -28,51 +29,56 @@ export const EXAMPLE_COIN = "XRP" as const;
 export const PAID_ENDPOINTS: PaidEndpoint[] = [
   {
     route: "signal",
-    name: "Lumi coin signal (buy/sell read)",
+    name: "Lumi Market Ideas: coin signal (buy/sell read)",
     method: "GET",
     path: "/v1/signal/{coin}",
     template: "/v1/signal/{coin}",
     summary:
+      MARKET_IDEAS_LABEL + " " +
       "Use this when you need a fast, mechanical buy/sell read on one coin before acting: overall label + score, per-timeframe (1h/4h/1d) labels and an indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume). 50 top coins (GET /v1/coins), computed live from public exchange candles; 1h refreshed about every 13 minutes. " + NOT_CHARGED,
     example: `/v1/signal/${EXAMPLE_COIN}`,
   },
   {
     route: "levels",
-    name: "Lumi support/resistance + 7-day scenario levels",
+    name: "Lumi Market Ideas: support/resistance + 7-day scenario levels",
     method: "GET",
     path: "/v1/levels/{coin}",
     template: "/v1/levels/{coin}",
     summary:
+      MARKET_IDEAS_LABEL + " " +
       "Use this when you need to know where price may stall or turn for one coin: support/resistance levels, bias, rule-based 7-day bull/base/bear scenario levels (not forecasts), commentary, catalysts and cited sources. " + NOT_CHARGED,
     example: `/v1/levels/${EXAMPLE_COIN}`,
   },
   {
     route: "scan",
-    name: "Lumi all-coins scan (50 signals in one call)",
+    name: "Lumi Market Ideas: all-coins scan (50 signals in one call)",
     method: "GET",
     path: "/v1/scan",
     template: "/v1/scan",
     summary:
+      MARKET_IDEAS_LABEL + " " +
       "Use this when you need to screen the whole market in one call instead of 50: label, score, 1h/4h/1d labels, 1h RSI, price and 24h change for every top-50 coin (GET /v1/coins), strongest first, plus label counts and breadth. Computed live; 1h refreshed about every 13 minutes; freshness fields reflect the oldest coin included. Not sold when fewer than 40 coins are fresh. " + NOT_CHARGED,
     example: "/v1/scan",
   },
   {
     route: "lite",
-    name: "Lumi lite coin signal (label, score, price)",
+    name: "Lumi Market Ideas: lite coin signal (label, score, price)",
     method: "GET",
     path: "/v1/lite/{coin}",
     template: "/v1/lite/{coin}",
     summary:
+      MARKET_IDEAS_LABEL + " " +
       "Use this when you only need the headline read on one coin, cheaply: overall label and score, 1h/4h/1d labels and price with 24h change. Same live computation as /v1/signal/{coin}, which adds the full indicator breakdown. " + NOT_CHARGED,
     example: `/v1/lite/${EXAMPLE_COIN}`,
   },
   {
     route: "slate",
-    name: "Lumi paper-trade slate (current ideas)",
+    name: "Lumi Market Ideas: paper-trade slate (current ideas)",
     method: "GET",
     path: "/v1/slate",
     template: "/v1/slate",
     summary:
+      MARKET_IDEAS_LABEL + " " +
       "Use this when you need current, concrete trade setups to evaluate (paper trades, not advice): direction, entry/entry zone, stop, targets, leverage, conviction, plus 'no setup' notes. " + NOT_CHARGED,
     example: "/v1/slate",
   },
@@ -163,11 +169,12 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "trades",
-    name: "Lumi paper-trade history",
+    name: "Lumi Market Ideas: paper-trade history",
     method: "GET",
     path: "/v1/trades",
     template: "/v1/trades",
     summary:
+      MARKET_IDEAS_LABEL + " " +
       "Use this when you need the full list of Lumi's paper-trade ideas (not advice): every idea with entry, stop, targets, leverage and reasoning. " + NOT_CHARGED,
     example: "/v1/trades",
   },
@@ -216,6 +223,7 @@ export function priceTable(cfg: Config) {
     method: e.method,
     path: e.path,
     name: e.name,
+    product_line: LINE_LABEL[productLine(e.route)],
     price_xrp: dropsToXrp(cfg.pricesDrops[e.route]),
     price_drops: cfg.pricesDrops[e.route],
     price_rlusd: cfg.ious.find((o) => o.symbol === "RLUSD")?.prices[e.route] ?? null,

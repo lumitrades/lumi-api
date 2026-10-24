@@ -5,6 +5,7 @@
 import type { Config, PaidRoute } from "./config";
 import { dropsToXrp } from "./config";
 import { PAID_ENDPOINTS, EXAMPLE_COIN } from "./catalog";
+import { LINE_LABEL, productLine } from "./lines";
 
 export const SAMPLE_LABEL = "SAMPLE: truncated free preview, not the full product. Pay per call (x402) for the full, current response.";
 const MAX_ITEMS = 2;
@@ -72,7 +73,7 @@ export function productSample(route: PaidRoute, body: Record<string, unknown>) {
   return { sample, truncated: { arrays: cut, ...(omitted.length ? { omitted } : {}) } };
 }
 
-export const SAMPLE_ARGS: Partial<Record<PaidRoute, string>> = { signal: EXAMPLE_COIN, levels: EXAMPLE_COIN, lite: EXAMPLE_COIN, vendor_report: "printmoneylab", trust_check: "url=https%3A%2F%2Fapi.lumitrades.io%2Fv1%2Fsignal%2FXRP" };
+export const SAMPLE_ARGS: Partial<Record<PaidRoute, string>> = { signal: EXAMPLE_COIN, levels: EXAMPLE_COIN, lite: EXAMPLE_COIN, vendor_report: "printmoneylab", trust_check: "url=https%3A%2F%2Fapi.lumitrades.io%2Fv1%2Fbrief" };
 
 export function sampleEntry(cfg: Config, base: string, route: PaidRoute) {
   const e = PAID_ENDPOINTS.find((x) => x.route === route)!;
@@ -81,6 +82,7 @@ export function sampleEntry(cfg: Config, base: string, route: PaidRoute) {
   return {
     route,
     name: e.name,
+    product_line: LINE_LABEL[productLine(route)],
     full_url: `${base}${path}`,
     price: {
       usd: cfg.evm?.prices[route] ?? cfg.ious.find((o) => o.symbol === "USDC")?.prices[route] ?? cfg.ious.find((o) => o.symbol === "RLUSD")?.prices[route] ?? null,

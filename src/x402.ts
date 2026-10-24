@@ -423,7 +423,7 @@ const BAZAAR_GET_JSON = {
 
 const CORS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Expose-Headers": `${HEADER_PAYMENT_REQUIRED}, ${HEADER_PAYMENT_RESPONSE}, X-Correlation-ID, Retry-After, Idempotent-Replayed`,
+  "Access-Control-Expose-Headers": `${HEADER_PAYMENT_REQUIRED}, ${HEADER_PAYMENT_RESPONSE}, X-Correlation-ID, Retry-After, Idempotent-Replayed, X-Lumi-Product-Line, X-Lumi-Notice`,
 };
 
 export function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {

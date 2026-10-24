@@ -6,6 +6,7 @@
 
 import type { Json } from "./data";
 import { sanitize, splitSentences } from "./sanitize";
+import { MARKET_IDEAS_KINDS, MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, TRUST_DISCLAIMER } from "./lines";
 
 export const SOURCE = "lumitrades.io";
 export const DISCLAIMER =
@@ -57,7 +58,10 @@ export function envelope(kind: string, data: Record<string, unknown>, extra: Rec
     source: SOURCE,
     ...sanitize(data),
     ...extra,
-    disclaimer: DISCLAIMER,
+    // Lumi Market Ideas (signal, lite, scan, levels, slate, trades): additive, backward-compatible label + notice.
+    ...(MARKET_IDEAS_KINDS.includes(kind) ? { product_line: MARKET_IDEAS_NAME, notice: MARKET_IDEAS_NOTICE } : {}),
+    // Trust responses carry the trust disclaimer (no trade-idea wording).
+    disclaimer: kind === "trust_check" ? TRUST_DISCLAIMER : DISCLAIMER,
   };
 }
 

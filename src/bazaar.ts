@@ -9,6 +9,7 @@
  */
 
 import { DEFAULT_PRICES, type PaidRoute } from "./config";
+import { MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, MARKET_IDEAS_ROUTES } from "./lines";
 
 /** CDP rejects verify/settle when resource.description is longer than this. */
 export const BAZAAR_MAX_DESCRIPTION = 500;
@@ -21,6 +22,8 @@ export const SERVICE_NAME = "Lumi Trades";
 /** The trust layer (pay-check, vendor reports, monitoring and feed plans) is listed under its own service name. */
 export const TRUST_SERVICE_NAME = "Lumi Trust";
 export const TRUST_ROUTES: PaidRoute[] = ["trust_check", "vendor_report"];
+/** Signal-style routes (signal, lite, scan, slate, trades, levels) are listed as their own line, apart from the trust layer. */
+export const MARKET_IDEAS_SERVICE_NAME = MARKET_IDEAS_NAME;
 export const SERVICE_ICON = "https://lumitrades.io/assets/icon-512.png";
 export const ROUTE_TAGS: Record<PaidRoute, string[]> = {
   signal: ["crypto-signals", "trading-signals", "technical-analysis", "bitcoin", "ethereum"],
@@ -47,7 +50,7 @@ export function serviceMeta(route: PaidRoute): { serviceName: string; tags: stri
 }
 
 export function serviceNameFor(route: PaidRoute): string {
-  return TRUST_ROUTES.includes(route) ? TRUST_SERVICE_NAME : SERVICE_NAME;
+  return TRUST_ROUTES.includes(route) ? TRUST_SERVICE_NAME : MARKET_IDEAS_ROUTES.includes(route) ? MARKET_IDEAS_SERVICE_NAME : SERVICE_NAME;
 }
 
 type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -99,11 +102,13 @@ export const FAIR_USE =
 export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   signal: {
     description:
-      "Rule-based technical read for one of 50 large-cap crypto assets (XRP, BTC, ETH, SOL and more): overall label (Strong Buy to Strong Sell) and score, 1h/4h/1d labels, an indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume) and price with 24h change. Computed from public exchange candles; 1h data refreshes about every 13 minutes. Use when an agent needs an indicator-based read on a single coin. Analytics only, not financial advice. Not charged on unknown coins or stale data.",
+      "Lumi Market Ideas. Rule-based technical read for one of 50 large-cap crypto assets (XRP, BTC, ETH, SOL and more): label (Strong Buy to Strong Sell) and score, 1h/4h/1d labels, indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume) and price with 24h change. From public exchange candles; 1h refreshes about every 13 min. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on unknown coins or stale data.",
     routeTemplate: "/v1/signal/:coin",
     pathParam: COIN_PARAM,
     example: {
       kind: "signal",
+      product_line: MARKET_IDEAS_NAME,
+      notice: MARKET_IDEAS_NOTICE,
       coin: { symbol: "XRP", name: "XRP" },
       label: "Sell",
       score: -0.34,
@@ -115,11 +120,13 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   levels: {
     description:
-      "Support and resistance levels for one of 13 tracked coins (XRP, BTC, ETH, HBAR, XLM and more), with a directional bias label, rule-based 7-day bull/base/bear scenario levels, short commentary, dated catalysts and cited sources. Use when an agent needs price reference levels and context for a single coin. Scenarios are analysis, not forecasts or advice. Other coins return 404 without charge; see /v1/coins. Not charged on stale data.",
+      "Lumi Market Ideas. Support and resistance levels for one of 13 tracked coins (XRP, BTC, ETH, HBAR, XLM and more), with a bias label, rule-based 7-day bull/base/bear scenario levels (not forecasts), commentary, dated catalysts and cited sources. Use for price reference levels on one coin. Paper-trade analysis, not investment advice. Lumi does not trade real money. Other coins return 404 without charge; see /v1/coins. Not charged on stale data.",
     routeTemplate: "/v1/levels/:coin",
     pathParam: COIN_PARAM,
     example: {
       kind: "levels",
+      product_line: MARKET_IDEAS_NAME,
+      notice: MARKET_IDEAS_NOTICE,
       coin: { symbol: "XRP", name: "XRP" },
       price: { usd: 2.41 },
       bias: "neutral-to-soft",
@@ -136,9 +143,11 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   slate: {
     description:
-      "Lumi's current paper-trade setups, published for evaluation and not as advice: coin, direction, entry zone, stop, targets, leverage and conviction for each idea, plus notes where no setup qualifies. Use when an agent needs structured, current trade-setup data to evaluate or compare against its own analysis. Paper trades only; no performance is implied. Not charged on stale data.",
+      "Lumi Market Ideas. Lumi's current paper-trade setups, published for evaluation: coin, direction, entry zone, stop, targets, leverage and conviction for each idea, plus notes where no setup qualifies. Use when an agent needs structured, current trade-setup data to evaluate or compare against its own analysis. No performance is implied. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on stale data.",
     example: {
       kind: "slate",
+      product_line: MARKET_IDEAS_NAME,
+      notice: MARKET_IDEAS_NOTICE,
       ...FRESH("2026-10-22T11:05:00Z", "2026-10-22T23:05:00Z"),
       ideas: [{ coin: "BTC", direction: "long", entry_zone: { low: 81800, high: 82300 }, stop: 80800, targets: [84500, 86000], leverage: 3, conviction: "medium" }],
       payment: pay("slate"),
@@ -212,9 +221,11 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   trades: {
     description:
-      "Lumi's paper-trade history as a raw list: id, coin, direction, entry, stop, targets, leverage, status and reasoning for each idea. Paper trades only, published for evaluation and not as advice; no performance is implied. Use when an agent needs the historical record of Lumi's trade ideas, for example to audit or backtest them. Not charged on stale data.",
+      "Lumi Market Ideas. Lumi's paper-trade history as a raw list: id, coin, direction, entry, stop, targets, leverage, status and reasoning for each idea, published for evaluation; no performance is implied. Use when an agent needs the historical record of Lumi's trade ideas, for example to audit or backtest them. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on stale data.",
     example: {
       kind: "trades",
+      product_line: MARKET_IDEAS_NAME,
+      notice: MARKET_IDEAS_NOTICE,
       count: 8,
       trades: [{ id: "T007", coin: "BTC", direction: "long", entry: 82300, stop: 80800, targets: [84500, 86000], leverage: 3, reasoning: "Reclaim of 82k with funding flat." }],
       ...FRESH("2026-10-22T11:22:28Z", "2026-10-22T23:22:28Z"),
@@ -269,9 +280,11 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   scan: {
     description:
-      "Market-wide screen of 50 large-cap crypto assets in one call: label, score, 1h/4h/1d labels, 1h RSI, price and 24h change per coin, sorted strongest first, plus label counts and a breadth summary. Computed live; freshness fields reflect the oldest coin included, and the scan is not sold when fewer than 40 coins are fresh. Use when an agent needs to compare many coins at once instead of making 50 single-coin calls. Analytics only, not financial advice.",
+      "Lumi Market Ideas. Market-wide screen of 50 large-cap crypto assets in one call: label, score, 1h/4h/1d labels, 1h RSI, price and 24h change per coin, strongest first, plus label counts and breadth. Computed live; freshness fields reflect the oldest coin included; not sold when fewer than 40 coins are fresh. Use to compare many coins in one call. Paper-trade analysis, not investment advice. Lumi does not trade real money.",
     example: {
       kind: "scan",
+      product_line: MARKET_IDEAS_NAME,
+      notice: MARKET_IDEAS_NOTICE,
       count: 50,
       label_counts: { "Strong Buy": 3, Buy: 11, Neutral: 21, Sell: 12, "Strong Sell": 3 },
       breadth: { bullish: 14, neutral: 21, bearish: 15, read: "mixed" },
@@ -282,11 +295,13 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   lite: {
     description:
-      "Low-cost headline read for one of 50 large-cap crypto assets (XRP, BTC, ETH, SOL and more): overall label and score, 1h/4h/1d labels, and price with 24h change. Same live computation as /v1/signal/{coin}, without the indicator breakdown. Use when an agent only needs the label and price for a single coin. Payable in USDC on Base or XRP, RLUSD or USDC on the XRP Ledger. Analytics only, not financial advice. Not charged on unknown coins or stale data.",
+      "Lumi Market Ideas. Low-cost headline read for one of 50 large-cap crypto assets (XRP, BTC, ETH, SOL and more): overall label and score, 1h/4h/1d labels, and price with 24h change. Same live computation as /v1/signal/{coin}, without the indicator breakdown. Payable in USDC on Base or XRP, RLUSD or USDC on the XRP Ledger. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on unknown coins or stale data.",
     routeTemplate: "/v1/lite/:coin",
     pathParam: COIN_PARAM,
     example: {
       kind: "signal_lite",
+      product_line: MARKET_IDEAS_NAME,
+      notice: MARKET_IDEAS_NOTICE,
       coin: { symbol: "XRP", name: "XRP" },
       label: "Neutral",
       score: 0.05,

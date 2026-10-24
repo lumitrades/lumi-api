@@ -18,6 +18,7 @@ import { DISCLAIMER, type CoinRef } from "./views";
 import type { PaidRoute } from "./config";
 import { VENDORS } from "./vendors";
 import { SERVICE_ICON } from "./bazaar";
+import { MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, MARKET_IDEAS_ROUTES } from "./lines";
 
 const VENDOR_IDS = VENDORS.map((v) => v.id);
 
@@ -60,11 +61,11 @@ const SKILLS: SkillDef[] = [
     match: /\b(institution(al|s)?|policy|regulat(ion|ions|ory|ors?)|bis|imf|treasury|occ|sec|cftc|cbdcs?|jpmorgan|jpm|kinexys|sbi|cross river|securitize|corda|r3|banks?|tokeni[sz](ed|ation))\b/i,
   },
   { id: "brief", route: "brief", name: "Daily crypto market brief", tags: ["crypto", "market", "brief", "newsletter", "paid"], examples: ["today's crypto market brief"], match: /\b(brief|summary|today|newsletter)\b/i },
-  { id: "scan", route: "scan", name: "All-coins scan: 50 live signals in one call", tags: ["crypto", "screener", "signals", "scan", "paid"], examples: ["scan all coins", "which coins look strongest?"], match: /\b(scan|screen|screener|all coins|strongest|weakest)\b/i },
-  { id: "lite", route: "lite", name: "Lite coin signal (label, score, price)", tags: ["crypto", "signal", "lite", "paid"], examples: ["lite XRP"], match: /\blite\b/i, needsCoin: true },
-  { id: "signal", route: "signal", name: "Coin signal (buy/sell read)", tags: ["crypto", "signal", "technical-analysis", "paid"], examples: ["signal XRP", "is BTC a buy?"], match: /\b(signal|buy|sell|rsi|macd)\b/i, needsCoin: true },
-  { id: "levels", route: "levels", name: "Support/resistance + rule-based 7-day scenario levels (not forecasts)", tags: ["crypto", "levels", "support", "resistance", "paid"], examples: ["levels ETH"], match: /\b(levels?|support|resistance|projection|scenarios?)\b/i, needsCoin: true },
-  { id: "slate", route: "slate", name: "Paper-trade slate (current ideas)", tags: ["crypto", "trade-ideas", "paper-trading", "paid"], examples: ["current trade ideas"], match: /\b(slate|ideas?|setups?)\b/i },
+  { id: "scan", route: "scan", name: "Lumi Market Ideas: all-coins scan, 50 live signals in one call", tags: ["crypto", "screener", "signals", "scan", "market-ideas", "paid"], examples: ["scan all coins", "which coins look strongest?"], match: /\b(scan|screen|screener|all coins|strongest|weakest)\b/i },
+  { id: "lite", route: "lite", name: "Lumi Market Ideas: lite coin signal (label, score, price)", tags: ["crypto", "signal", "lite", "market-ideas", "paid"], examples: ["lite XRP"], match: /\blite\b/i, needsCoin: true },
+  { id: "signal", route: "signal", name: "Lumi Market Ideas: coin signal (buy/sell read)", tags: ["crypto", "signal", "technical-analysis", "market-ideas", "paid"], examples: ["signal XRP", "is BTC a buy?"], match: /\b(signal|buy|sell|rsi|macd)\b/i, needsCoin: true },
+  { id: "levels", route: "levels", name: "Lumi Market Ideas: support/resistance + rule-based 7-day scenario levels (not forecasts)", tags: ["crypto", "levels", "support", "resistance", "market-ideas", "paid"], examples: ["levels ETH"], match: /\b(levels?|support|resistance|projection|scenarios?)\b/i, needsCoin: true },
+  { id: "slate", route: "slate", name: "Lumi Market Ideas: paper-trade slate (current ideas)", tags: ["crypto", "trade-ideas", "paper-trading", "market-ideas", "paid"], examples: ["current trade ideas"], match: /\b(slate|ideas?|setups?)\b/i },
   { id: "market", route: "market", name: "BTC + macro market backdrop", tags: ["crypto", "bitcoin", "macro", "paid"], examples: ["BTC macro backdrop"], match: /\b(market|backdrop|macro|dominance)\b/i },
   { id: "macro_yen", route: "yen", name: "Yen carry-trade watch (USD/JPY, Nikkei)", tags: ["macro", "yen", "carry-trade", "japan", "paid"], examples: ["yen carry trade risk"], match: /\b(yen|jpy|usd\/?jpy|nikkei|carry|japan|boj)\b/i },
   { id: "funding", route: "funding", name: "Perpetual funding rates (50 coins)", tags: ["crypto", "funding", "perpetuals", "derivatives", "paid"], examples: ["funding rates"], match: /\bfunding\b/i },
@@ -90,12 +91,12 @@ const SKILLS: SkillDef[] = [
     match: /\b(should i pay|pay[- ]check|trust[- ]check|safe to pay)\b/i,
     needsUrl: true,
   },
-  { id: "trades", route: "trades", name: "Paper-trade history", tags: ["crypto", "paper-trading", "paid"], examples: ["your paper-trade history"], match: /\b(trades|trade history|paper[- ]?trades?)\b/i },
+  { id: "trades", route: "trades", name: "Lumi Market Ideas: paper-trade history", tags: ["crypto", "paper-trading", "market-ideas", "paid"], examples: ["your paper-trade history"], match: /\b(trades|trade history|paper[- ]?trades?)\b/i },
 ];
 
 const FREE_DESCRIPTIONS: Record<string, string> = {
   catalog: "Lists every Lumi endpoint with live prices on every payment network (XRP Ledger, Base, Stellar), the MCP and A2A endpoints, and the no-charge-when-stale guarantee.",
-  coins: "The 50 coins Lumi covers (tickers and CoinGecko ids): signals for all, levels for the watchlist and majors.",
+  coins: "The 50 coins Lumi covers (tickers and CoinGecko ids). Lumi Market Ideas (paper-trade analysis, not investment advice): signals for all, levels for the watchlist and majors.",
   vendor_trust:
     "Check an x402 seller before paying it: {\"url\":\"...\"}, {\"domain\":\"...\"} or {\"payTo\":\"...\"} (case-insensitive) looks it up in the full CDP x402 Bazaar catalog (free quote checks of listings on a rotating schedule: 'quote-verified, low confidence'; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys ('purchase-verified', counted per chain: Base USDC for Bazaar listings, XRPL for a small curated list). Answer-only; tx evidence is in the paid trust check. With no arguments: curated XRPL vendor observations; {\"vendor_id\":\"...\"} for one vendor's summary. Observations, not ratings; no match is not a negative signal.",
   samples: "Free, clearly labelled SAMPLE previews of every paid product (truncated, up to 10 minutes old), with the USD price of each. Use it to see the output shape before paying.",
@@ -137,9 +138,9 @@ export function agentCard(cfg: Config, base: string) {
     description:
       "Should I pay this x402 URL? Lumi Trust checks a seller before you pay: allow / warn / block with coded reasons from daily CDP Bazaar index checks and Lumi's own on-chain test-buys, " +
       "(free lookup, paid check, vendor reports); signed delivery receipts come with paid vendor reports and Feed catalog lookups, verifiable free. " +
-      "Plus crypto market reads for AI agents from Lumi Trades (lumitrades.io): daily market brief, per-coin signals and support/resistance levels, " +
-      "paper-trade ideas, BTC/macro backdrop, yen carry-trade watch, sentiment and an events calendar (signals cover the top 50 coins; levels and paper trades cover 13 tracked coins), " +
+      "Separately, crypto market data for AI agents from Lumi Trades (lumitrades.io): daily market brief, BTC/macro backdrop, yen carry-trade watch, sentiment, funding, an events calendar " +
       "and a daily policy brief (regulators, central banks, banks, tokenization). " +
+      `And ${MARKET_IDEAS_NAME}, a separate product line (${MARKET_IDEAS_NOTICE}): per-coin signals, lite reads, the all-coins scan, support/resistance levels and paper-trade ideas and history (signals cover the top 50 coins; levels and paper trades cover 13 tracked coins). ` +
       `Pay per call over x402 v2 with no API key or account, in ${settledIn(cfg)}. Also available as a remote MCP server. Analytics only, not financial advice.`,
     // A2A 1.0
     supportedInterfaces: A2A_VERSIONS.map((v) => ({ url: a2aUrl, protocolBinding: "JSONRPC", protocolVersion: v })),
@@ -353,7 +354,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
         agent_card: `${base}/.well-known/agent-card.json`,
         mcp: `${base}/mcp`,
         networks: paymentNetworks(cfg),
-        endpoints: priceTable(cfg).map((p) => ({ path: p.path, name: p.name, prices: p.prices })),
+        endpoints: priceTable(cfg).map((p) => ({ path: p.path, name: p.name, product_line: p.product_line, prices: p.prices })),
         disclaimer: DISCLAIMER,
       },
     };
@@ -463,6 +464,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
       x402: q.body,
       options,
       how_to_pay: `${base}/skill.md`,
+      ...(target.route && MARKET_IDEAS_ROUTES.includes(target.route) ? { product_line: MARKET_IDEAS_NAME, notice: MARKET_IDEAS_NOTICE } : {}),
     },
   };
 }

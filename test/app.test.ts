@@ -27,7 +27,7 @@ describe("free endpoints", () => {
     const r = await get("/", { Accept: "text/html,application/xhtml+xml" });
     expect(r.headers.get("content-type")).toMatch(/text\/html/);
     const html = await r.text();
-    expect(html).toMatch(/<title>Lumi API: pay-per-call crypto signals and x402 seller checks \(pay on XRPL, Base or Stellar\)/);
+    expect(html).toMatch(/<title>Lumi API: x402 seller checks, crypto market data and Lumi Market Ideas \(pay on XRPL, Base or Stellar\)/);
     expect(html).toContain('<meta name="description"');
     expect(html).toContain("/v1/trust/vendors");
     expect(html).toContain("/v1/brief");

@@ -42,6 +42,7 @@ import { lookupError } from "./trust/index";
 import type { LookupQuery } from "./trust/catalog";
 import { D1LiveStore, MemoryLiveStore, refreshLive, isFresh, LIVE_UNIVERSE, LIVE_MAX_AGE_MS, LIVE_CYCLE_MS, type LiveStore } from "./live";
 import { mcpServerCard, agentsJson } from "./wellknown";
+import { MARKET_IDEAS_HEADERS, MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, MARKET_IDEAS_PATH_RE, TRUST_DISCLAIMER } from "./lines";
 import { D1IdempotencyStore, MemoryIdempotencyStore, type IdempotencyStore } from "./idempotency";
 import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, type SalesStore, type AlertConfig } from "./sales";
 
@@ -535,7 +536,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const r = await trust.vendorReport(id.trim().toLowerCase(), base);
     if (r.ok) {
       return hasContent("vendor_report", r.doc)
-        ? { ok: true, route: "vendor_report", body: isoTimestamps(withMeta({ kind: "vendor_report", timestamp: new Date(now()).toISOString(), source: "api.lumitrades.io trust layer", ...r.doc, disclaimer: DISCLAIMER }, vendorMeta(r.doc))) }
+        ? { ok: true, route: "vendor_report", body: isoTimestamps(withMeta({ kind: "vendor_report", timestamp: new Date(now()).toISOString(), source: "api.lumitrades.io trust layer", ...r.doc, disclaimer: TRUST_DISCLAIMER }, vendorMeta(r.doc))) }
         : notForSale("data_unavailable", "no observations for this vendor yet", 1800, null);
     }
     if (r.reason === "unknown_vendor") {
@@ -746,7 +747,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           timestamp: new Date().toISOString(),
           source: SOURCE,
           count: list.length,
-          coverage: "signal: every coin (computed live from public 1h/1d exchange candles, refreshed about every 13 minutes). levels, slate and trades: Lumi's watchlist and majors (group watchlist or majors).",
+          coverage: `${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}) signal: every coin (computed live from public 1h/1d exchange candles, refreshed about every 13 minutes). levels, slate and trades: Lumi's watchlist and majors (group watchlist or majors).`,
           coins: list.map((c) => ({
             ...c,
             signal: `${base}/v1/signal/${c.symbol}`,
@@ -1039,7 +1040,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           const rate = await pricer.rate(ctx ? (p) => ctx.waitUntil(p) : undefined);
           applyRate(config, rate);
         }
-        return await handle(request, ctx);
+        return withProductLine(request, await handle(request, ctx));
       } catch (err) {
         console.error(JSON.stringify({ event: "unhandled_error", error: String(err) }));
         if (isStorageQuotaError(err)) {
@@ -1141,4 +1142,28 @@ export function sitemapXml(base: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
     paths.map((p) => `  <url><loc>${base}${p}</loc><lastmod>${day}</lastmod><changefreq>daily</changefreq></url>`).join("\n") +
     `\n</urlset>\n`;
+}
+
+/**
+ * Lumi Market Ideas paths (signal, lite, levels, scan, slate, trades) carry X-Lumi-Product-Line and X-Lumi-Notice on
+ * every response (200, 402, 4xx, 503). Additive headers only; status and body are unchanged.
+ */
+export function withProductLine(request: Request, res: Response): Response {
+  let path: string;
+  try { path = new URL(request.url).pathname.replace(/\/+$/, "") || "/"; } catch { return res; }
+  if (!MARKET_IDEAS_PATH_RE.test(path)) return res;
+  const add = (h: Headers) => {
+    for (const [k, v] of Object.entries(MARKET_IDEAS_HEADERS)) h.set(k, v);
+    const expose = h.get("Access-Control-Expose-Headers");
+    if (expose && !/x-lumi-product-line/i.test(expose)) h.set("Access-Control-Expose-Headers", `${expose}, ${Object.keys(MARKET_IDEAS_HEADERS).join(", ")}`);
+  };
+  try {
+    add(res.headers);
+    return res;
+  } catch {
+    // Immutable headers (e.g. a Response from fetch()): copy into a new Response with the same status and body.
+    const copy = new Response(res.body, { status: res.status, statusText: res.statusText, headers: new Headers(res.headers) });
+    add(copy.headers);
+    return copy;
+  }
 }
