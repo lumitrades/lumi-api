@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { deriveAddress, deriveKeypair, generateSeed, sign } from "ripple-keypairs";
 import { createApp } from "../src/app";
 import { FACILITATOR, DATA, NOW, happyFacilitator, makeFetch, paymentHeaderFor } from "./helpers";
-import { PLANS, WATCH_FREE, WATCH_TRIAL, WATCH_TIERS, planPriceUsd, watchPrice, MONITOR_PRICE_TEXT } from "../src/commerce/plans";
+import { MONITOR_LIMITS, PLANS, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TIERS, planPriceUsd, watchDiscount, watchPrice, MONITOR_PRICE_TEXT } from "../src/commerce/plans";
+import { watchEconomics } from "../src/commerce/monitor";
 
 const BASE = "https://lumi.test";
 const OWNER = "owner-key-for-tests-0123456789-abcdefghijklmnop";
@@ -65,7 +66,7 @@ describe("Watch pricing", () => {
     expect(watchPrice("watch", 9)!.total_usd).toBe("45");
     expect(watchPrice("watch", 10)!).toMatchObject({ total_usd: "40", volume_discount: 0.2, prepay_discount: 0 });
     expect(watchPrice("watch_plus", 2, 3)!).toMatchObject({ total_usd: "64.8", prepay_discount: 0.1, list_usd: 72 });
-    expect(watchPrice("watch_pro", 10, 3)!.total_usd).toBe("432"); // 20 x 10 x 3 x 0.8 x 0.9
+    expect(watchPrice("watch_pro", 10, 3)!.total_usd).toBe("480"); // 20 x 10 x 3 x 0.8 (discounts do not stack)
     expect(watchPrice("watch", 0)).toBeNull();
     expect(watchPrice("watch", 21)).toBeNull();
     expect(watchPrice("watch", 1, 2)).toBeNull();
@@ -74,6 +75,58 @@ describe("Watch pricing", () => {
     expect(planPriceUsd("watch", true, undefined, { endpoints: 3 })).toBe("0.01");
     // legacy ids keep their prices (grandfathered)
     expect([PLANS.monitor.usd, PLANS.monitor_plus.usd]).toEqual(["9", "29"]);
+  });
+
+  it("discounts do not stack: only the larger of volume (20%) and prepay (10%) applies", () => {
+    expect(WATCH_DISCOUNTS).toMatchObject({ volume: 0.2, prepay: 0.1, volumeMinEndpoints: 10, prepayTerms: 3 });
+    expect(watchDiscount(1, 1)).toEqual({ rate: 0, kind: null });
+    expect(watchDiscount(10, 1)).toEqual({ rate: 0.2, kind: "volume" });
+    expect(watchDiscount(9, 3)).toEqual({ rate: 0.1, kind: "prepay" });
+    expect(watchDiscount(10, 3)).toEqual({ rate: 0.2, kind: "volume", not_stacked: "prepay" });
+    expect(watchDiscount(20, 3)).toEqual({ rate: 0.2, kind: "volume", not_stacked: "prepay" });
+    // both eligible: 20% off, never 0.8 x 0.9 = 28%
+    for (const id of ["watch", "watch_plus", "watch_pro"] as const) {
+      const p = watchPrice(id, 10, 3)!, list = Number(PLANS[id].usd) * 30;
+      expect(p).toMatchObject({ list_usd: list, discount: 0.2, discount_applied: "volume", volume_discount: 0.2, prepay_discount: 0, discount_not_stacked: "prepay" });
+      expect(Number(p.total_usd)).toBeCloseTo(list * 0.8, 6);
+      expect(Number(p.total_usd)).not.toBeCloseTo(list * 0.72, 2);
+    }
+    expect(watchPrice("watch_plus", 9, 3)).toMatchObject({ total_usd: "291.6", discount_applied: "prepay", volume_discount: 0 });
+    expect(watchPrice("watch", 1, 1)).toMatchObject({ discount: 0, discount_applied: null });
+    expect(watchPrice("watch", 1, 1)!.discount_not_stacked).toBeUndefined();
+    expect(MONITOR_PRICE_TEXT).toMatch(/do not stack/);
+  });
+
+  it("Watch Pro at the 20% volume discount: worst-case buys exceed half the fee, so the enrolment gate decides", () => {
+    const t = WATCH_TIERS.watch_pro, chains = t.chains as number;
+    const p = watchPrice("watch_pro", 10, 1)!;
+    expect(p.per_endpoint_term_usd).toBe(16); // $20 - 20%
+    const budget = p.per_endpoint_term_usd * MONITOR_LIMITS.budgetShare; // $8.00 per endpoint per term
+    const worst = t.buysPerTerm * chains * t.maxBuyUsd; // 30 daily buys x 3 chains x $0.10 = $9.00
+    expect(budget).toBeCloseTo(8, 6);
+    expect(worst).toBeCloseTo(9, 6);
+    expect(worst).toBeGreaterThan(budget);
+    // at list price (or with the 10% prepay discount alone) the worst case still fits
+    expect(worst).toBeLessThanOrEqual(Number(PLANS.watch_pro.usd) * MONITOR_LIMITS.budgetShare);
+    expect(worst).toBeLessThanOrEqual(watchPrice("watch_pro", 1, 3)!.per_endpoint_term_usd * MONITOR_LIMITS.budgetShare + 1e-9);
+    // Watch and Watch Plus fit even at 20% off
+    for (const id of ["watch", "watch_plus"] as const) {
+      const w = WATCH_TIERS[id];
+      expect(w.buysPerTerm * w.maxBuyUsd, id).toBeLessThanOrEqual(watchPrice(id, 10, 1)!.per_endpoint_term_usd * MONITOR_LIMITS.budgetShare);
+    }
+    // the enrolment gate rejects a 10-endpoint Watch Pro whose 3 chains are all priced at the $0.10 cap, and accepts $0.08
+    const mk = (usd: number) => ({
+      id: "e1", network: "xrpl:0", pay_to: "rSeller", pay_to_lc: "rseller", domain: null, proof: "", nonce: "", webhook_url: null, webhook_secret: null, email: null, token_hash: "", is_test: false, created_at: 0,
+      endpoints: Array.from({ length: 10 }, (_, i) => ({ url: `https://s.test/e${i}`, method: "GET" as const, price_usd: String(usd), asset: "USDC", amount: null, checked_at: 0, source: "seller" as const,
+        chains: ["xrpl:0", "eip155:8453", "eip155:1"].map((network) => ({ network, pay_to: "x", usd, asset: "USDC", proven: true })) })),
+    });
+    const atCap = watchEconomics(mk(0.1) as any, "watch_pro", 10, 1) as any;
+    expect(atCap).toMatchObject({ eligible: false, test_buys_planned_per_term: 900, test_buy_budget_usd_per_term: 80, est_test_buy_cost_usd_per_term: 90, volume_discount: 0.2 });
+    expect(atCap.reason).toMatch(/exceed 50% of the fee/);
+    const below = watchEconomics(mk(0.08) as any, "watch_pro", 10, 1) as any;
+    expect(below).toMatchObject({ eligible: true, est_test_buy_cost_usd_per_term: 72 });
+    // prepaying 3 terms with 10+ endpoints does not add the 10%: same per-term budget
+    expect(watchEconomics(mk(0.1) as any, "watch_pro", 10, 3)).toMatchObject({ test_buy_budget_usd_per_term: 80, discount_not_stacked: "prepay" });
   });
 
   it("tier limits: test-buy budget at most half the fee, caps per buy", () => {
@@ -94,7 +147,7 @@ describe("Watch pricing", () => {
     const s = setup();
     const list = await quote(s, "/v1/monitor/subscribe/watch_plus?endpoints=10&terms=3");
     expect(list.status).toBe(402);
-    expect(Number(iou(list.body))).toBeCloseTo(259.2, 6);
+    expect(Number(iou(list.body))).toBeCloseTo(288, 6); // 12 x 10 x 3 x 0.8: volume only, prepay not stacked
     const e = await enroll(s);
     expect(e.pay.watch).toContain("&endpoints=1");
     const q = await quote(s, `/v1/monitor/subscribe/watch?enrollment=${e.enrollment_id}&endpoints=1`);
@@ -111,7 +164,7 @@ describe("Watch pricing", () => {
     const e = await enroll(s);
     const r = await pay(s, `/v1/monitor/subscribe/watch_pro?enrollment=${e.enrollment_id}&endpoints=1&terms=3`);
     expect(r.status).toBe(201);
-    expect(r.body).toMatchObject({ plan: "Watch Pro", terms: 3, endpoint_count: 1, auto_renew: false, discounts: { volume: 0, prepay: 0.1 } });
+    expect(r.body).toMatchObject({ plan: "Watch Pro", terms: 3, endpoint_count: 1, auto_renew: false, discounts: { volume: 0, prepay: 0.1, applied: "prepay" } });
     expect(r.body.plan_ids).toHaveLength(3);
     expect(Date.parse(r.body.ends_at) - Date.parse(r.body.starts_at)).toBe(90 * DAY);
     // a second purchase stacks after the first block
