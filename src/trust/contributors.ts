@@ -629,9 +629,9 @@ export interface ContributorDeps {
   adminKey?: string;
   /** Legacy USD-denominated credit / cash-bounty accounting (CONTRIB_CASH_BOUNTIES_ENABLED). Default false: never cash. */
   creditsEnabled?: boolean;
-  /** Free Lumi Check credits per verified receipt (CONTRIB_CHECK_CREDITS_PER_RECEIPT). Placeholder default, needs the owner. */
+  /** Free Lumi Check credits per verified receipt (CONTRIB_CHECK_CREDITS_PER_RECEIPT). Default CHECK_CREDITS_PER_RECEIPT (5, approved). */
   checkCreditsPerReceipt?: string;
-  /** Free Lumi Check credit prices (CONTRIB_CHECK_CREDIT_PRICES JSON). */
+  /** Free Lumi Check credit prices (CONTRIB_CHECK_CREDIT_PRICES JSON). Default CHECK_CREDIT_PRICES (check 1, report 10, approved). */
   checkCreditPrices?: string;
   /** Serves a paid product for credits: the same body the x402 route returns. Not charged on errors. */
   redeem?: (product: CreditProduct, input: Record<string, string>, base: string) => Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; status: number; error: Record<string, unknown> }>;
@@ -656,10 +656,12 @@ export const CONTRIB_ACTIVE_WINDOW_DAYS = 365;
  * (self-dealt, unverifiable) receipts earn nothing. Only findings counted/confirmed without a dispute earn; a later dispute
  * or contradiction removes the earning (the earn side is derived, not stored). Each earning is a lot that expires
  * CHECK_CREDIT_EXPIRY_DAYS after the day it was earned; spends draw from the oldest unexpired lot first.
- * Spend on detailed checks (paid /v1/trust/check) or vendor reports. PLACEHOLDER numbers, flagged for the owner.
+ * Spend on detailed checks (paid /v1/trust/check) or vendor reports. Amounts approved by the owner (Oct 23 2026): a shared
+ * (verified) receipt earns 5 credits, a detailed check costs 1 credit and a vendor report costs 10 credits. Deployments
+ * can still override them with CONTRIB_CHECK_CREDITS_PER_RECEIPT / CONTRIB_CHECK_CREDIT_PRICES.
  */
 export const CHECK_CREDITS_PER_RECEIPT = 5;
-export const CHECK_CREDIT_PRICES: Record<CreditProduct, number> = { trust_check: 1, vendor_report: 10 };
+export const CHECK_CREDIT_PRICES: Readonly<Record<CreditProduct, number>> = Object.freeze({ trust_check: 1, vendor_report: 10 });
 /** Perks for contributors with >= 1 verified receipt: early access + a higher /v1/check rate limit (per key, per minute). */
 export const CONTRIB_PERK_CHECKS_PER_MINUTE = 120;
 /**

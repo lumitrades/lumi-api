@@ -3,7 +3,8 @@
 Status: **disabled**. There is no payout code. `CONTRIB_BOUNTIES.enabled = false`, `GET /v1/contrib/bounties` reports `enabled: false`,
 and the legacy USD credit accounting stays behind `CONTRIB_CASH_BOUNTIES_ENABLED` (default off).
 
-Launch rewards (no cash): free Lumi Check credits per verified receipt (one per seller per UTC day), contributor badges,
+Launch rewards (no cash): 5 free Lumi Check credits per verified receipt (one per seller per UTC day; a detailed check
+costs 1 credit, a vendor report 10), contributor badges,
 the public leaderboard, early access and a higher `/v1/check` rate limit.
 
 ## Later, after revenue (needs the owner's sign-off before any build)

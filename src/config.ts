@@ -70,7 +70,7 @@ export interface Env {
   CONTRIB_ADMIN_KEY?: string;
   /** Legacy USD credits / cash bounties. Default off ("true" re-enables the dormant accounting; there is no payout code). */
   CONTRIB_CASH_BOUNTIES_ENABLED?: string;
-  /** Free Lumi Check credits per verified receipt (placeholder default 5) and redemption prices JSON. */
+  /** Free Lumi Check credits per verified receipt (approved default 5) and redemption prices JSON (approved defaults: trust_check 1, vendor_report 10). */
   CONTRIB_CHECK_CREDITS_PER_RECEIPT?: string;
   CONTRIB_CHECK_CREDIT_PRICES?: string;
   /** Public base URL used in docs/discovery (e.g. https://api.lumitrades.io). */

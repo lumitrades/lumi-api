@@ -481,7 +481,7 @@ describe("free Lumi Check credits (no cash)", () => {
     expect((await s.app.fetch(new Request(BASE + "/v1/contrib/credits"))).status).toBe(401);
   });
 
-  it("per-receipt value is configurable (placeholder default 5)", async () => {
+  it("per-receipt value is configurable (approved default 5)", async () => {
     const s = setup({ env: { CONTRIB_CHECK_CREDITS_PER_RECEIPT: "2" } });
     const a = await s.issue(1, [wallet(1)]);
     await s.submit(a, await s.receipt(wallet(1), 410));
