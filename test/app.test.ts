@@ -67,8 +67,8 @@ describe("free endpoints", () => {
     expect(skill).toContain("/v1/brief");
     const wk = await (await get("/.well-known/x402")).json();
     expect(wk).toMatchObject({ x402Version: 2, kind: "resource-server" });
-    expect(wk.resources).toHaveLength(23);
-    expect(wk.resources.filter((r: any) => r.plan).map((r: any) => r.url)).toEqual(["monitor", "monitor_plus", "audit"].map((p) => `${BASE}/v1/monitor/subscribe/${p}`).concat([`${BASE}/v1/feed/subscribe/feed`, `${BASE}/v1/feed/subscribe/feed_pro`, `${BASE}/v1/feed/credits`]));
+    expect(wk.resources).toHaveLength(26); // + Watch, Watch Plus, Watch Pro (per-endpoint plans)
+    expect(wk.resources.filter((r: any) => r.plan).map((r: any) => r.url)).toEqual(["watch", "watch_plus", "watch_pro", "audit", "monitor", "monitor_plus"].map((p) => `${BASE}/v1/monitor/subscribe/${p}`).concat([`${BASE}/v1/feed/subscribe/feed`, `${BASE}/v1/feed/subscribe/feed_pro`, `${BASE}/v1/feed/credits`]));
     expect(wk.resources.map((r: any) => r.url)).toContain(`${BASE}/v1/macro/yen`);
     const oa = await (await get("/openapi.json")).json();
     expect(oa.paths["/v1/signal/{coin}"].get["x-payment-info"].price).toEqual({ mode: "fixed", currency: "USD", amount: "0.010000" });
