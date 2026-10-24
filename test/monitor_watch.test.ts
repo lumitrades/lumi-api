@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { deriveAddress, deriveKeypair, generateSeed, sign } from "ripple-keypairs";
 import { createApp } from "../src/app";
 import { FACILITATOR, DATA, NOW, happyFacilitator, makeFetch, paymentHeaderFor } from "./helpers";
-import { MONITOR_LIMITS, PLANS, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TIERS, planPriceUsd, watchDiscount, watchPrice, MONITOR_PRICE_TEXT } from "../src/commerce/plans";
+import { MONITOR_LIMITS, PLANS, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TIERS, planPriceUsd, watchDiscount, watchPrice, MONITOR_PRICE_TEXT, WATCH_PRO_BUYS, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL } from "../src/commerce/plans";
 import { watchEconomics } from "../src/commerce/monitor";
 
 const BASE = "https://lumi.test";
@@ -283,6 +283,8 @@ describe("Watch Plus trial", () => {
     const page = await (await s.req(`/v1/monitor/sellers/${e.enrollment_id}`)).json();
     expect(page.test_buys.every((x: any) => x.funding === "lumi-funded (free trial)")).toBe(true);
     expect(page.commercial_relationship.unpaid).toBe(true);
+    const tb = await (await s.req(`/v1/monitor/badge/${e.enrollment_id}.json`)).json();
+    if (tb.status !== "removed") expect(tb).toMatchObject({ label: TRIAL_BADGE_LABEL, paid: false });
     s.advance(15 * DAY);
     const st = await (await s.req(`/v1/monitor/status/${e.enrollment_id}.json`)).json();
     expect(st.frozen).toBe(true);
@@ -291,9 +293,43 @@ describe("Watch Plus trial", () => {
     expect(JSON.stringify(late)).toContain("plan_frozen");
     const html = await (await s.req(`/v1/monitor/status/${e.enrollment_id}`)).text();
     expect(html).toContain("read-only since");
+    // day 14 spelled out: nothing charged, checks stop, badge off, history read-only; never a stale "Operational"
+    expect(st.status).toMatch(/^Trial ended \d{4}-\d{2}-\d{2}, not monitored$/);
+    expect(st.frozen_note).toContain(WATCH_TRIAL_END);
+    expect(html).toContain("not monitored");
+    expect(html).not.toContain(">Operational<");
+    expect((await (await s.req(`/v1/monitor/badge/${e.enrollment_id}.json`)).json()).status).toBe("removed");
+    const probesAfter = await (await s.req("/v1/owner/monitor/probes", { headers: auth })).json();
+    expect(probesAfter.targets.some((x: any) => x.enrollment_id === e.enrollment_id)).toBe(false);
     // nothing was ever charged and no paid plan appeared
     expect(settles(s)).toBe(0);
     expect(page.commercial_relationship.plans.every((p: any) => p.unpaid)).toBe(true);
+  });
+});
+
+describe("legal wording (review 2026-10-23)", () => {
+  it("the paid badge says it is a paid plan, on the SVG and in the JSON", async () => {
+    const s = setup();
+    const e = await enroll(s);
+    const paid = await pay(s, `/v1/monitor/subscribe/watch?enrollment=${e.enrollment_id}&endpoints=1`);
+    const planId = paid.body.plan_id ?? paid.body.plans?.[0]?.plan_id;
+    const r = await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: planId, endpoint: `${BASE}/v1/lite/XRP`, network: "xrpl:1", asset: "XRP", quote_pay_to: SELLER, outcome: "delivered", http_status: 200, data_returned: true, tx_hash: "A".repeat(64), cost_usd: 0.003 }] }, auth);
+    expect(r.status).toBe(200);
+    const b = await (await s.req(`/v1/monitor/badge/${e.enrollment_id}.json`)).json();
+    expect(b).toMatchObject({ label: PAID_BADGE_LABEL, paid: true });
+    const svg = await (await s.req(`/v1/monitor/badge/${e.enrollment_id}.svg`)).text();
+    expect(svg).toContain("paid plan");
+  });
+  it("Watch Pro, Watch Plus cadence and the trial end read the same everywhere", async () => {
+    expect(WATCH_PRO_BUYS).toBe("daily buys on up to 3 chains, limited by the test-buy budget");
+    expect(WATCH_TIERS.watch_plus.probeEveryMs).toBe(30 * 60_000);
+    expect(MONITOR_PRICE_TEXT).toContain(WATCH_PRO_BUYS);
+    expect(PLANS.watch_pro.summary).toContain(WATCH_PRO_BUYS);
+    const s = setup();
+    const texts = [MONITOR_PRICE_TEXT, PLANS.watch_plus.summary, await (await s.req("/llms.txt")).text(), JSON.stringify(await (await s.req("/v1/monitor")).json())];
+    for (const t of texts) { expect(t).not.toContain("15-30"); expect(t).not.toMatch(/Bobby/); }
+    expect(texts[2]).toContain(WATCH_PRO_BUYS);
+    expect(texts[2]).toContain(WATCH_TRIAL_END);
   });
 });
 

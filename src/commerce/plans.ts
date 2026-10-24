@@ -42,8 +42,8 @@ export const PLANS: Record<PlanId, PlanDef> = {
   monitor: { id: "monitor", name: "Monitor", usd: "9", days: TERM_DAYS, family: "monitor", legacy: true, path: "/v1/monitor/subscribe/monitor", summary: "30 days: one seller-funded test-buy of 1 endpoint per term (one recheck after a failure) + alerts." },
   monitor_plus: { id: "monitor_plus", name: "Monitor Plus", usd: "29", days: TERM_DAYS, family: "monitor", legacy: true, path: "/v1/monitor/subscribe/monitor_plus", summary: "30 days: weekly seller-funded test-buys of up to 20 endpoints + alerts." },
   watch: { id: "watch", name: "Watch", usd: "5", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch", summary: "Per endpoint per 30 days: hourly quote checks, a weekly seller-funded test-buy (small per-buy cap), alerts, 30-day history, status page and badge." },
-  watch_plus: { id: "watch_plus", name: "Watch Plus", usd: "12", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch_plus", summary: "Per endpoint per 30 days: quote checks every 15-30 min, a daily seller-funded test-buy (capped per buy) rotating across the chains the endpoint accepts, schema and p95-latency alerts, 90-day history." },
-  watch_pro: { id: "watch_pro", name: "Watch Pro", usd: "20", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch_pro", summary: "Per endpoint per 30 days: quote checks every 15 min, daily seller-funded test-buys on up to 3 chains (capped per buy), all Watch Plus alerts, 90-day history and a monthly report signed by Lumi's wallet." },
+  watch_plus: { id: "watch_plus", name: "Watch Plus", usd: "12", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch_plus", summary: "Per endpoint per 30 days: quote checks every 30 min, a daily seller-funded test-buy (capped per buy) rotating across the chains the endpoint accepts, schema and p95-latency alerts, 90-day history." },
+  watch_pro: { id: "watch_pro", name: "Watch Pro", usd: "20", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch_pro", summary: "Per endpoint per 30 days: quote checks every 15 min, daily buys on up to 3 chains, limited by the test-buy budget (seller-funded, capped per buy), all Watch Plus alerts, 90-day history and a monthly report signed by Lumi's wallet." },
   audit: { id: "audit", name: "Audit", usd: "99", days: null, family: "monitor", path: "/v1/monitor/subscribe/audit", summary: "One-off: one seller-funded test-buy of every listed endpoint of the seller, with a full report signed by Lumi's wallet." },
   feed: { id: "feed", name: "Feed", usd: "99", days: TERM_DAYS, family: "feed", path: "/v1/feed/subscribe/feed", summary: "30 days: 100,000 bulk lookups, delta feed, full evidence and receipts." },
   feed_pro: { id: "feed_pro", name: "Feed Pro", usd: "199", days: TERM_DAYS, family: "feed", path: "/v1/feed/subscribe/feed_pro", summary: "30 days: 500,000 lookups, delta feed, licensed full snapshot export, status-change webhooks, receipts." },
@@ -106,6 +106,13 @@ export function watchTier(plan: string): WatchTier | null { return (WATCH_TIERS 
 
 export const WATCH_FREE = { endpoints: 1, termDays: TERM_DAYS, label: "free tier, no test-buys" };
 export const WATCH_TRIAL = { days: 14, capUsd: 0.25, endpoints: WATCH_TIERS.watch_plus_trial.maxEndpoints, label: "Watch Plus free trial" };
+/** Watch Pro test-buy wording, used the same way on every surface (legal review 3-H1). */
+export const WATCH_PRO_BUYS = "daily buys on up to 3 chains, limited by the test-buy budget";
+/** What happens when the free trial ends (legal review 3-M1). Keep in sync with tierState/badgeStatus/statusPage. */
+export const WATCH_TRIAL_END = "On day 14 the trial ends: nothing is charged, checks and test-buys stop, the Monitored badge comes off, and history freezes read-only.";
+/** Badge labels: a paid plan says so on the embeddable SVG itself (legal review 3-H2); the trial is labelled free. */
+export const PAID_BADGE_LABEL = "Monitored by Lumi · paid plan";
+export const TRIAL_BADGE_LABEL = "Monitored by Lumi · free trial";
 /** Volume and prepay discounts. They do NOT stack: when both apply (10+ endpoints prepaid for 3 terms) only the larger
  *  one is used (20% volume), never 0.8 × 0.9. */
 export const WATCH_DISCOUNTS = { volumeMinEndpoints: 10, volume: 0.2, prepayTerms: 3, prepay: 0.1, maxEndpoints: 20 };
@@ -218,7 +225,7 @@ export const iso = (t: number | null | undefined) => (t == null ? null : new Dat
 
 /** One-line monitoring price text shared by MCP, A2A and docs (keep in sync with the site: lumitrades.io/agents/ and /trust/). */
 export const MONITOR_PRICE_TEXT =
-  `For x402 sellers, priced per endpoint per 30 days: Watch $${PLANS.watch.usd} (hourly quote checks, weekly test-buy), Watch Plus $${PLANS.watch_plus.usd} (15-30 min checks, daily test-buy rotating chains, schema/p95 alerts), ` +
-  `Watch Pro $${PLANS.watch_pro.usd} (15 min checks, daily test-buys on up to 3 chains, signed monthly report); ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}% (discounts do not stack: the larger applies). ` +
-  `Audit $${PLANS.audit.usd} one-off (every listed endpoint, signed report). Free Watch tier (${WATCH_FREE.endpoints} endpoint, daily quote check, no test-buys) and a one-per-seller ${WATCH_TRIAL.days}-day Watch Plus trial (no card, never converts). ` +
+  `For x402 sellers, priced per endpoint per 30 days: Watch $${PLANS.watch.usd} (hourly quote checks, weekly test-buy), Watch Plus $${PLANS.watch_plus.usd} (30 min checks, daily test-buy rotating chains, schema/p95 alerts), ` +
+  `Watch Pro $${PLANS.watch_pro.usd} (15 min checks, daily buys on up to 3 chains, limited by the test-buy budget, signed monthly report); ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}% (discounts do not stack: the larger applies). ` +
+  `Audit $${PLANS.audit.usd} one-off (every listed endpoint, signed report). Free Watch tier (${WATCH_FREE.endpoints} endpoint, daily quote check, no test-buys) and a one-per-seller ${WATCH_TRIAL.days}-day Watch Plus trial (no card, never converts; on day ${WATCH_TRIAL.days} nothing is charged, checks stop, the badge comes off and history freezes read-only). ` +
   `Legacy Monitor/Monitor Plus are grandfathered.`;
