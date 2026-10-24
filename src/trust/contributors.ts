@@ -29,6 +29,7 @@
  * ingest. With CONTRIB_QUEUE bound, inserts go through the lumi-contrib-writes queue and are flushed in one batch.
  * Rejected submissions write nothing. Credits are derived from the submission rows; there is no payout code.
  */
+import { originPath } from "./check";
 import { ed25519 } from "@noble/curves/ed25519";
 import type { D1Like } from "../config";
 import { json } from "../x402";
@@ -134,6 +135,8 @@ export interface ContributorStore {
   totals(): Promise<{ key_id: string; n: number; credit_uusd: number; month_uusd: number }[]>;
   since(sinceDay: string, limit: number): Promise<Submission[]>;
   getMeta(k: string): Promise<string | null>;
+  /** Retention: delete submissions (incl. the stored receipt copy) older than `beforeDay`. Returns rows deleted. */
+  purge(beforeDay: string): Promise<number>;
 }
 
 // ---------------------------------------------------------------- stores
@@ -199,6 +202,7 @@ export class MemoryContributorStore implements ContributorStore {
   }
   async since(d: string, n: number) { return [...this.subs.values()].filter((s) => s.day >= d).slice(0, n); }
   async getMeta(k: string) { return this.meta.get(k) ?? null; }
+  async purge(d: string) { let n = 0; for (const [k, s] of this.subs) if (s.day < d) { this.subs.delete(k); n++; } this.writes += n; return n; }
 }
 
 const SUB_COLS = "tx_hash, key_id, day, created_at, mode, kit_version, endpoint, endpoint_key, domain, network, asset, amount, pay_to, payer, source, new_wallet, receipt_hash, http_status, outcome, finding, wanted, demand_opt_in, ledger_ts, credit_uusd, credit_note, dispute, metrics, receipt";
@@ -281,6 +285,10 @@ export class D1ContributorStore implements ContributorStore {
     return ((await this.db.prepare(`SELECT ${SUB_COLS} FROM contributor_submissions WHERE day >= ?1 LIMIT ?2`).bind(d, n).all<any>()).results ?? []).map(parseSub);
   }
   async getMeta(k: string) { return (await this.db.prepare("SELECT v FROM meta WHERE k = ?1").bind(k).first<{ v: string }>())?.v ?? null; }
+  async purge(d: string) {
+    const r: any = await this.db.prepare("DELETE FROM contributor_submissions WHERE day < ?1").bind(d).run();
+    return Number(r?.meta?.changes ?? 0);
+  }
 }
 
 // ---------------------------------------------------------------- helpers
@@ -376,6 +384,33 @@ export interface ContributorDeps {
   queue?: ContribQueue;
   log?: (e: Record<string, unknown>) => void;
   credits?: string; caps?: string; minKit?: string; retiredKits?: string;
+  /** Scoped admin key for /v1/owner/contributors* (CONTRIB_ADMIN_KEY). When set, OWNER_MCP_KEY no longer opens these routes. */
+  adminKey?: string;
+  /** API-credit accounting (CONTRIB_CREDITS_ENABLED). Default false: rewards are badges + leaderboard only, never cash. */
+  creditsEnabled?: boolean;
+}
+
+/** Lumi Check v0: contributed submissions (incl. the stored receipt copy) are deleted after this many days. DRAFT, needs Bobby's approval. */
+export const CONTRIB_RETENTION_DAYS = 90;
+/** Contributor badges: verified receipts (findings counted or confirmed; at most one per endpoint per UTC day per key). */
+export const CONTRIB_BADGES = [
+  { id: "first_receipt", label: "First verified receipt", min: 1 },
+  { id: "scout", label: "Scout", min: 10 },
+  { id: "ranger", label: "Ranger", min: 50 },
+  { id: "sentinel", label: "Sentinel", min: 200 },
+] as const;
+
+/** Canonical tx-hash form for duplicate detection: XRPL upper-case hex, EVM and Stellar lower-case. */
+export function normTx(network: string, tx: string): string {
+  return network === "xrpl:0" || network.startsWith("xrpl:") ? tx.toUpperCase() : tx.toLowerCase();
+}
+
+/** Receipt copy that is safe to store: seller endpoint reduced to origin + path (query strings can carry buyer details). */
+export function storedReceipt(r: any): string {
+  const ep = String(r?.seller?.endpoint ?? "");
+  const clean = originPath(ep);
+  const copy = clean && clean !== ep ? { ...r, seller: { ...r.seller, endpoint: clean }, x_lumi_stored: { redacted: ["seller.endpoint.query"], note: "Stored copy; verify against receipt_hash from the original." } } : r;
+  return JSON.stringify(copy).slice(0, 12_000);
 }
 
 export function createContributors(deps: ContributorDeps) {
@@ -392,7 +427,10 @@ export function createContributors(deps: ContributorDeps) {
   let pendingRows = 0;
   let wantedMemo: { at: number; list: WantedItem[] } | undefined;
 
-  const ownerOk = async (req: Request) => isOwnerKey(/^Bearer\s+(\S+)$/i.exec(req.headers.get("Authorization") ?? "")?.[1], deps.ownerKey);
+  // Scoped: CONTRIB_ADMIN_KEY when set (OWNER_MCP_KEY then does NOT open contributor admin), else OWNER_MCP_KEY (back-compat).
+  const adminKey = deps.adminKey || deps.ownerKey;
+  const ownerOk = async (req: Request) => isOwnerKey(/^Bearer\s+(\S+)$/i.exec(req.headers.get("Authorization") ?? "")?.[1], adminKey);
+  const creditsOn = deps.creditsEnabled === true;
   const noStore = { "Cache-Control": "no-store" };
   const err = (status: number, error: string, extra: Record<string, unknown> = {}) => json(status, { error, ...extra }, noStore);
 
@@ -525,6 +563,7 @@ export function createContributors(deps: ContributorDeps) {
   // ---------------------------------------------------- submissions
 
   function credit(o: { mode: string; network: string; wanted: boolean; repeat: boolean; listed: boolean; payToListed: boolean; monthSoFar: number; forfeited: boolean }) {
+    if (!creditsOn) return { uusd: 0, note: "credits_disabled" };
     if (o.forfeited) return { uusd: 0, note: "forfeited" };
     if (!o.listed) return { uusd: Math.round(CREDITS.base_uusd * CREDITS.unlisted_mult), note: "unlisted_endpoint" };
     if (!o.payToListed) return { uusd: Math.round(CREDITS.base_uusd * CREDITS.unlisted_mult), note: "pay_to_not_listed" };
@@ -576,20 +615,23 @@ export function createContributors(deps: ContributorDeps) {
     const kv = kitCheck(`${ext?.kit?.name}/${ext?.kit?.version}`);
     if (kv) return err(426, kv, { min_kit_version: minKit });
     if (ext.mode !== mode) return err(422, "mode_mismatch");
-    const p = r.payment, tx = String(p.tx_hash);
+    const p = r.payment, tx = normTx(String(p.network), String(p.tx_hash));
     const payer = normWallet(String(p.payer)), payTo = normWallet(String(r.seller.pay_to));
     if (!key.wallets.map(normWallet).includes(payer)) return err(403, "payer_not_registered_to_key");
-    const endpoint = normalizeUrl(String(r.seller.endpoint ?? ""));
-    if (!endpoint) return err(422, "endpoint_invalid");
+    const fullEndpoint = normalizeUrl(String(r.seller.endpoint ?? ""));
+    // Stored, keyed and capped on origin + path only: query strings never stored, and cannot dodge per-endpoint caps.
+    const endpoint = originPath(fullEndpoint);
+    if (!fullEndpoint || !endpoint) return err(422, "endpoint_invalid");
     const observed = Date.parse(String(r.delivery.observed_at));
     if (!Number.isFinite(observed) || observed > now() + 5 * 60_000) return err(422, "observed_at_invalid");
     if (observed < now() - CAPS.tx_max_age_days * DAY_MS) return err(422, "too_old");
     // 2. Self-testing and duplicates (index reads).
-    const k = await known(endpoint);
+    const k0 = await known(fullEndpoint);
+    const k = k0.listed || fullEndpoint === endpoint ? k0 : await known(endpoint);
     const self = await selfTest(key, endpoint, payTo, payer, k);
     if (self) return err(403, "self_testing", { reason: self });
     if (pending.has(tx)) return err(409, "duplicate");
-    if (deps.receipts && (await deps.receipts.buy(tx).catch(() => null))) return err(409, "already_recorded_by_lumi");
+    if (deps.receipts && ((await deps.receipts.buy(tx).catch(() => null)) || (tx !== String(p.tx_hash) && (await deps.receipts.buy(String(p.tx_hash)).catch(() => null))))) return err(409, "already_recorded_by_lumi");
     const [w] = await store.wallets([payer]);
     const source = w?.source ?? payer;
     const newWallet = !!w?.funded_at && now() - w.funded_at < CAPS.new_wallet_days * DAY_MS;
@@ -629,14 +671,17 @@ export function createContributors(deps: ContributorDeps) {
       network: p.network, asset: String(p.asset), amount: String(p.amount), pay_to: payTo, payer, source, new_wallet: newWallet, receipt_hash: r.receipt_hash,
       http_status: Number.isInteger(r.delivery.http_status) ? r.delivery.http_status : null, outcome: String(r.delivery.outcome), finding, wanted,
       demand_opt_in: mode === "passive" && key.share_demand, ledger_ts: led.ts, credit_uusd: cr.uusd, credit_note: cr.note, dispute: null,
-      metrics: metrics ? JSON.stringify(metrics) : null, receipt: JSON.stringify(r).slice(0, 12_000),
+      metrics: metrics ? JSON.stringify(metrics) : null, receipt: storedReceipt(r),
     };
     ops.unshift({ op: "insert", row });
     await write(ops);
     return json(202, {
-      accepted: true, queued: !!deps.queue, tx_hash: tx, finding, credit_uusd: cr.uusd, credit_usd: cr.uusd / 1e6, credit_note: cr.note,
+      accepted: true, queued: !!deps.queue, tx_hash: tx, finding,
+      ...(creditsOn ? { credit_uusd: cr.uusd, credit_usd: cr.uusd / 1e6, credit_note: cr.note } : { rewards: "badges_and_leaderboard" }),
       ...(flag ? { endpoint_flag: flag.flag } : {}),
-      note: "Credits are Lumi API credits, not cash. Negative findings count only after independent confirmation. Draft terms apply.",
+      note: creditsOn
+        ? "Credits are Lumi API credits, not cash. Negative findings count only after independent confirmation. Draft terms apply."
+        : "Rewards are contributor badges and a leaderboard of verified receipts. No cash, no credits. Negative findings count only after independent confirmation. Draft terms apply.",
     }, noStore);
   }
 
@@ -697,12 +742,12 @@ export function createContributors(deps: ContributorDeps) {
       share_demand: b?.share_demand === true, status: "active", forfeited: false, created_at: now(), revoked_at: null, revoke_reason: null,
     };
     await store.issue(k, rows);
-    deps.log?.({ event: "contrib_key_issued", key_id, label });
+    deps.log?.({ event: "contrib_key_issued", key_id });
     return json(201, { ...k, funding: rows.map(({ address, funder, source }) => ({ address, funder, source })) }, noStore);
   }
 
   async function ownerRoutes(req: Request, path: string, raw: string): Promise<Response> {
-    if (!(await ownerOk(req))) return json(401, { error: "owner_key_required", hint: "Authorization: Bearer <OWNER_MCP_KEY>" }, { ...noStore, "WWW-Authenticate": "Bearer" });
+    if (!(await ownerOk(req))) return json(401, { error: "owner_key_required", hint: deps.adminKey ? "Authorization: Bearer <CONTRIB_ADMIN_KEY>" : "Authorization: Bearer <CONTRIB_ADMIN_KEY or OWNER_MCP_KEY>" }, { ...noStore, "WWW-Authenticate": "Bearer" });
     const m = req.method, u = new URL(req.url);
     if (path === "/v1/owner/contributors" && m === "POST") return issue(raw);
     if (path === "/v1/owner/contributors" && m === "GET") {
@@ -711,10 +756,12 @@ export function createContributors(deps: ContributorDeps) {
       return json(200, {
         keys: keys.map((k) => {
           const t = by.get(k.key_id);
-          return { ...k, submissions: t?.n ?? 0, credits_usd: (t?.credit_uusd ?? 0) / 1e6, credits_month_usd: (t?.month_uusd ?? 0) / 1e6, credits_state: k.forfeited ? "forfeited" : "earned_unpaid" };
+          return creditsOn
+            ? { ...k, submissions: t?.n ?? 0, credits_usd: (t?.credit_uusd ?? 0) / 1e6, credits_month_usd: (t?.month_uusd ?? 0) / 1e6, credits_state: k.forfeited ? "forfeited" : "earned_unpaid" }
+            : { ...k, submissions: t?.n ?? 0, credits_state: "disabled" };
         }),
-        rules: { credits: CREDITS, caps: CAPS, min_kit_version: minKit, retired_kit_versions: [...retired], formats: ACCEPTED_FORMATS },
-        note: "Credits are API credits, not cash. There is no payout code.",
+        rules: { credits_enabled: creditsOn, ...(creditsOn ? { credits: CREDITS } : {}), caps: CAPS, min_kit_version: minKit, retired_kit_versions: [...retired], formats: ACCEPTED_FORMATS, retention_days: CONTRIB_RETENTION_DAYS },
+        note: creditsOn ? "Credits are API credits, not cash. There is no payout code." : "Credits are disabled: rewards are badges and the leaderboard only. There is no payout code.",
       }, noStore);
     }
     if (path === "/v1/owner/contributors/flags" && m === "GET") {
@@ -736,6 +783,7 @@ export function createContributors(deps: ContributorDeps) {
         .map(([domain, e]) => ({ domain, purchases: e.n, contributors: e.keys.size, networks: [...e.networks].sort() })).sort((a, b) => b.purchases - a.purchases);
       return json(200, { window_days: days, rows: out, privacy: `Opt-in contributors only; domains with fewer than ${CAPS.demand_min_contributors} contributors are withheld; no key ids or wallets.` }, noStore);
     }
+    if (path === "/v1/owner/contributors/purge" && m === "POST") return json(200, await purge(), noStore);
     if (path === "/v1/owner/contributors/reconcile" && m === "POST") {
       const rows = (await store.since(dayOf(now() - 7 * DAY_MS), 5000)).filter((r) => r.finding === "unconfirmed");
       const ops: WriteOp[] = [];
@@ -772,7 +820,7 @@ export function createContributors(deps: ContributorDeps) {
 
   const publicRow = (s: Submission) => ({
     tx_hash: s.tx_hash, day: s.day, mode: s.mode, endpoint: s.endpoint, network: s.network, asset: s.asset, amount: s.amount, outcome: s.outcome,
-    finding: s.finding, credit_usd: s.credit_uusd / 1e6, credit_note: s.credit_note, kit_version: s.kit_version, disputed: !!s.dispute,
+    finding: s.finding, ...(creditsOn ? { credit_usd: s.credit_uusd / 1e6, credit_note: s.credit_note } : {}), kit_version: s.kit_version, disputed: !!s.dispute,
     metrics: s.metrics ? JSON.parse(s.metrics) : null,
   });
 
@@ -786,6 +834,14 @@ export function createContributors(deps: ContributorDeps) {
     if (raw.length > 24_000) return err(413, "too_large");
     if (isOwner) return ownerRoutes(req, path, raw);
     if (path === "/v1/contrib/disputes" && req.method === "POST") return dispute(raw);
+    if (path === "/v1/contrib/leaderboard" && (req.method === "GET" || req.method === "HEAD")) {
+      const rows = (await leaderboard()).slice(0, 50).map(({ key_id: _k, ...r }) => r);
+      return json(200, {
+        kind: "contributor_leaderboard", window_days: CONTRIB_RETENTION_DAYS, rows, badges: CONTRIB_BADGES,
+        counts: "Verified receipts only: on-ledger payment checked, finding counted or confirmed, at most one per endpoint per UTC day per contributor. Held, disputed and contradicted receipts do not count.",
+        note: "Badges and rank only. No cash, no credits. Paying Lumi never changes a rank or badge. Contributors appear under a pseudonymous handle.",
+      }, { "Cache-Control": "public, max-age=300" });
+    }
     const a = await authContributor(req, raw);
     if (!a.ok) return a.res;
     const key = a.key, u = new URL(req.url);
@@ -804,9 +860,10 @@ export function createContributors(deps: ContributorDeps) {
       return json(200, {
         key_id: key.key_id, label: key.label, status: key.status, share_demand: key.share_demand, wallets: key.wallets,
         today: { accepted: c.key_day, cap: key.daily_cap ?? CAPS.key_daily },
-        credits_month_usd: c.month_credit / 1e6, credits_month_cap_usd: CREDITS.monthly_cap_uusd / 1e6,
+        ...(creditsOn ? { credits_month_usd: c.month_credit / 1e6, credits_month_cap_usd: CREDITS.monthly_cap_uusd / 1e6 } : { rewards: "badges_and_leaderboard" }),
+        ...(await standing(key.key_id)),
         submissions: (await store.recentByKey(key.key_id, 50)).map(publicRow),
-        note: "Your own submissions only. Credits are Lumi API credits, not cash.",
+        note: creditsOn ? "Your own submissions only. Credits are Lumi API credits, not cash." : "Your own submissions only. Rewards are badges and leaderboard rank, no cash.",
       }, noStore);
     }
     if (path === "/v1/contrib/me" && req.method === "POST") {
@@ -818,6 +875,45 @@ export function createContributors(deps: ContributorDeps) {
     return err(404, "not_found");
   }
 
+  // ---------------------------------------------------- rewards: badges + leaderboard (no cash)
+
+  const VERIFIED: Finding[] = ["counted", "confirmed"];
+  async function leaderboard() {
+    const [rows, keys] = await Promise.all([store.since(dayOf(now() - CONTRIB_RETENTION_DAYS * DAY_MS), 50_000), store.listKeys()]);
+    const active = new Set(keys.filter((k) => k.status === "active" && !k.forfeited).map((k) => k.key_id));
+    const by = new Map<string, { seen: Set<string>; verified: number; confirmed: number; endpoints: Set<string> }>();
+    for (const r of rows) {
+      if (!active.has(r.key_id) || !VERIFIED.includes(r.finding) || r.dispute) continue;
+      const e = by.get(r.key_id) ?? { seen: new Set(), verified: 0, confirmed: 0, endpoints: new Set() };
+      const slot = `${r.endpoint_key}:${r.day}`;
+      if (!e.seen.has(slot)) { e.seen.add(slot); e.verified++; if (r.finding === "confirmed") e.confirmed++; e.endpoints.add(r.endpoint_key); }
+      by.set(r.key_id, e);
+    }
+    const list = await Promise.all([...by.entries()].map(async ([key_id, e]) => ({
+      key_id, handle: "contrib-" + (await sha256Hex("lumi-handle:" + key_id)).slice(0, 8), verified_receipts: e.verified, confirmed_findings: e.confirmed, endpoints: e.endpoints.size,
+      badges: badgesFor(e.verified, e.confirmed),
+    })));
+    list.sort((a, b) => b.verified_receipts - a.verified_receipts || b.endpoints - a.endpoints || a.handle.localeCompare(b.handle));
+    return list.map((x, i) => ({ rank: i + 1, ...x }));
+  }
+  function badgesFor(verified: number, confirmed: number) {
+    const out: string[] = CONTRIB_BADGES.filter((b) => verified >= b.min).map((b) => b.id);
+    if (confirmed > 0) out.push("confirmed_finding");
+    return out;
+  }
+  async function standing(key_id: string) {
+    const me = (await leaderboard()).find((x) => x.key_id === key_id);
+    return { leaderboard: me ? { rank: me.rank, handle: me.handle, verified_receipts: me.verified_receipts } : { rank: null, verified_receipts: 0 }, badges: me?.badges ?? [] };
+  }
+
+  /** Retention: drop submissions older than CONTRIB_RETENTION_DAYS (run from the cron and the owner route). */
+  async function purge() {
+    const before = dayOf(now() - CONTRIB_RETENTION_DAYS * DAY_MS);
+    const deleted = await store.purge(before);
+    deps.log?.({ event: "contrib_purge", deleted });
+    return { retention_days: CONTRIB_RETENTION_DAYS, before_day: before, deleted };
+  }
+
   /** Queue consumer for lumi-contrib-writes: every message's ops in ONE D1 batch. */
   async function consume(bodies: any[]) {
     const ops: WriteOp[] = bodies.flatMap((b) => (b?.kind === "contrib_write" && Array.isArray(b.ops) ? b.ops : []));
@@ -827,6 +923,6 @@ export function createContributors(deps: ContributorDeps) {
     return rows;
   }
 
-  return { handle, consume, rules: { credits: CREDITS, caps: CAPS }, _boostFlag: boostFlag, _credit: credit };
+  return { handle, consume, purge, leaderboard, rules: { credits: CREDITS, caps: CAPS, credits_enabled: creditsOn, retention_days: CONTRIB_RETENTION_DAYS }, _boostFlag: boostFlag, _credit: credit };
 }
 export type Contributors = ReturnType<typeof createContributors>;

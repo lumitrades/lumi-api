@@ -162,6 +162,9 @@ describe("earned-only Tested by Lumi badge (/v1/badge/{key})", () => {
     const strip = (x: any) => JSON.parse(JSON.stringify(x, (k, v) => (k === "signed" ? undefined : v)));
     const before = { good: strip(await (await s.get("/v1/badge/printmoneylab.json")).json()), low: strip(await (await s.get("/v1/badge/cryptobuddy.json")).json()) };
     const scoreBefore = (await (await s.get("/v1/trust/vendors/printmoneylab")).json()).score;
+    const vstrip = (x: any) => JSON.parse(JSON.stringify(x, (k, v) => (["commercial_relationship", "generated_at", "as_of", "meta", "monitoring"].includes(k) ? undefined : v)));
+    const listBefore = vstrip(await (await s.get("/v1/trust/vendors")).json());
+    const lookupBefore = vstrip(await (await s.get(`/v1/trust/vendors?payTo=${SELLER}`)).json());
     expect(before.low.earned).toBe(false);
     const req = (p: string, init: RequestInit = {}) => s.app.fetch(new Request(BASE + p, init));
     const pay = async (p: string) => {
@@ -186,6 +189,9 @@ describe("earned-only Tested by Lumi badge (/v1/badge/{key})", () => {
     const after = { good: strip(await (await s.get("/v1/badge/printmoneylab.json")).json()), low: strip(await (await s.get("/v1/badge/cryptobuddy.json")).json()) };
     expect(after).toEqual(before);
     expect((await (await s.get("/v1/trust/vendors/printmoneylab")).json()).score).toEqual(scoreBefore);
+    // ranking, tiers and scores of the whole list, and the seller's own lookup tier, are unchanged
+    expect(vstrip(await (await s.get("/v1/trust/vendors")).json())).toEqual(listBefore);
+    expect(vstrip(await (await s.get(`/v1/trust/vendors?payTo=${SELLER}`)).json())).toEqual(lookupBefore);
     expect((await (await s.get(`/v1/badge/${new URL(BASE).hostname}.json`)).json()).earned).toBe(false);
   });
 });
