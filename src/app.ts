@@ -42,7 +42,7 @@ import { D1FeedStore, MemoryFeedStore, FEEDS, dueFeed, refreshFeed, feedFresh, t
 import { liteView, scanView, fundingView, fearGreedView, fearGreedFromContext, events48View, trustVerdict } from "./quick";
 import { lookupError } from "./trust/index";
 import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
-import { originPath, checkPayload, badgeDecision, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_MIN_SCORE, BADGE_MIN_PAID_TESTS, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
+import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
 import { curatedByHost } from "./trust/badge";
 import type { LookupQuery } from "./trust/catalog";
 import { D1LiveStore, MemoryLiveStore, refreshLive, isFresh, LIVE_UNIVERSE, LIVE_MAX_AGE_MS, LIVE_CYCLE_MS, type LiveStore } from "./live";
@@ -450,7 +450,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   /** Earned-only "Tested by Lumi" badge: decision from the live score only, signed and short-lived. */
   async function earnedBadge(key: string, ext: "json" | "svg", base: string): Promise<Response> {
     const s = await liveScore(key);
-    const d = s ? badgeDecision({ score: s.score, last_conclusive: s.last_conclusive, status: s.status }) : { earned: false as const, reason: "not_scored" };
+    const th = badgeThresholds(env);
+    const d = s ? badgeDecision({ score: s.score, last_conclusive: s.last_conclusive, status: s.status }, th) : { earned: false as const, reason: "not_scored" };
     const live = `${base}/trust/v/${encodeURIComponent(s?.vendor_id ?? key)}`;
     const headers = { "Cache-Control": BADGE_CACHE, "Access-Control-Allow-Origin": "*" };
     if (ext === "svg") {
@@ -461,7 +462,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       subject: s ? { vendor_id: s.vendor_id, name: s.name } : { key: key.slice(0, 200) },
       earned: d.earned, reason: d.reason,
       score: s ? { value: s.score.value, confidence: s.score.confidence, paid_test_buys: s.score.samples.paid_test_buys } : null,
-      threshold: { min_score: BADGE_MIN_SCORE, min_paid_test_buys: BADGE_MIN_PAID_TESTS, latest_test_buy: "delivered" },
+      threshold: { min_score: th.minScore, min_paid_test_buys: th.minPaidTests, latest_test_buy: "delivered" },
       live_report: live,
       embed: d.earned ? `<a href="${live}"><img src="${base}/v1/badge/${encodeURIComponent(s?.vendor_id ?? key)}.svg" alt="Tested by Lumi (live score)"></a>` : null,
       purchasable: false,

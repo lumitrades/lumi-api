@@ -63,6 +63,9 @@ export interface Env {
   OWNER_MCP_KEY?: string;
   /** Lumi Check v0: ed25519 seed (64 hex) that signs check responses and badge verdicts. Not a wallet key. `wrangler secret put LUMI_CHECK_SIGNING_KEY`. Unset = unsigned (signature null). */
   LUMI_CHECK_SIGNING_KEY?: string;
+  /** Tested-by-Lumi badge thresholds. Defaults (approved): score 80 and 3 conclusive paid Lumi test-buys. */
+  BADGE_MIN_SCORE?: string;
+  BADGE_MIN_PAID_TESTS?: string;
   /** Lumi Check v0: scoped key for the owner contributor routes (/v1/owner/contributors*). Falls back to OWNER_MCP_KEY when unset. */
   CONTRIB_ADMIN_KEY?: string;
   /** Legacy USD credits / cash bounties. Default off ("true" re-enables the dormant accounting; there is no payout code). */
