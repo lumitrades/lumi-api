@@ -41,8 +41,18 @@ export function maxAgeMs(file: DataFile, baseHours: number): number | null {
   }
 }
 
+/**
+ * Routes sold on a once-a-day publishing schedule: their inputs are accepted up to this many hours old (one daily
+ * ~6 AM CT run plus slack). Beyond that they are still 503 "Not charged.".
+ */
+export const DAILY_ROUTE_MAX_AGE_HOURS: Record<string, number> = { slate: 30, brief: 30 };
+
+function withFloor(max: number | null, floorHours: number): number | null {
+  return max === null ? null : Math.max(max, floorHours * H);
+}
+
 /** Files are present, non-empty objects, with a timestamp no older than their max age (and not absurdly in the future). */
-export function staleInputs(loaded: Record<string, Json>, files: DataFile[], now: number, baseHours: number) {
+export function staleInputs(loaded: Record<string, Json>, files: DataFile[], now: number, baseHours: number, floorHours = 0) {
   const problems: { file: string; problem: string; as_of?: string }[] = [];
   for (const f of files) {
     const d = loaded[f];
@@ -50,7 +60,7 @@ export function staleInputs(loaded: Record<string, Json>, files: DataFile[], now
       problems.push({ file: `${f}.json`, problem: "missing_or_empty" });
       continue;
     }
-    const max = maxAgeMs(f, baseHours);
+    const max = withFloor(maxAgeMs(f, baseHours), floorHours);
     if (max === null) continue;
     const ts = fileTimestamp(f, d);
     if (!ts) {
@@ -158,12 +168,12 @@ export function metaFrom(asOf: number, staleAfter: number, nextUpdate: number, n
 }
 
 /** Freshness metadata for a route built from published site files (the oldest required input binds). */
-export function fileMeta(loaded: Record<string, Json>, files: DataFile[], now: number, baseHours: number): FreshnessMeta | null {
+export function fileMeta(loaded: Record<string, Json>, files: DataFile[], now: number, baseHours: number, floorHours = 0): FreshnessMeta | null {
   let asOf = Infinity;
   let staleAfter = Infinity;
   let next = Infinity;
   for (const f of files) {
-    const max = maxAgeMs(f, baseHours);
+    const max = withFloor(maxAgeMs(f, baseHours), floorHours);
     const ts = loaded[f] ? fileTimestamp(f, loaded[f]) : null;
     if (max === null || !ts) continue;
     const t = Date.parse(ts);

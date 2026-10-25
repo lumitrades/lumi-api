@@ -719,7 +719,7 @@ served right after a validated \`tesSUCCESS\`: a settled payment always returns 
 Free: \`GET /\`, \`GET /health\`, \`GET /skill.md\`, \`GET /v1/coins\`, \`GET /v1/samples\`, \`GET /v1/trust/vendors\` (\`?url=|domain=|payTo=\` lookup), \`GET /v1/trust/catalog\`, \`GET /v1/trust/vendors/{id}\`, \`GET /v1/trust/methodology\`, \`GET /v1/badge/{key}.svg|.json\` (legacy \`/badge\` paths 301 there), \`GET /trust/v/{key}\`, \`GET|POST /v1/trust/receipts/verify\`, \`GET /.well-known/x402\`, \`GET /.well-known/agent-card.json\`, \`GET /.well-known/mcp/server-card.json\`, \`GET /.well-known/agents.json\`, \`GET /openapi.json\`, \`POST /mcp\`, \`POST /a2a\`.
 
 Every paid response is JSON with \`kind\`, \`timestamp\`, \`source: "${SOURCE}"\`, \`as_of\`, \`data_age_seconds\`, \`next_update\`, \`stale_after\`, a \`payment\` block (network, tx hash, explorer link) and a \`disclaimer\`. All timestamps are ISO 8601 UTC.
-lumitrades.io publishes market data, signals and analysis four times a day (6 AM, 12 PM, 6 PM and 11 PM US Central); the policy brief (\`/v1/institutional\`) once a day (not sold if older than 36 h).
+lumitrades.io publishes market data, signals and analysis four times a day (6 AM, 12 PM, 6 PM and 11 PM US Central); the policy brief (\`/v1/institutional\`) once a day (not sold if older than 36 h). \`/v1/slate\` and \`/v1/brief\` accept inputs up to 30 h old (the site may publish only once a day, ~6 AM CT); beyond that they are not sold (503 "Not charged."). Every paid response carries \`as_of\` (the oldest input), \`data_age_seconds\` and \`stale_after\`.
 
 ## Free trial: ${TRIAL_LIMITS.perWallet} calls per new wallet (Base or XRPL)
 
