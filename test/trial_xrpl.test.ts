@@ -85,7 +85,7 @@ describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
 
   it("the documented client snippet builds the exact message the server verifies", async () => {
     const snip = xrplTrialSnippet(BASE, "xrpl:1");
-    const ext = await siwxChallenge("k", BASE + "/v1/brief", NOW, trialChains(undefined, "xrpl:1"));
+    const ext = await siwxChallenge("k", BASE + "/v1/market", NOW, trialChains(undefined, "xrpl:1"));
     const i: any = ext.info;
     const chain = { chainId: "xrpl:1" };
     const wallet = { classicAddress: "rTest" };
@@ -201,13 +201,13 @@ describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
   });
 
   it("verifySiwx rejects a Base payload type on an XRPL-only chain list and bad XRPL addresses", async () => {
-    const ext = await siwxChallenge("k", BASE + "/v1/brief", NOW, trialChains(undefined, "xrpl:0"));
+    const ext = await siwxChallenge("k", BASE + "/v1/market", NOW, trialChains(undefined, "xrpl:0"));
     const k = key();
     const p: any = { ...ext.info, address: "0x" + "1".repeat(40), chainId: "xrpl:0", type: "xrpl", publicKey: k.publicKey, signature: "00" };
-    expect(await verifySiwx("k", p, BASE + "/v1/brief", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: false, reason: "invalid_address" });
-    expect(await verifySiwx("k", { ...p, type: "eip191", chainId: "eip155:8453" }, BASE + "/v1/brief", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: false });
+    expect(await verifySiwx("k", p, BASE + "/v1/market", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: false, reason: "invalid_address" });
+    expect(await verifySiwx("k", { ...p, type: "eip191", chainId: "eip155:8453" }, BASE + "/v1/market", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: false });
     const good: any = { ...ext.info, address: k.address, chainId: "xrpl:0", type: "xrpl", publicKey: k.publicKey };
     good.signature = sign(Buffer.from(siweMessage(good), "utf8").toString("hex").toUpperCase(), k.privateKey);
-    expect(await verifySiwx("k", good, BASE + "/v1/brief", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: true, wallet: k.address, chain: "xrpl", signingKeyAddress: k.address });
+    expect(await verifySiwx("k", good, BASE + "/v1/market", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: true, wallet: k.address, chain: "xrpl", signingKeyAddress: k.address });
   });
 });

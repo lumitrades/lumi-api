@@ -23,28 +23,17 @@ async function paid(path: string) {
 const TRADE_KEYS = /"(entry|entry_zone|entries|stop|stop_loss|targets?|price_targets?|leverage|scenarios|projection|bull|base|bear|invalidation|move_stop|breakeven|paper_trades|direction)":/i;
 const TRADE_WORDS = /strong buy|strong sell|\bbullish\b|\bbearish\b|move (the )?stop|break-?even|price target|entry zone|\bleverage\b/i;
 
-describe("trading content stripped from slate, signal, levels, scan and brief", () => {
-  for (const p of ["/v1/slate", "/v1/signal/XRP", "/v1/signal/BTC", "/v1/lite/XRP", "/v1/levels/XRP", "/v1/levels/BTC", "/v1/brief", "/v1/market"]) {
+describe("no trading content in the market-data routes that stay", () => {
+  for (const p of ["/v1/market", "/v1/macro/yen", "/v1/sentiment", "/v1/fear-greed", "/v1/events/next48h", "/v1/institutional"]) {
     it(`${p}: no targets, stops, entries, leverage, scenarios, Strong Buy/Sell or bull/bear; no SOL`, async () => {
       const b = await paid(p);
       const s = JSON.stringify(b, (k, v) => (k === "url" ? undefined : v)); // third-party source URLs are kept verbatim
       expect(s, p).not.toMatch(TRADE_KEYS);
       expect(s, p).not.toMatch(TRADE_WORDS);
-      expect(s, p).not.toMatch(/"SOL"|\bsolana\b/i);
+      if (p !== "/v1/institutional") expect(s, p).not.toMatch(/"SOL"|\bsolana\b/i); // ETF flow data names third-party funds
       expect(b.disclaimer ?? b.notice, p).toBeTruthy();
     });
   }
-  it("signal labels are positive/neutral/negative bias with the score", async () => {
-    const b = await paid("/v1/signal/XRP");
-    expect(b.label).toMatch(/^(positive|neutral|negative) bias$/);
-  });
-  it("SOL is not served (signal 404/400, not in coins or scan)", async () => {
-    const get = setup();
-    const r = await get("/v1/signal/SOL");
-    expect([400, 404]).toContain(r.status);
-    const coins: any = await (await get("/v1/coins")).json();
-    expect(JSON.stringify(coins)).not.toMatch(/"SOL"|solana/i);
-  });
   it("bias helpers", () => {
     expect(biasLabel("Strong Buy", 80)).toBe("positive bias");
     expect(biasLabel("Sell", -30)).toBe("negative bias");

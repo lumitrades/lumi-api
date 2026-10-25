@@ -23,7 +23,7 @@ function setup(extra: Record<string, string> = {}, deps: Record<string, unknown>
 }
 async function enroll(s: ReturnType<typeof setup>) {
   const { message } = await (await s.req(`/v1/monitor/challenge?pay_to=${SELLER}`)).json();
-  const r = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints: [{ url: `${BASE}/v1/lite/XRP` }] });
+  const r = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints: [{ url: `${BASE}/v1/fear-greed` }] });
   expect(r.status).toBe(201);
   return (await r.json()).enrollment_id as string;
 }
@@ -43,8 +43,6 @@ describe("M-1 test-buy cadence wording", () => {
 describe("M-2 Bazaar metadata", () => {
   it("descriptions carry XRP / RLUSD / Fear and Greed keywords within the 500-char limit", () => {
     for (const [r, m] of Object.entries(BAZAAR_ROUTES)) expect(m.description.length, r).toBeLessThanOrEqual(BAZAAR_MAX_DESCRIPTION);
-    for (const r of ["signal", "levels", "lite"] as const) expect(BAZAAR_ROUTES[r].description).toMatch(/\bXRP\b/);
-    expect(BAZAAR_ROUTES.lite.description).toMatch(/RLUSD/);
     expect(BAZAAR_ROUTES.sentiment.description).toMatch(/Fear and Greed/);
     expect(BAZAAR_ROUTES.fear_greed.description).toMatch(/Fear and Greed/);
   });
@@ -56,10 +54,12 @@ describe("M-2 Bazaar metadata", () => {
       expect(d).toMatch(PLANS[id].family === "monitor" ? /x402 seller monitoring/ : /x402 trust data feed/);
     }
   });
-  it("unfilled template example uses xrp", async () => {
+  it("an unfilled template on a retired route answers 410 Gone pointing at /v1/check, never a quote", async () => {
     const s = setup();
-    const body = await (await s.req("/v1/signal/{coin}")).json();
-    expect(body.note).toContain(`${BASE}/v1/signal/xrp`);
+    const r = await s.req("/v1/signal/{coin}");
+    expect(r.status).toBe(410);
+    expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
+    expect(JSON.stringify(await r.json())).toContain("/v1/check");
   });
 });
 
@@ -91,12 +91,12 @@ describe("L-9 error codes", () => {
   });
   it("unknown enrolment id says enrollment_unknown (unpaid 402 and paid)", async () => {
     const s = setup();
-    const r = await s.req("/v1/monitor/subscribe/monitor?enrollment=men_" + "0".repeat(24));
+    const r = await s.req("/v1/monitor/subscribe/watch?endpoints=1&enrollment=men_" + "0".repeat(24));
     const j = await r.json();
     expect(JSON.stringify(j)).toContain("enrollment_unknown");
-    const paid = await s.req("/v1/monitor/subscribe/monitor?enrollment=men_" + "0".repeat(24), { headers: { "PAYMENT-SIGNATURE": "eyJ4IjoxfQ==" } });
+    const paid = await s.req("/v1/monitor/subscribe/watch?endpoints=1&enrollment=men_" + "0".repeat(24), { headers: { "PAYMENT-SIGNATURE": "eyJ4IjoxfQ==" } });
     expect(JSON.stringify(await paid.json())).toContain("enrollment_unknown");
-    const missing = await s.req("/v1/monitor/subscribe/monitor", { headers: { "PAYMENT-SIGNATURE": "eyJ4IjoxfQ==" } });
+    const missing = await s.req("/v1/monitor/subscribe/watch?endpoints=1", { headers: { "PAYMENT-SIGNATURE": "eyJ4IjoxfQ==" } });
     expect(JSON.stringify(await missing.json())).toContain("enrollment_required");
   });
 });
@@ -121,11 +121,9 @@ describe("L-1 trial text", () => {
 });
 
 describe("L-5 agent card coin counts", () => {
-  it("says 50 coins for signals and 13 for levels (1.1.7: matches GET /v1/coins)", async () => {
+  it("no longer advertises per-coin signals or levels or coin counts (retired 2026-10-25)", async () => {
     const card = await text(setup(), "/.well-known/agent-card.json");
-    expect(card).toMatch(/signals cover 50 coins/);
-    expect(card).toMatch(/13 watchlist and major coins/);
-    expect(card).not.toMatch(/top 50 coins|13 tracked coins/);
+    expect(card).not.toMatch(/\b(49|50|51) coins|13 watchlist|signals cover|\/v1\/(signal|levels|lite|scan|slate|brief|coins)\b/);
   });
 });
 

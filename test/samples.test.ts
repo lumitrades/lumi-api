@@ -28,15 +28,6 @@ describe("samples", () => {
     expect(JSON.stringify(s)).not.toContain("# md");
   });
 
-  it("signal sample keeps the headline read but hides the other timeframes and indicators", () => {
-    const s = productSample("signal", { label: "Buy", score: 0.4, timeframes: { "1h": { label: "Buy", indicators: { rsi: 1 } }, "4h": { label: "Sell" } }, payment: { tx: "x" } }) as any;
-    expect(s.sample.label).toBe("Buy");
-    expect(s.sample.timeframes["1h"].label).toBe("Buy");
-    expect(s.sample.timeframes["1h"].indicators).toContain("omitted");
-    expect(s.sample.timeframes["4h"]).toContain("omitted");
-    expect(s.sample.payment).toBeUndefined();
-  });
-
   it("GET /v1/samples is free, labelled, cached and covers every paid route", async () => {
     let calls = 0;
     const f = makeFetch(happyFacilitator());
@@ -49,7 +40,8 @@ describe("samples", () => {
     expect(j.is_sample).toBe(true);
     expect(j.label).toMatch(/^SAMPLE/);
     const routes = j.products.map((p: any) => p.route);
-    expect(routes).toEqual(expect.arrayContaining(["signal", "levels", "brief", "institutional", "vendor_report"]));
+    expect(routes).toEqual(expect.arrayContaining(["market", "institutional", "vendor_report"]));
+    for (const gone of ["signal", "levels", "lite", "scan", "slate", "brief", "coins"]) expect(routes).not.toContain(gone);
     for (const p of j.products) {
       expect(p.full_url).toMatch(/^http:\/\/lumi\.test\/v1\//);
       expect(p.price.xrp).toBeTruthy();
@@ -61,10 +53,10 @@ describe("samples", () => {
 
   it("remote MCP lumi_samples returns one product", async () => {
     const app = createApp(ENV, { fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW });
-    const r = await app.fetch(new Request(BASE + "/mcp", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "lumi_samples", arguments: { route: "brief" } } }) }));
+    const r = await app.fetch(new Request(BASE + "/mcp", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "lumi_samples", arguments: { route: "institutional" } } }) }));
     const j: any = await r.json();
     const t = JSON.parse(j.result.content[0].text);
-    expect(t.route).toBe("brief");
+    expect(t.route).toBe("institutional");
     expect(t.label).toMatch(/^SAMPLE/);
   });
 });

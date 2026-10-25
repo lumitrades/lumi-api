@@ -7,7 +7,7 @@ import { canonicalJson, json, requirePayment, assetLabel, paymentRequiredRespons
 import { verifyXrplSignature, xrplAddressOf } from "../trust/verify";
 import { explorerFor } from "../trust/catalog";
 import { sendPlainEmail } from "../sales";
-import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, type PlanId, type WatchTier } from "./plans";
+import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, SOLD_MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, type PlanId, type WatchTier } from "./plans";
 import { MONITOR_METHODOLOGY, MONITOR_SAFEGUARDS, MONITOR_TERMS } from "./policy";
 import { makeChallenge, verifyProof } from "./proof";
 import { NO_STORE, acceptAsset, acceptUsd, bad, bearer, parse402, readJson, safeEmail, safeHttpsUrl, type CommerceDeps, type WaitUntil } from "./common";
@@ -104,7 +104,7 @@ export function watchEconomics(e: Enrollment, plan: PlanId, endpoints: number, t
  *  for the default endpoint count and 1 term, or the given quantity). */
 export function planEconomics(e: Enrollment, qty: { endpoints?: number; terms?: number } = {}) {
   const out: Record<string, unknown> = {};
-  for (const id of MONITOR_PLANS) {
+  for (const id of MONITOR_PLANS.filter((p) => !PLANS[p].retired)) {
     if (PLANS[id].perEndpoint) { out[id] = watchEconomics(e, id, qty.endpoints ?? defaultWatchEndpoints(e), qty.terms ?? 1); continue; }
     const eps = planEndpoints(e, id);
     const buyable = eps.filter((x) => x.price_usd != null && Number(x.price_usd) <= MONITOR_LIMITS.maxBuyUsd);
@@ -197,7 +197,7 @@ export function createMonitor(deps: CommerceDeps) {
     return {
       kind: "lumi_seller_monitoring",
       summary: "Opt-in monitoring for x402 sellers (XRPL first, Base supported): Lumi test-buys your endpoints with real payments and alerts you when something breaks.",
-      plans: MONITOR_PLANS.map((id) => ({
+      plans: SOLD_MONITOR_PLANS.map((id) => ({
         plan: id, name: PLANS[id].name, price_usd: PLANS[id].usd, ...(PLANS[id].perEndpoint ? { per: "endpoint per 30-day term" } : {}), term_days: PLANS[id].days, auto_renew: false,
         pay: `${base}${PLANS[id].path}?enrollment=<enrollment_id>${PLANS[id].perEndpoint ? "&endpoints=<N>&terms=<1|3>" : ""}`, summary: PLANS[id].summary,
         ...(PLANS[id].legacy ? { legacy: "Grandfathered: existing terms run to their end and the id stays valid; new sellers should pick a Watch tier." } : {}),
@@ -357,7 +357,7 @@ export function createMonitor(deps: CommerceDeps) {
       endpoints: e.endpoints.map(epView),
       rejected,
       plans: planEconomics(e),
-      pay: Object.fromEntries(MONITOR_PLANS.filter((id) => !PLANS[id].retired).map((id) => [id, `${base}${PLANS[id].path}?enrollment=${e.id}${PLANS[id].perEndpoint ? `&endpoints=${defaultWatchEndpoints(e)}` : ""}`])),
+      pay: Object.fromEntries(SOLD_MONITOR_PLANS.map((id) => [id, `${base}${PLANS[id].path}?enrollment=${e.id}${PLANS[id].perEndpoint ? `&endpoints=${defaultWatchEndpoints(e)}` : ""}`])),
       free_tier: `POST ${base}/v1/monitor/free {enrollment_id} (management token)`,
       trial: `GET ${base}/v1/monitor/trial/challenge?pay_to=${e.pay_to}&domain=${e.domain ?? "<domain>"}`,
       status_page: `${base}/v1/monitor/status/${e.id}`,
@@ -1161,8 +1161,8 @@ export function createMonitor(deps: CommerceDeps) {
     if (sub && get) {
       const p = sub[1];
       if ((MONITOR_PLANS as string[]).includes(p)) return subscribe(request, url, p as PlanId, base, ctx);
-      if (/[{}<>:[\]$]/.test(decodeURIComponent(p))) return bad("path_template_not_filled", `Use one of: ${MONITOR_PLANS.join(", ")}.`, { example: `${base}/v1/monitor/subscribe/watch?enrollment=<enrollment_id>&endpoints=1` });
-      return json(404, { error: "unknown_plan", plans: MONITOR_PLANS }, NO_STORE);
+      if (/[{}<>:[\]$]/.test(decodeURIComponent(p))) return bad("path_template_not_filled", `Use one of: ${SOLD_MONITOR_PLANS.join(", ")}.`, { example: `${base}/v1/monitor/subscribe/watch?enrollment=<enrollment_id>&endpoints=1` });
+      return json(404, { error: "unknown_plan", plans: SOLD_MONITOR_PLANS }, NO_STORE);
     }
     if (path === "/v1/monitor/sellers" && get) return sellers(base);
     const sp = path.match(/^\/v1\/monitor\/sellers\/([^/]+)$/);

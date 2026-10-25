@@ -36,7 +36,7 @@ describe("L-12 POST /v1/monitor/replies without auth", () => {
     expect((await r.json()).error).toBe("unknown_enrollment");
 
     const { message } = await (await s.req(`/v1/monitor/challenge?pay_to=${SELLER}`)).json();
-    const e = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints: [{ url: `${BASE}/v1/lite/XRP` }] });
+    const e = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints: [{ url: `${BASE}/v1/fear-greed` }] });
     expect(e.status).toBe(201);
     const { enrollment_id } = await e.json();
     const wrong = await s.post("/v1/monitor/replies", { enrollment_id, finding_id: 1, text: "hi" }, { Authorization: "Bearer wrong" });

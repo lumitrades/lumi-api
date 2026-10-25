@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
 import { MemoryLiveStore, LIVE_UNIVERSE, fetchCandles } from "../src/live";
 import { MemoryFeedStore, dueFeed, FEEDS, band } from "../src/feeds";
-import { trustVerdict, events48View, fundingView, scanView, fearGreedFromContext } from "../src/quick";
+import { trustVerdict, events48View, fundingView, fearGreedFromContext } from "../src/quick";
 import { seededStores, liveRows } from "./stage_c_fixtures";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor, fixture } from "./helpers";
 
@@ -25,64 +25,6 @@ function setup(opts: { liveStore?: MemoryLiveStore; feedStore?: MemoryFeedStore;
   };
   return { app, get, buy, liveStore, feedStore, logs, setNow: (x: number) => (t = x) };
 }
-
-describe("Stage C: /v1/scan", () => {
-  it("quotes $0.02 and delivers all coins sorted by score with breadth", async () => {
-    const { get, buy } = setup();
-    const q: any = await (await get("/v1/scan")).json();
-    expect(q.accepts.length).toBeGreaterThan(0);
-    const r = await buy("/v1/scan");
-    expect(r.status).toBe(200);
-    const j: any = await r.json();
-    expect(j.kind).toBe("scan");
-    expect(j.count).toBe(49);
-    const scores = j.coins.map((c: any) => c.score);
-    expect([...scores].sort((a: number, b: number) => b - a)).toEqual(scores);
-    expect(j.breadth.positive + j.breadth.neutral + j.breadth.negative).toBe(49);
-    expect(j.coins.map((c: any) => c.symbol)).not.toContain("SOL");
-    expect(j.stale_after).toMatch(/Z$/);
-    expect(j.coins[0].computed_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-  });
-
-  it("is not sold with fewer than 40 fresh coins (503, not charged)", async () => {
-    const liveStore = new MemoryLiveStore();
-    for (const r of liveRows(NOW, 30)) liveStore.rows.set(r.id, r);
-    const { get } = setup({ liveStore });
-    const r = await get("/v1/scan");
-    expect(r.status).toBe(503);
-    expect(JSON.stringify(await r.json())).toMatch(/Not charged/);
-  });
-
-  it("scanView lists missing coins", () => {
-    const v: any = scanView(liveRows(NOW, 45), LIVE_UNIVERSE as any);
-    expect(v.count).toBe(45);
-    expect(v.missing).toHaveLength(4);
-  });
-});
-
-describe("Stage C: /v1/lite/{coin}", () => {
-  it("returns the lite view for a live coin", async () => {
-    const { buy } = setup();
-    const r = await buy("/v1/lite/AVAX");
-    expect(r.status).toBe(200);
-    const j: any = await r.json();
-    expect(j.kind).toBe("signal_lite");
-    expect(j.coin.symbol).toBe("AVAX");
-    expect(j.timeframes["1h"].indicators).toBeUndefined();
-    expect(j.timeframes["1h"].label).toBeTruthy();
-    expect(j.full_read).toMatch(/\/v1\/signal\/AVAX/);
-  });
-
-  it("template path quotes unpaid but refuses payment; an unknown coin 404s before any quote", async () => {
-    const { get } = setup();
-    const q = await get("/v1/lite/%7Bcoin%7D");
-    expect(q.status).toBe(402);
-    const j: any = await q.json();
-    const paid = await get("/v1/lite/%7Bcoin%7D", { "PAYMENT-SIGNATURE": paymentHeaderFor(j.accepts[0]) });
-    expect(paid.status).toBe(400);
-    expect((await get("/v1/lite/NOPECOIN")).status).toBe(404);
-  });
-});
 
 describe("Stage C: /v1/trust/check", () => {
   it("bare probe without url: standard 402 quote; a payment without url is refused 400 (not charged)", async () => {
@@ -242,9 +184,8 @@ describe("Stage C: feeds", () => {
     const fund = await feedStore.get("funding");
     expect(fund!.fetched_at).toBe(NOW);
     expect(fund!.doc.coins[0].rate_8h_pct).toBeCloseTo(0.01, 5);
-    await s.app.liveRefresh(); // nothing due -> coin slice
-    expect(calls.slice(2).every((c) => c === "candles")).toBe(true);
-    expect(calls.length).toBeGreaterThan(2);
+    await s.app.liveRefresh(); // nothing due: the per-coin candle slice is retired (2026-10-25), so nothing is fetched
+    expect(calls).toEqual(["cmc", "funding"]);
   });
 });
 

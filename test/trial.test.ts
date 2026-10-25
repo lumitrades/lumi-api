@@ -44,7 +44,7 @@ const TRIAL = { headers: { "X-Lumi-Trial": "1" } };
 describe("free trial (x402 sign-in-with-x)", () => {
   it("rebuilds the EIP-4361 message byte-identically to the siwe library", async () => {
     const acct = privateKeyToAccount(generatePrivateKey());
-    const ext = await siwxChallenge("k", BASE + "/v1/brief?format=md", NOW, "eip155:8453");
+    const ext = await siwxChallenge("k", BASE + "/v1/market?format=md", NOW, "eip155:8453");
     const p = { ...ext.info, address: acct.address, chainId: "eip155:8453", type: "eip191", signature: "0x" };
     const lib = new SiweMessage({ ...ext.info, address: acct.address, chainId: 8453 }).prepareMessage();
     expect(siweMessage(p as any)).toBe(lib);
@@ -126,12 +126,12 @@ describe("free trial (x402 sign-in-with-x)", () => {
   });
 
   it("expired challenges fail; TRIALS=0 turns the extension off", async () => {
-    const ext = await siwxChallenge("k", BASE + "/v1/brief", NOW);
+    const ext = await siwxChallenge("k", BASE + "/v1/market", NOW);
     const acct = privateKeyToAccount(generatePrivateKey());
-    const p = await createSIWxPayload({ ...ext.info, chainId: "eip155:8453", type: "eip191" } as any, acct, BASE + "/v1/brief");
-    expect((await verifySiwx("k", p as any, BASE + "/v1/brief", NOW + 1000)).ok).toBe(true);
-    expect(await verifySiwx("k", p as any, BASE + "/v1/brief", NOW + 301_000)).toMatchObject({ ok: false, reason: "challenge_expired" });
-    expect(await verifySiwx("other", p as any, BASE + "/v1/brief", NOW + 1000)).toMatchObject({ ok: false, reason: "challenge_not_issued_by_lumi" });
+    const p = await createSIWxPayload({ ...ext.info, chainId: "eip155:8453", type: "eip191" } as any, acct, BASE + "/v1/market");
+    expect((await verifySiwx("k", p as any, BASE + "/v1/market", NOW + 1000)).ok).toBe(true);
+    expect(await verifySiwx("k", p as any, BASE + "/v1/market", NOW + 301_000)).toMatchObject({ ok: false, reason: "challenge_expired" });
+    expect(await verifySiwx("other", p as any, BASE + "/v1/market", NOW + 1000)).toMatchObject({ ok: false, reason: "challenge_not_issued_by_lumi" });
     const off = setup({ env: { TRIALS: "0" } });
     const offBody = await (await off.appFetch(BASE + "/v1/sentiment", TRIAL)).json();
     expect(offBody.extensions["sign-in-with-x"]).toBeUndefined();

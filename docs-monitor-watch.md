@@ -35,6 +35,9 @@ Lumi's own test enrolment: "Lumi test enrolment". Free tier: no badge.
 3. Schedule the box probe: `tools/monitor_probe.ts` every 15 min with MONITOR_PROBE_POST=1 (one owner POST per run, upserts ~1 D1 row per endpoint per day).
 4. Update the site (separate repo): see "Site changes".
 
-## Retiring legacy monitor ($9) / monitor_plus ($29) later
-Set `retired: true` on PLANS.monitor / PLANS.monitor_plus: subscribe answers 410 (never charged), pay links disappear, existing rows run to term end.
-After the last legacy row ends, remove the ids from MONITOR_PLANS / PLAN_ORDER / discovery and the a2a/mcp text.
+## Legacy monitor ($9) / monitor_plus ($29): retired 2026-10-25
+`retired: true` is set on PLANS.monitor / PLANS.monitor_plus. Their subscribe paths answer 410 plan_retired before any quote
+(never charged, also with a payment header), they are gone from PLAN_ORDER (well-known, OpenAPI, root plans, bazaar) and from
+enrolment pay links and planEconomics. Rows bought before the retirement keep working to their term end (probes, test-buys,
+status page, badge). The Watch tiers, Audit and the free tier are unchanged.
+After the last legacy row ends, remove the ids from MONITOR_PLANS, PlanId, MONITOR_LIMITS and the scheduler branches.

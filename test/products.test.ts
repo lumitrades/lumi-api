@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
 import { DATA, FACILITATOR, PAY_TO, NOW, fixture, happyFacilitator, makeFetch, paymentHeaderFor, decodeB64Json, type FakeFacilitator } from "./helpers";
-import { carryRisk, fundingRead } from "../src/products";
+import { yenRisk, fundingRead } from "../src/products";
 
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", PRIVATE_NAMES: "Canaryname" };
 const BASE = "http://lumi.test";
-const NEW = ["/v1/brief", "/v1/macro/yen", "/v1/sentiment", "/v1/events"];
+const NEW = ["/v1/macro/yen", "/v1/sentiment", "/v1/events"];
 
 function setup(opts: { override?: Record<string, unknown>; now?: number; fac?: FakeFacilitator } = {}) {
   const fac = opts.fac ?? happyFacilitator();
@@ -26,7 +26,6 @@ async function paid(path: string, headers: Record<string, string> = {}) {
 
 describe("new endpoints: 402 terms", () => {
   it.each([
-    ["/v1/brief", "15000", "0.02"],
     ["/v1/macro/yen", "7500", "0.01"],
     ["/v1/sentiment", "3800", "0.005"],
     ["/v1/events", "3800", "0.005"],
@@ -44,42 +43,15 @@ describe("new endpoints: 402 terms", () => {
 });
 
 describe("new endpoints: payloads", () => {
-  it("brief: BTC, CMC Fear & Greed, movers, key levels, yen, events, trades, news + markdown, privacy-filtered", async () => {
-    const b = await (await paid("/v1/brief")).json();
-    expect(b.kind).toBe("brief");
-    expect(b.bitcoin.usd).toBeGreaterThan(0);
-    expect(b.sentiment.fear_greed).toMatchObject({ source: "CoinMarketCap" });
-    expect(b.movers_24h.top).toHaveLength(3);
-    expect(b.key_levels.length).toBeGreaterThan(5);
-    expect(b.yen.usd_jpy).toBeGreaterThan(100);
-    expect(b.events_next_48h.length).toBeGreaterThan(0);
-    expect(b).not.toHaveProperty("paper_trades");
-    expect(b.bitcoin.signal).toMatch(/^(positive|neutral|negative) bias$/);
-    expect(b.markdown).toContain("# Lumi's market brief");
-    expect(b.markdown).toContain("Fear & Greed");
-    expect(b.disclaimer).toMatch(/Not financial advice/);
-    expect(b.payment.transaction).toHaveLength(64);
-    const s = JSON.stringify(b);
-    expect(s).not.toMatch(/canaryname|my holdings/i);
-  });
-
-  it("brief: ?format=md returns text/markdown with the receipt", async () => {
-    const r = await paid("/v1/brief?format=md");
-    expect(r.headers.get("Content-Type")).toMatch(/text\/markdown/);
-    expect(r.headers.get("PAYMENT-RESPONSE")).toBeTruthy();
-    const t = await r.text();
-    expect(t).toContain("## Key levels");
-    expect(t).toContain("Not financial advice");
-    expect(t).not.toMatch(/canaryname/i);
-  });
-
-  it("macro/yen: USD/JPY + Nikkei, carry-trade risk around 155, Japan events", async () => {
+  it("macro/yen: USD/JPY + Nikkei, yen risk vs the 155 reference, Japan events", async () => {
     const b = await (await paid("/v1/macro/yen")).json();
     expect(b.usd_jpy.price).toBeGreaterThan(100);
     expect(b.nikkei_225.price).toBeGreaterThan(1000);
-    expect(b.carry_trade_risk.key_level).toBe(155);
-    expect(["low", "watch", "elevated"]).toContain(b.carry_trade_risk.level);
-    expect(b.carry_trade_risk.reasons.length).toBeGreaterThan(0);
+    expect(b).not.toHaveProperty("carry_trade_risk");
+    expect(b.yen_risk.reference_level).toBe(155);
+    expect(b.yen_risk).not.toHaveProperty("key_level");
+    expect(["low", "watch", "elevated"]).toContain(b.yen_risk.level);
+    expect(b.yen_risk.reasons.length).toBeGreaterThan(0);
     expect(JSON.stringify(b.japan_events)).toMatch(/Japan|BOJ|Bank of Japan/);
     expect(b.disclaimer).toBeTruthy();
   });
@@ -100,41 +72,18 @@ describe("new endpoints: payloads", () => {
     expect(JSON.stringify(b)).not.toMatch(/canaryname/i);
   });
 
-  it("/v1/trades is gone (404, not quoted); slate + brief carry current ideas only, no outcomes or P/L", async () => {
+  it("/v1/trades, /v1/slate and /v1/brief are gone (410, not quoted)", async () => {
     const { get } = setup();
-    const r = await get("/v1/trades");
-    expect(r.status).toBe(404);
-    expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
-    const ids = fixture("ideas").ideas.map((t: any) => t.id);
-    const slate = await (await paid("/v1/slate")).json();
-    expect(slate.ideas.map((t: any) => t.id)).toEqual(ids);
-    for (const t of slate.ideas) expect(["open", "pending"]).toContain(t.status);
-    const brief = await (await paid("/v1/brief")).json();
-    expect(brief).not.toHaveProperty("paper_trades");
-    for (const b of [slate, brief]) {
-      const s = JSON.stringify(b);
-      expect(s).not.toMatch(/"(pnl_pct|unrealized_pnl_pct|mark_price|exit_price|closed_at|targets_hit|missed_it|cancel_reason|track_record|win_rate|stats)":/);
-      expect(s).not.toMatch(/"status":"(stopped|cancelled|closed|win|loss|target|expired)"/);
-    }
-    expect(brief.markdown).not.toMatch(/paper-trade|entry|stop|target/i);
-    expect(brief.markdown).not.toMatch(/, now [+-]?\d/);
-  });
-
-  it("slate/brief never pass closed ideas or P/L through even if upstream ideas.json had them", async () => {
-    const ideas = fixture("ideas");
-    const leaky = { ...ideas, ideas: [...ideas.ideas.map((t: any) => ({ ...t, unrealized_pnl_pct: 3.1, mark_price: 9 })), { ...ideas.ideas[0], id: "TX", status: "stopped", pnl_pct: -5, exit_price: 1 }] };
-    const fac = happyFacilitator();
-    const { get } = setup({ fac, override: { ideas: leaky } });
-    for (const path of ["/v1/slate", "/v1/brief"]) {
-      const req = (await (await get(path)).json()).accepts[0];
-      const s = await (await get(path, { "PAYMENT-SIGNATURE": paymentHeaderFor(req) })).text();
-      expect(s).not.toMatch(/pnl|mark_price|exit_price|"TX"|stopped/);
+    for (const p of ["/v1/trades", "/v1/slate", "/v1/brief", "/v1/brief?format=md"]) {
+      const r = await get(p);
+      expect(r.status, p).toBe(410);
+      expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
     }
   });
 });
 
 describe("you only pay when you get data", () => {
-  const ALL = ["/v1/signal/XRP", "/v1/levels/XRP", "/v1/slate", "/v1/market", ...NEW];
+  const ALL = ["/v1/market", ...NEW];
 
   it.each(ALL)("%s: stale inputs -> 503 'Not charged.' and no quote, no facilitator call", async (path) => {
     const fac = happyFacilitator();
@@ -170,7 +119,6 @@ describe("you only pay when you get data", () => {
       ["/v1/macro/yen", { context: { ...ctx, yen: { usd_jpy: { error: "x" }, nikkei: { error: "y" } } } }],
       ["/v1/market", { prices: {} }],
       ["/v1/events", { events: null, analysis: { ...fixture("analysis"), backdrop: {}, coins: {} } }],
-      ["/v1/slate", { ideas: null }],
     ];
     for (const [path, override] of cases) {
       const fac = happyFacilitator();
@@ -183,68 +131,34 @@ describe("you only pay when you get data", () => {
     }
   });
 
-  it("optional inputs missing: brief is still sold, without those fields", async () => {
-    const { get } = setup({ override: { events: null, brief: null } });
-    const r = await get("/v1/brief");
-    expect(r.status).toBe(402);
-  });
 });
 
 describe("rules", () => {
-  it("carry-trade risk levels", () => {
+  it("yen risk levels", () => {
     const q = (price: number, change_pct: number) => ({ price, change_pct, change_5d_pct: 0 }) as any;
-    expect(carryRisk(q(160, 0.1), q(60000, 0.5))!.level).toBe("low");
-    expect(carryRisk(q(157, -0.6), q(60000, -2.6))!.level).toBe("watch");
-    expect(carryRisk(q(154.9, 0), null)!.level).toBe("elevated");
-    expect(carryRisk(q(158, -1.8), null)!.level).toBe("elevated");
-    expect(carryRisk(null, null)).toBeNull();
+    expect(yenRisk(q(160, 0.1), q(60000, 0.5))!.level).toBe("low");
+    expect(yenRisk(q(157, -0.6), q(60000, -2.6))!.level).toBe("watch");
+    expect(yenRisk(q(154.9, 0), null)!.level).toBe("elevated");
+    expect(yenRisk(q(158, -1.8), null)!.level).toBe("elevated");
+    expect(yenRisk(null, null)).toBeNull();
   });
   it("funding read", () => {
-    expect(fundingRead(0.005)).toMatch(/^flat/);
+    expect(fundingRead(0.005)).toMatch(/^near zero/);
     expect(fundingRead(0.01)).toMatch(/^positive/);
-    expect(fundingRead(0.05)).toMatch(/^hot/);
+    expect(fundingRead(0.05)).toMatch(/^high positive/);
     expect(fundingRead(-0.02)).toMatch(/^negative/);
     expect(fundingRead(null)).toBeNull();
   });
 });
 
-describe("slate and brief accept once-a-day data (up to 30 h), still 503 beyond", () => {
-  const H = 3_600_000;
-  const PRICES_TS = Date.parse("2026-10-22T10:50:38Z"); // oldest brief input in the fixtures
-  const IDEAS_TS = Date.parse("2026-10-22T11:17:26.463Z");
-
-  it.each([
-    ["/v1/brief", PRICES_TS],
-    ["/v1/slate", IDEAS_TS],
-  ])("%s: 29 h old -> 402 then 200 with as_of / data_age_seconds / stale_after", async (path, ts) => {
+describe("no once-a-day exception is left after the slate and brief were retired", () => {
+  it("/v1/market at 13 h old -> 503 Not charged", async () => {
+    const H = 3_600_000;
+    const PRICES_TS = Date.parse("2026-10-22T10:50:38Z");
     const fac = happyFacilitator();
-    const { get } = setup({ fac, now: ts + 29 * H });
-    const r402 = await get(path);
-    expect(r402.status).toBe(402);
-    const req = (await r402.json()).accepts[0];
-    const r = await get(path, { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
-    expect(r.status).toBe(200);
-    const b = await r.json();
-    expect(b.as_of).toBe(new Date(Math.floor(ts / 1000) * 1000).toISOString().replace(".000Z", "Z"));
-    expect(b.data_age_seconds).toBeGreaterThanOrEqual(29 * 3600 - 1);
-    expect(Date.parse(b.stale_after)).toBeLessThanOrEqual(ts + 30 * H);
-    expect(Date.parse(b.stale_after)).toBeGreaterThan(ts + 29 * H);
-  });
-
-  it.each([
-    ["/v1/brief", PRICES_TS],
-    ["/v1/slate", IDEAS_TS],
-  ])("%s: 31 h old -> 503 Not charged, no facilitator call", async (path, ts) => {
-    const fac = happyFacilitator();
-    const { get } = setup({ fac, now: ts + 31 * H });
-    const r = await get(path);
+    const { get } = setup({ fac, now: PRICES_TS + 13 * H });
+    const r = await get("/v1/market");
     expect(r.status).toBe(503);
-    expect(await r.json()).toMatchObject({ error: "stale_data", note: "Not charged." });
     expect(fac.calls.length).toBe(0);
-  });
-
-  it("other routes keep the 12 h rule (/v1/signal/btc at 13 h -> 503)", async () => {
-    const { get } = setup({ now: PRICES_TS + 13 * H, override: { live: null } });
-    expect((await get("/v1/signal/btc")).status).toBe(503);
   });
 });

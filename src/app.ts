@@ -16,10 +16,10 @@ import { bazaarExtension, resourceDescription, serviceMeta } from "./bazaar";
 import { indexDoc, indexHtml, openApi, skillMd, wellKnownX402, VERSION } from "./docs";
 import { agentCard, handleA2a, A2A_CORS } from "./a2a";
 import {
-  coinList, resolveCoin, signalView, liveSignalView, levelsView, slateView, marketView, DISCLAIMER, SOURCE, type CoinRef,
+  coinList, resolveCoin, marketView, DISCLAIMER, SOURCE, type CoinRef,
 } from "./views";
 import { staleInputs, hasContent, DAILY_ROUTE_MAX_AGE_HOURS, fileMeta, withMeta, isoTimestamps, metaFrom, nextHalfHour } from "./freshness";
-import { briefView, yenView, sentimentView, eventsView } from "./products";
+import { yenView, sentimentView, eventsView } from "./products";
 import { institutionalView } from "./institutional";
 import { handleMcp, isOwnerKey, MCP_CORS, type McpDeps } from "./mcp";
 import { createSanctionsScreen, type KVLike, type SanctionsDoc } from "./sanctions";
@@ -40,16 +40,17 @@ import { productSample, sampleEntry, SAMPLE_ARGS, SAMPLE_LABEL } from "./samples
 import { applyRate, createXrpPricer, type XrpPricer } from "./pricing";
 import { D1TrafficStore, MemoryTrafficStore, TRAFFIC_RETENTION_DAYS, TrafficBuffer, trafficRow, trafficSummary, type TrafficStore } from "./traffic";
 import { D1FeedStore, MemoryFeedStore, FEEDS, dueFeed, refreshFeed, feedFresh, type FeedStore } from "./feeds";
-import { liteView, scanView, fundingView, fearGreedView, fearGreedFromContext, events48View, trustVerdict } from "./quick";
+import { fundingView, fearGreedView, fearGreedFromContext, events48View, trustVerdict } from "./quick";
 import { lookupError } from "./trust/index";
 import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
 import { signingSecretSeparate } from "./trust/lumi_keys";
 import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
 import { curatedByHost, badgeDocs } from "./trust/badge";
 import type { LookupQuery } from "./trust/catalog";
-import { D1LiveStore, MemoryLiveStore, refreshLive, isFresh, LIVE_UNIVERSE, LIVE_MAX_AGE_MS, LIVE_CYCLE_MS, type LiveStore } from "./live";
+import { D1LiveStore, MemoryLiveStore, isFresh, LIVE_UNIVERSE, LIVE_MAX_AGE_MS, LIVE_CYCLE_MS, type LiveStore } from "./live";
 import { mcpServerCard, agentsJson } from "./wellknown";
-import { MARKET_IDEAS_HEADERS, MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, MARKET_IDEAS_PATH_RE, TRUST_DISCLAIMER } from "./lines";
+import { TRUST_DISCLAIMER } from "./lines";
+import { isRetiredPath, retiredResponse, RETIRED_ON } from "./retired";
 import { D1IdempotencyStore, MemoryIdempotencyStore, type IdempotencyStore } from "./idempotency";
 import { labelFor, LABELS, DEFINITION, FAILED_RULE, testBuyEvidence, thresholdsDoc, verdictThresholds, VERDICT_KIND, VERDICT_RULES_VERSION, DISPUTE_URL, CHECK_NOTE } from "./trust/verdict";
 import { createReviewGate, D1ReviewStore, MemoryReviewStore, appealUntil, type ReviewStore } from "./trust/reviews";
@@ -133,7 +134,7 @@ export interface App {
   fetch(request: Request, ctx?: WaitUntil): Promise<Response>;
   /** Cron entry: free, unpaid 402-quote probes of the trust allowlist + the x402 catalog slice. */
   scheduled(): Promise<{ probes: unknown; catalog: unknown; commerce?: unknown }>;
-  /** One-minute cron: recompute live signals for the stalest slice of the top-50 universe. */
+  /** One-minute cron: refresh the most overdue market-data feed (per-coin signal recompute retired 2026-10-25). */
   liveRefresh(): Promise<unknown>;
   live: LiveStore;
   feeds: FeedStore;
@@ -161,21 +162,13 @@ export interface App {
 /** Persist the last-known XRP/USD fallback rate at most this often (D1 write budget). */
 export const XRP_MEMO_MS = 30 * 60_000;
 
-/** The scan is sold only when at least this many live signals are fresh. */
-const SCAN_MIN = 40;
 const NEEDS: Record<PaidRoute, DataFile[]> = {
-  signal: ["signals", "prices"],
-  levels: ["analysis", "prices"],
-  slate: ["ideas"], // data/ideas.json: current (pending/open) watchlist items; published as bias/conviction/timeframe only
-  market: ["analysis", "signals", "prices", "context"],
-  brief: ["prices", "context", "analysis", "signals"],
+  market: ["analysis", "prices", "context"],
   yen: ["context", "analysis", "prices"],
-  sentiment: ["context", "prices", "signals"],
+  sentiment: ["context", "prices"],
   events: ["analysis"],
   institutional: ["institutional_brief"],
   vendor_report: [], // trust-layer data (D1), checked in prepare()
-  scan: [], // live_signals (D1), checked in prepare()
-  lite: ["signals", "prices"], // via the signal route (live row first)
   trust_check: [], // trust catalog (D1)
   verdict: [], // trust catalog + seller_activity (D1), same lookup as /v1/check
   funding: [], // live_feeds (D1)
@@ -184,21 +177,17 @@ const NEEDS: Record<PaidRoute, DataFile[]> = {
 };
 /** Inputs that enrich a product but whose absence does not block it (the field is simply omitted). */
 const OPTIONAL: Partial<Record<PaidRoute, DataFile[]>> = {
-  brief: ["events", "brief"],
   yen: ["events"],
   events: ["events"],
   events_48h: ["analysis"],
 };
 /** Paid paths without a {coin} parameter. */
 const FIXED: Record<string, PaidRoute> = {
-  "/v1/slate": "slate",
   "/v1/market": "market",
-  "/v1/brief": "brief",
   "/v1/macro/yen": "yen",
   "/v1/sentiment": "sentiment",
   "/v1/events": "events",
   "/v1/institutional": "institutional",
-  "/v1/scan": "scan",
   "/v1/funding": "funding",
   "/v1/fear-greed": "fear_greed",
   "/v1/events/next48h": "events_48h",
@@ -635,15 +624,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (route === "vendor_report") return prepareVendorReport(coinArg ?? "", base);
     if (route === "trust_check") return prepareTrustCheck(coinArg ?? "", base);
     if (route === "verdict") return prepareVerdict(coinArg ?? "", base);
-    if (route === "scan") return prepareScan();
     if (route === "funding" || route === "fear_greed") return prepareFeed(route);
-    if (route === "lite") {
-      const p = await prepare("signal", coinArg, base);
-      if (!p.ok) return p;
-      const b = p.body as Record<string, unknown>;
-      const meta = Object.fromEntries(["as_of", "data_age_seconds", "next_update", "stale_after"].filter((k) => k in b).map((k) => [k, b[k]]));
-      return { ok: true, route, coin: p.coin, body: isoTimestamps(withMeta(liteView(b) as Record<string, unknown>, meta as any)) };
-    }
     let coin: CoinRef | undefined;
     if (coinArg !== undefined) {
       coin = resolveCoin(await coins(), coinArg);
@@ -654,21 +635,6 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           error: { error: "unknown_coin", coin: coinArg, supported: (await coins()).map((c) => c.symbol), note: "Not charged." },
         };
       }
-    }
-    // Signals: computed live (refreshed about every 13 min) when a fresh row exists; else the site file (site coins only).
-    if (route === "signal" && coin) {
-      const t0 = now();
-      const row = await live.get(coin.id).catch(() => null);
-      if (isFresh(row, t0)) {
-        const meta = metaFrom(row.computed_at, row.computed_at + LIVE_MAX_AGE_MS, row.computed_at + LIVE_CYCLE_MS, t0);
-        return { ok: true, route, coin, body: isoTimestamps(withMeta(liveSignalView(coin, row) as Record<string, unknown>, meta)) };
-      }
-      if (!(await siteCoins()).some((c) => c.id === coin!.id)) {
-        return notForSale("stale_data", `the live ${coin.symbol} signal is not fresh right now`, 120, ageSeconds((row as { computed_at?: number } | null)?.computed_at, t0));
-      }
-    }
-    if (route === "levels" && coin && !(await siteCoins()).some((c) => c.id === coin!.id)) {
-      return { ok: false, status: 404, error: { error: "no_data_for_coin", coin: coin.symbol, detail: "levels cover Lumi's watchlist and majors; signals cover every coin in GET /v1/coins", levels_coins: (await siteCoins()).map((c) => c.symbol), note: "Not charged." } };
     }
     // Load (cached) data before asking for money, so a payment is never
     // settled when the upstream data is unavailable.
@@ -699,21 +665,6 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     const meta = fileMeta(loaded, NEEDS[route], t, config.dataMaxAgeHours, floorH);
     return { ok: true, route, coin, body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)) };
-  }
-
-  /** All-coins scan: every fresh live row; sold only when at least SCAN_MIN coins are fresh. Freshness = the oldest row. */
-  async function prepareScan(): Promise<Prepared> {
-    const t = now();
-    const all = await live.all().catch(() => []);
-    const rows = all.filter((r) => isFresh(r, t) && r.label);
-    if (rows.length < SCAN_MIN) {
-      // Data age = the age of the SCAN_MIN-th freshest coin (the scan needs that many).
-      const byAge = all.filter((r) => r.label && r.computed_at).map((r) => r.computed_at).sort((a, b) => b - a);
-      return notForSale("stale_data", `only ${rows.length} of ${LIVE_UNIVERSE.length} live signals are fresh right now`, 120, byAge.length ? ageSeconds(byAge[Math.min(SCAN_MIN, byAge.length) - 1], t) : null);
-    }
-    const oldest = Math.min(...rows.map((r) => r.computed_at));
-    const meta = metaFrom(oldest, oldest + LIVE_MAX_AGE_MS, Math.max(t + 60_000, oldest + LIVE_CYCLE_MS), t);
-    return { ok: true, route: "scan", body: isoTimestamps(withMeta(scanView(rows, await coins()) as Record<string, unknown>, meta)) };
   }
 
   /** Funding / Fear & Greed from the cron-cached feeds (Fear & Greed falls back to the site's CMC snapshot). */
@@ -995,6 +946,12 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
             },
       });
     }
+    // Retired 2026-10-25: trade-idea, reading, levels and coin-list routes. 410 Gone before any paywall, template check or
+    // payment-header handling, so they never quote, never verify and never settle (any method, any payment header).
+    if (isRetiredPath(path)) {
+      deps.log?.({ event: "retired_route", path: path.slice(0, 80) });
+      return retiredResponse(path, base, { "Access-Control-Allow-Origin": "*" });
+    }
     // Remote MCP (Streamable HTTP): /mcp, or /mcp/<owner key> for connector UIs that cannot set headers.
     if (path === "/mcp" || path.startsWith("/mcp/")) {
       return handleMcp(request, base, path === "/mcp" ? undefined : path.slice(5), {
@@ -1254,28 +1211,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         return json(200, openApi(config, base, await coins()), { "Cache-Control": "public, max-age=300" });
       case "/v1/samples":
         return json(200, await samplesDoc(base), { "Cache-Control": "public, max-age=600" });
-      case "/v1/coins": {
-        const list = await coins();
-        const site = new Set((await siteCoins()).map((c) => c.id));
-        return json(200, {
-          kind: "coins",
-          timestamp: new Date().toISOString(),
-          source: SOURCE,
-          count: list.length,
-          coverage: `${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}) signal: every coin (computed live from public 1h/1d exchange candles, refreshed about every 13 minutes). levels and slate: Lumi's watchlist and majors (group watchlist or majors).`,
-          coins: list.map((c) => ({
-            ...c,
-            signal: `${base}/v1/signal/${c.symbol}`,
-            levels: site.has(c.id) ? `${base}/v1/levels/${c.symbol}` : null,
-          })),
-          disclaimer: DISCLAIMER,
-        });
-      }
     }
 
     // ---------------- paid
     const vr = path.match(/^\/v1\/trust\/vendors\/([^/]{1,64})\/report$/);
-    const m = vr ? [path, "vendor_report", vr[1]] : path.match(/^\/v1\/(signal|levels|lite)\/([^/]+)$/) ?? (FIXED[path] ? [path, FIXED[path]] : null);
+    const m = vr ? [path, "vendor_report", vr[1]] : (FIXED[path] ? [path, FIXED[path]] : null);
     if (!m) return json(404, { error: "not_found", hint: `See ${base}/ for the endpoint list.` });
     const route = m[1] as PaidRoute;
 
@@ -1353,9 +1293,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     const vendorId = route === "vendor_report" ? String(body.id) : undefined;
     const wantsMarkdown =
-      (route === "brief" || route === "institutional") && (/^(md|markdown|text)$/i.test(url.searchParams.get("format") ?? "") || /text\/markdown/i.test(request.headers.get("Accept") ?? ""));
+      route === "institutional" && (/^(md|markdown|text)$/i.test(url.searchParams.get("format") ?? "") || /text\/markdown/i.test(request.headers.get("Accept") ?? ""));
 
-    if ((route === "brief" || route === "institutional") && url.searchParams.has("format") && !/^(json|md|markdown|text)$/i.test(url.searchParams.get("format") ?? "")) {
+    if (route === "institutional" && url.searchParams.has("format") && !/^(json|md|markdown|text)$/i.test(url.searchParams.get("format") ?? "")) {
       return json(400, { error: "invalid_format", detail: "format must be json or md. Not charged." });
     }
     const endpoint = endpointFor(route);
@@ -1532,7 +1472,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         deps.log?.({ event: "feed_refresh", ...r });
         return r;
       }
-      const r = await refreshLive(live, doFetch, t);
+      // Per-coin readings were retired on 2026-10-25 (see src/retired.ts): no live signal recompute, feeds only.
+      const r = { skipped: "per_coin_readings_retired", retired_on: RETIRED_ON };
       deps.log?.({ event: "live_refresh", ...r });
       return r;
     },
@@ -1557,6 +1498,12 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     badge: (request: Request) => badges.handle(request, config.publicBaseUrl || "https://api.lumitrades.io"),
     async fetch(request: Request, ctx?: WaitUntil): Promise<Response> {
       try {
+        // Retired routes answer 410 before any payment-header check, pricing or D1 work (see handle()).
+        {
+          const u = new URL(request.url);
+          const rp = u.pathname.replace(/\/+$/, "") || "/";
+          if (request.method !== "OPTIONS" && isRetiredPath(rp)) return retiredResponse(rp, config.publicBaseUrl ?? u.origin, { "Access-Control-Allow-Origin": "*" });
+        }
         // Oversize payment headers (PAYMENT-SIGNATURE, X-PAYMENT, SIGN-IN-WITH-X) are refused before any decoding, pricing or D1 work.
         const tooLarge = oversizePaymentHeader(request);
         if (tooLarge) return tooLarge;
@@ -1569,7 +1516,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           const rate = await pricer.rate(ctx ? (p) => ctx.waitUntil(p) : undefined);
           applyRate(config, rate);
         }
-        return withProductLine(request, await handle(request, ctx));
+        return await handle(request, ctx);
       } catch (err) {
         console.error(JSON.stringify({ event: "unhandled_error", error: String(err) }));
         if (isStorageQuotaError(err)) {
@@ -1584,20 +1531,12 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
 
 function buildBody(route: PaidRoute, coin: CoinRef | undefined, d: Record<string, any>, coins: CoinRef[], now: number) {
   switch (route) {
-    case "signal":
-      return signalView(coin!, d.signals, d.prices);
-    case "levels":
-      return levelsView(coin!, d.analysis, d.prices);
-    case "slate":
-      return slateView(d.ideas, coins);
     case "market":
-      return marketView(d.analysis, d.signals, d.prices, d.context, coins);
-    case "brief":
-      return briefView(d as any, coins, now);
+      return marketView(d.analysis, d.prices, d.context, coins);
     case "yen":
       return yenView(d.context, d.analysis, d.events, d.prices, now);
     case "sentiment":
-      return sentimentView(d.context, d.prices, d.signals, coins);
+      return sentimentView(d.context, d.prices, coins);
     case "events":
       return eventsView(d.events, d.analysis, coins, now);
     case "institutional":
@@ -1605,7 +1544,7 @@ function buildBody(route: PaidRoute, coin: CoinRef | undefined, d: Record<string
     case "events_48h":
       return events48View(d.events, d.analysis, coins, now);
     default:
-      return null; // vendor_report, scan, lite, trust_check, funding, fear_greed: built in prepare()
+      return null; // vendor_report, trust_check, verdict, funding, fear_greed: built in prepare()
   }
 }
 
@@ -1664,33 +1603,10 @@ export function prefersHtml(accept: string | null | undefined): boolean {
 
 /** API sitemap: the human and machine-readable entry points (paid routes are listed in /openapi.json, not here). */
 export function sitemapXml(base: string): string {
-  const paths = ["/", "/llms.txt", "/skill.md", "/openapi.json", "/.well-known/x402", "/.well-known/agent-card.json", "/.well-known/mcp/server-card.json", "/.well-known/agents.json", "/v1/samples", "/v1/coins", "/v1/trust/vendors", "/v1/trust/methodology", "/v1/trust/catalog", "/v1/badge", "/v1/monitor", "/v1/monitor/sellers", "/v1/monitor/corrections", "/v1/feed", "/v1/feed/license"];
+  const paths = ["/", "/llms.txt", "/skill.md", "/openapi.json", "/.well-known/x402", "/.well-known/agent-card.json", "/.well-known/mcp/server-card.json", "/.well-known/agents.json", "/v1/samples", "/v1/check", "/v1/trust/vendors", "/v1/trust/methodology", "/v1/trust/catalog", "/v1/badge", "/v1/monitor", "/v1/monitor/sellers", "/v1/monitor/corrections", "/v1/feed", "/v1/feed/license"];
   const day = new Date().toISOString().slice(0, 10);
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
     paths.map((p) => `  <url><loc>${base}${p}</loc><lastmod>${day}</lastmod><changefreq>daily</changefreq></url>`).join("\n") +
     `\n</urlset>\n`;
 }
 
-/**
- * Lumi Trades market-readings paths (signal, lite, levels, scan, slate) carry X-Lumi-Product-Line and X-Lumi-Notice on
- * every response (200, 402, 4xx, 503). Additive headers only; status and body are unchanged.
- */
-export function withProductLine(request: Request, res: Response): Response {
-  let path: string;
-  try { path = new URL(request.url).pathname.replace(/\/+$/, "") || "/"; } catch { return res; }
-  if (!MARKET_IDEAS_PATH_RE.test(path)) return res;
-  const add = (h: Headers) => {
-    for (const [k, v] of Object.entries(MARKET_IDEAS_HEADERS)) h.set(k, v);
-    const expose = h.get("Access-Control-Expose-Headers");
-    if (expose && !/x-lumi-product-line/i.test(expose)) h.set("Access-Control-Expose-Headers", `${expose}, ${Object.keys(MARKET_IDEAS_HEADERS).join(", ")}`);
-  };
-  try {
-    add(res.headers);
-    return res;
-  } catch {
-    // Immutable headers (e.g. a Response from fetch()): copy into a new Response with the same status and body.
-    const copy = new Response(res.body, { status: res.status, statusText: res.statusText, headers: new Headers(res.headers) });
-    add(copy.headers);
-    return copy;
-  }
-}

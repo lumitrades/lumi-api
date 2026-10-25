@@ -6,13 +6,12 @@
 
 import type { Json } from "./data";
 import { sanitize, splitSentences } from "./sanitize";
-import { MARKET_IDEAS_KINDS, MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, TRUST_DISCLAIMER } from "./lines";
-import { BIAS_NOTE, BIAS_RULE, biasFromDirection, biasLabel, neutralText, neutralWords } from "./bias";
+import { TRUST_DISCLAIMER } from "./lines";
+import { neutralText, neutralWords } from "./bias";
 
 export const SOURCE = "lumitrades.io";
 export const DISCLAIMER =
-  "Analytics and education only. Not financial advice and not a recommendation to buy, sell or hold any asset. " +
-  "Readings are mechanical summaries of recent price action, not forecasts. Crypto is volatile. Do your own research.";
+  "Market data and information only. Not financial advice and not a recommendation about any asset. Crypto is volatile. Do your own research.";
 
 export interface CoinRef {
   id: string;
@@ -64,8 +63,6 @@ export function envelope(kind: string, data: Record<string, unknown>, extra: Rec
     source: SOURCE,
     ...sanitize(data),
     ...extra,
-    // Lumi Trades market readings (signal, lite, scan, levels, slate): product line + notice.
-    ...(MARKET_IDEAS_KINDS.includes(kind) ? { product_line: MARKET_IDEAS_NAME, notice: MARKET_IDEAS_NOTICE } : {}),
     // Trust responses carry the trust disclaimer (no trade-idea wording).
     disclaimer: kind === "trust_check" ? TRUST_DISCLAIMER : DISCLAIMER,
   };
@@ -89,189 +86,37 @@ export function priceBlock(prices: Json, id: string) {
   };
 }
 
-function indicatorSummary(ind: Json) {
-  if (!ind || typeof ind !== "object") return null;
-  const pick = (k: string, fields: string[]) => {
-    const x = ind[k];
-    if (!x) return undefined;
-    // state / cross strings are reworded ("bullish momentum" -> "positive momentum")
-    return Object.fromEntries(fields.filter((f) => x[f] !== undefined).map((f) => [f, typeof x[f] === "string" ? neutralWords(x[f]) : x[f]]));
-  };
-  return {
-    rsi: pick("rsi", ["value", "state", "points"]),
-    macd: pick("macd", ["hist", "cross", "state", "points"]),
-    ema: pick("ema", ["ema20", "ema50", "ema200", "state", "points"]),
-    ema200: pick("ema200", ["ema200", "state", "points"]),
-    bollinger: pick("bb", ["pct_b", "bandwidth_pct", "squeeze", "state", "points"]),
-    stoch_rsi: pick("stochrsi", ["k", "d", "state", "points"]),
-    volume: pick("volume", ["ratio", "state", "points"]),
-  };
-}
+const MACRO_TERMS = /\b(yen|usd\/jpy|jpy|boj|bank of japan|nikkei)\b/i;
+/** Sentences with trading or chart-level wording are never published (2026-10-25). */
+export const TRADING_WORDS =
+  /\b(trades?|trader?s?|trading|carry[- ]?trade|longs?|shorts?|leverag\w*|support|resistance|bullish|bearish|bias|entry|entries|stops?|stop[- ]loss|targets?|setups?|breakouts?|breakdowns?|buy|sell|squeeze|levels?)\b/i;
 
-export function signalView(coin: CoinRef, signals: Json, prices: Json) {
-  const s = signals?.coins?.[coin.id];
-  if (!s) return null;
-  const tfs: Record<string, unknown> = {};
-  for (const tf of ["1h", "4h", "1d"]) {
-    const t = s.timeframes?.[tf];
-    if (!t) continue;
-    tfs[tf] = {
-      label: biasLabel(t.label, num(t.score)),
-      score: num(t.score),
-      points: num(t.points),
-      max_points: num(t.max_points),
-      candle_time: t.candle_time ?? null,
-      indicators: indicatorSummary(t.indicators),
-    };
-  }
-  return envelope("signal", {
-    coin: coin,
-    label: biasLabel(s.label, num(s.score)),
-    score: num(s.score),
-    price: priceBlock(prices, coin.id) ?? { usd: num(s.price) },
-    timeframes: tfs,
-    method: {
-      timeframe_weights: signals?.method?.timeframe_weights ?? null,
-      labels: BIAS_RULE,
-      points: signals?.method?.points ?? null,
-      note: `Mechanical indicator readings from exchange candles. ${BIAS_NOTE}`,
-    },
-    generated_utc: signals?.generated_utc ?? null,
-  });
-}
-
-/** Signal computed live in the Worker (src/live.ts): same shape as signalView, fresher (1h/4h about every 13 min). */
-export function liveSignalView(coin: CoinRef, row: Json) {
-  const tfs: Record<string, unknown> = {};
-  for (const tf of ["1h", "4h", "1d"]) {
-    const t = row?.timeframes?.[tf];
-    if (!t) continue;
-    tfs[tf] = { label: biasLabel(t.label, num(t.score)), score: num(t.score), points: num(t.points), max_points: num(t.max_points), candle_time: t.candle_time ?? null, indicators: indicatorSummary(t.indicators) };
-  }
-  const p = row?.price ?? {};
-  return envelope("signal", {
-    coin,
-    label: biasLabel(row?.label, num(row?.score)),
-    score: num(row?.score),
-    price: { usd: num(p.usd), change_24h_pct: num(p.change_24h_pct), high_24h: num(p.high_24h), low_24h: num(p.low_24h), volume_24h_usd: num(p.volume_24h_usd), as_of: new Date(row.computed_at).toISOString() },
-    timeframes: tfs,
-    method: {
-      timeframe_weights: { "1h": 0.25, "4h": 0.35, "1d": 0.4 },
-      labels: BIAS_RULE,
-      points: "RSI +-1/+-0.5, MACD hist +-1 (+-0.5 fresh cross), EMA stack +-1 (+-0.5 mixed), EMA200 +-1 (1d), Bollinger %B outside bands +-0.5, StochRSI turn +-0.5, volume >=1.5x avg +-0.5; score = points / max",
-      note: `Mechanical indicator readings computed live from public exchange candles (1h refreshed about every 13 minutes; 4h built from 1h; 1d every few hours). ${BIAS_NOTE}`,
-    },
-    computed: "live",
-    generated_utc: new Date(row.computed_at).toISOString(),
-  });
-}
-
-/**
- * Support/resistance, bias note, commentary and catalysts for one coin. Scenario price levels (the site's 7-day
- * projection) are not published; bias and commentary are reworded to neutral language and trade-plan sentences dropped.
- */
-export function levelsBlock(a: Json) {
-  if (!a) return null;
-  return {
-    bias: neutralText(a.bias),
-    support: Array.isArray(a.support) ? a.support.filter((x: unknown) => num(x) !== null) : [],
-    resistance: Array.isArray(a.resistance) ? a.resistance.filter((x: unknown) => num(x) !== null) : [],
-    commentary: neutralText(a.commentary),
-    catalysts: Array.isArray(a.catalysts)
-      ? a.catalysts
-          .map((c: Json) => ({ date: c.date, kind: c.kind, text: neutralText(c.text), source: c.source, url: c.url }))
-          .filter((c: Json) => c.text)
-      : [],
-    sources: Array.isArray(a.sources) ? a.sources.map((s: Json) => ({ title: typeof s.title === "string" ? neutralWords(s.title) : s.title, url: s.url })) : [],
-  };
-}
-
-export function levelsView(coin: CoinRef, analysis: Json, prices: Json) {
-  const a = analysis?.coins?.[coin.id];
-  if (!a) return null;
-  return envelope("levels", {
-    coin,
-    price: priceBlock(prices, coin.id),
-    ...levelsBlock(a),
-    analysis_as_of: analysis?.as_of ?? null,
-    analysis_label: neutralText(analysis?.label),
-  });
-}
-
-/**
- * Fields of a CURRENT watchlist idea that are published. Source: lumitrades.io/data/ideas.json (pending/open ideas only).
- * No trade plan is published: entries/entry zones, stops, targets, leverage, move-stop-to-break-even, triggers and the
- * written reasoning (which quotes those levels) are never copied, nor any outcome or P/L field. Direction is shown as a
- * momentum/trend bias.
- */
-export const TRADE_FIELDS = ["id", "conviction", "status", "timeframe", "opened_at", "expires"] as const;
-/** Upstream fields that are never published (documented so tests can assert their absence). */
-export const STRIPPED_TRADE_FIELDS = [
-  "direction", "market", "leverage", "leverage_reason", "entry", "planned_entry", "entry_zone", "stop", "targets",
-  "move_stop_to_be", "trigger", "plan_type", "parent_id", "reasoning", "timeframe_note", "filled_at", "expiry", "fill_by",
-] as const;
-
-export const ACTIVE_IDEA = new Set(["open", "pending"]);
-
-/** Active ideas from ideas.json (`ideas`), tolerating the legacy `trades` key; anything not pending/open is dropped. */
-export function activeIdeas(doc: Json): Json[] {
-  const all: Json[] = Array.isArray(doc?.ideas) ? doc.ideas : Array.isArray(doc?.trades) ? doc.trades : [];
-  return all.filter((t) => t && ACTIVE_IDEA.has(String(t.status)));
-}
-
-export function tradeView(t: Json, coins: CoinRef[]) {
-  const coin = coins.find((c) => c.id === t.coin);
-  const out: Record<string, unknown> = { coin: coin ? coin.symbol : t.coin, bias: biasFromDirection(t.direction) };
-  for (const f of TRADE_FIELDS) {
-    if (t[f] === undefined || t[f] === null) continue;
-    out[f] = t[f];
-  }
-  if (out.expires === undefined && (t.expiry ?? t.fill_by)) out.expires = t.expiry ?? t.fill_by;
-  return out;
-}
-
-export const SLATE_RULES =
-  "At most one active idea per watchlist coin and at most 6 at once; each shows only a momentum/trend bias, conviction and timeframe. Coins without an active idea are listed in no_setup.";
-
-export function slateView(ideas: Json, coins: CoinRef[]) {
-  const active = activeIdeas(ideas).filter((t) => !isExcludedCoin({ id: t.coin, symbol: t.coin }));
-  const noSetup: string[] = [];
-  for (const [id, entry] of Object.entries<Json>(ideas?.slate?.coins ?? {})) {
-    if (EXCLUDED_COIN_IDS.has(id)) continue;
-    if (!entry?.trade_id) {
-      const c = coins.find((x) => x.id === id);
-      noSetup.push(c ? c.symbol : id);
-    }
-  }
-  return envelope("slate", {
-    slate_as_of: ideas?.slate?.as_of ?? null,
-    rules: SLATE_RULES,
-    ideas: active.map((t) => tradeView(t, coins)),
-    no_setup: noSetup,
-    note: "Lumi's current watchlist (pending/open items) as a momentum/trend bias only: no trade plans, closed items, outcomes or P/L.",
-    evaluated_utc: ideas?.as_of ?? null,
-  });
-}
-
-const MACRO_TERMS = /\b(yen|usd\/jpy|jpy|boj|bank of japan|nikkei|carry[- ]trade)\b/i;
-
-/** Pull the yen / Japan macro sentences out of the BTC backdrop commentary. */
+/** Pull the yen / Japan macro sentences out of the BTC backdrop commentary (trade-plan sentences dropped, wording neutral). */
 export function yenNote(commentary: unknown): string | null {
   if (typeof commentary !== "string") return null;
-  const picked = splitSentences(commentary).filter((s) => MACRO_TERMS.test(s));
-  return picked.length ? picked.join(" ") : null;
+  const picked = splitSentences(commentary).filter((s) => MACRO_TERMS.test(s) && !TRADING_WORDS.test(s));
+  return picked.length ? neutralText(picked.join(" ")) : null;
 }
 
-export function marketView(analysis: Json, signals: Json, prices: Json, context: Json, coins: CoinRef[]) {
+/** Dated catalysts with sources (event text reworded neutrally; trade-plan sentences dropped). */
+export function catalystsBlock(a: Json) {
+  return Array.isArray(a?.catalysts)
+    ? a.catalysts
+        .map((c: Json) => ({ date: c.date, kind: c.kind, text: neutralText(c.text), source: c.source, url: c.url }))
+        .filter((c: Json) => c.text && !TRADING_WORDS.test(c.text))
+    : [];
+}
+
+/**
+ * BTC + macro backdrop. Market data only: no bias label or indicator score, no support/resistance or other chart levels,
+ * no commentary (2026-10-25: Lumi no longer publishes trade-related readings).
+ */
+export function marketView(analysis: Json, prices: Json, context: Json, coins: CoinRef[]) {
   const backdrop = analysis?.backdrop ?? analysis?.coins?.bitcoin ?? null;
   const btc = coins.find((c) => c.id === "bitcoin") ?? FALLBACK_COINS[6];
-  const btcSig = signals?.coins?.bitcoin;
-  const labels: Record<string, number> = {};
   let up = 0;
   let down = 0;
   for (const c of coins) {
-    const l = biasLabel(signals?.coins?.[c.id]?.label, num(signals?.coins?.[c.id]?.score));
-    if (l) labels[l] = (labels[l] ?? 0) + 1;
     const ch = num(prices?.assets?.[c.id]?.change_24h);
     if (ch !== null) ch >= 0 ? up++ : down++;
   }
@@ -282,16 +127,8 @@ export function marketView(analysis: Json, signals: Json, prices: Json, context:
     btc_backdrop: {
       coin: btc,
       price: priceBlock(prices, "bitcoin"),
-      signal: btcSig
-        ? {
-            label: biasLabel(btcSig.label, num(btcSig.score)),
-            score: num(btcSig.score),
-            by_timeframe: Object.fromEntries(
-              ["1h", "4h", "1d"].map((tf) => [tf, biasLabel(btcSig.timeframes?.[tf]?.label, num(btcSig.timeframes?.[tf]?.score))]),
-            ),
-          }
-        : null,
-      ...levelsBlock(backdrop),
+      catalysts: catalystsBlock(backdrop),
+      sources: Array.isArray(backdrop?.sources) ? backdrop.sources.map((s: Json) => ({ title: typeof s.title === "string" ? neutralWords(s.title) : s.title, url: s.url })) : [],
     },
     macro: {
       yen_note: yenNote(backdrop?.commentary),
@@ -309,7 +146,6 @@ export function marketView(analysis: Json, signals: Json, prices: Json, context:
       coins_tracked: coins.length,
       up_24h: up,
       down_24h: down,
-      signal_labels: labels,
     },
     analysis_as_of: analysis?.as_of ?? null,
   });

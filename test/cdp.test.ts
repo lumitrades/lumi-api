@@ -75,7 +75,7 @@ describe("Bazaar metadata", () => {
     for (const e of PAID_ENDPOINTS) {
       const meta = BAZAAR_ROUTES[e.route];
       expect(meta.description.length).toBeLessThanOrEqual(BAZAAR_MAX_DESCRIPTION);
-      const arg = e.route === "vendor_report" ? "asksurf" : e.route === "signal" || e.route === "levels" ? "XRP" : undefined;
+      const arg = e.route === "vendor_report" ? "asksurf" : undefined;
       const ext = bazaarExtension(e.route, arg, meta.query ? { format: "md" } : undefined) as any;
       const v = validateDiscoveryExtension(ext);
       expect(v, `${e.route}: ${JSON.stringify(v.errors)}`).toEqual({ valid: true });
@@ -105,7 +105,7 @@ describe("Bazaar metadata", () => {
       expect(sanitizeResourceServiceMetadata(meta as any)).toEqual(meta);
       expect(validateDiscoveryExtension(body.extensions.bazaar).valid).toBe(true);
     }
-    const md = decodeB64Json((await app.fetch(new Request("http://lumi.test/v1/brief?format=md"))).headers.get("PAYMENT-REQUIRED"));
+    const md = decodeB64Json((await app.fetch(new Request("http://lumi.test/v1/institutional?format=md"))).headers.get("PAYMENT-REQUIRED"));
     expect(md.extensions.bazaar.info.input.queryParams).toEqual({ format: "md" });
   });
 });
@@ -153,7 +153,7 @@ function setup(cdp: { verify?: Handler; settle?: Handler } = {}, env: Record<str
   };
 }
 
-async function payBase(app: { fetch: (r: Request) => Promise<Response> }, path = "/v1/signal/XRP", strip = false) {
+async function payBase(app: { fetch: (r: Request) => Promise<Response> }, path = "/v1/macro/yen", strip = false) {
   const first = await app.fetch(new Request("http://lumi.test" + path));
   const pr = await first.json();
   const account = privateKeyToAccount(generatePrivateKey());
@@ -175,9 +175,9 @@ describe("Base settlement via CDP with keyless fallback", () => {
       settle: (b) => jsonResponse(200, { success: true, transaction: TX, network: "eip155:8453", payer: b.paymentPayload.payload.authorization.from }, { "EXTENSION-RESPONSES": bazaarOk }),
     });
     const { app, k } = await s.ready();
-    const r = await payBase(app, "/v1/signal/XRP", true);
+    const r = await payBase(app, "/v1/trust/vendors/asksurf/report", true);
     expect(r.status).toBe(200);
-    expect((await r.json()).payment).toMatchObject({ transaction: TX, network: "eip155:8453", asset: "USDC", amount: "0.01" });
+    expect((await r.json()).payment).toMatchObject({ transaction: TX, network: "eip155:8453", asset: "USDC", amount: "0.02" });
     expect(s.calls.map((c) => `${c.fac}${c.path}`)).toEqual(["cdp/verify", "cdp/settle"]);
     for (const c of s.calls) {
       const jwt = c.headers.get("Authorization")!.replace(/^Bearer /, "");
@@ -185,12 +185,12 @@ describe("Base settlement via CDP with keyless fallback", () => {
       expect(fromB64u(cl).uris).toEqual([`POST cdp.test/platform/v2/x402${c.path}`]);
       expect(await crypto.subtle.verify({ name: "Ed25519" }, k.publicKey, Buffer.from(sig, "base64url"), new TextEncoder().encode(`${h}.${cl}`))).toBe(true);
       const pp = c.body.paymentPayload;
-      expect(pp.resource).toMatchObject({ url: "http://lumi.test/v1/signal/XRP", mimeType: "application/json" });
+      expect(pp.resource).toMatchObject({ url: "http://lumi.test/v1/trust/vendors/asksurf/report", mimeType: "application/json" });
       expect(pp.resource.description.length).toBeLessThanOrEqual(500);
-      expect(pp.extensions.bazaar.routeTemplate).toBe("/v1/signal/:coin");
-      expect(pp.extensions.bazaar.info.input.pathParams).toEqual({ coin: "XRP" });
+      expect(pp.extensions.bazaar.routeTemplate).toBe("/v1/trust/vendors/:id/report");
+      expect(pp.extensions.bazaar.info.input.pathParams).toEqual({ id: "asksurf" });
       const info = extractDiscoveryInfo(pp, c.body.paymentRequirements);
-      expect(info?.resourceUrl).toBe("http://lumi.test/v1/signal/:coin");
+      expect(info?.resourceUrl).toBe("http://lumi.test/v1/trust/vendors/:id/report");
     }
     expect(s.logs).toContainEqual(expect.objectContaining({ event: "x402_bazaar", phase: "settle", status: "success" }));
     expect(s.logs).toContainEqual(expect.objectContaining({ event: "x402_settled", facilitator: "cdp" }));

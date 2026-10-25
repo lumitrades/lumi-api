@@ -45,7 +45,7 @@ export function maxAgeMs(file: DataFile, baseHours: number): number | null {
  * Routes sold on a once-a-day publishing schedule: their inputs are accepted up to this many hours old (one daily
  * ~6 AM CT run plus slack). Beyond that they are still 503 "Not charged.".
  */
-export const DAILY_ROUTE_MAX_AGE_HOURS: Record<string, number> = { slate: 30, brief: 30 };
+export const DAILY_ROUTE_MAX_AGE_HOURS: Record<string, number> = {}; // the once-a-day routes (slate, brief) were retired 2026-10-25
 
 function withFloor(max: number | null, floorHours: number): number | null {
   return max === null ? null : Math.max(max, floorHours * H);
@@ -117,7 +117,7 @@ export function hasContent(route: string, body: Json): boolean {
 
 // ---------------------------------------------------------------- freshness metadata on every paid response
 
-/** Lumi's site publishing schedule (US Central): market data, signals, analysis, events, brief and the trade tracker. */
+/** Lumi's site publishing schedule (US Central): market data, events and context. */
 export const SITE_HOURS_CT = [6, 12, 18, 23];
 /** A scheduled run publishes about this long after the hour. */
 const SITE_LAG_MS = 25 * 60_000;

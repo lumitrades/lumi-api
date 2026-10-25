@@ -1,0 +1,18 @@
+{
+  "label": "LABELED DEMO: self-payment from Lumi's demo buyer wallet to Lumi's API. Not organic usage; exclude from KPIs.",
+  "date": "2026-10-23T14:15:31Z",
+  "endpoint": "https://api.lumitrades.io/v1/signal/XRP",
+  "tx": "F41D8CB426F2DF4723274320CD17CF6FD24C30DCB4712D85728ECC823DEDC2B4",
+  "explorer": "https://livenet.xrpl.org/transactions/F41D8CB426F2DF4723274320CD17CF6FD24C30DCB4712D85728ECC823DEDC2B4",
+  "result": "tesSUCCESS",
+  "from": "rpvsTYDZmX1j1ndmEFG6YjjZZwp6VRtQRz",
+  "to": "rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM",
+  "amount_drops": "7700",
+  "fee_drops": "12",
+  "source_tag": 804681468,
+  "latency_ms": 7634,
+  "balance_before_xrp": 1.941684,
+  "balance_after_xrp": 1.933972,
+  "response_kind": "signal",
+  "response_label": "Sell"
+}

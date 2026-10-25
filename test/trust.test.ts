@@ -169,7 +169,7 @@ describe("trust: public reads", () => {
   it("GET on POST paths is 405; unrelated paths fall through", async () => {
     const { req } = setup();
     for (const p of TRUST_POST_PATHS) expect((await req(p)).status).toBe(405);
-    expect(await req("/v1/brief")).toBeNull();
+    expect(await req("/v1/market")).toBeNull();
   });
 
   it("seed SQL and TS mirror stay in sync", () => {

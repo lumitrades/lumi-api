@@ -4,7 +4,7 @@
  */
 import type { Config, PaidRoute } from "./config";
 import { dropsToXrp } from "./config";
-import { PAID_ENDPOINTS, EXAMPLE_COIN } from "./catalog";
+import { PAID_ENDPOINTS } from "./catalog";
 import { LINE_LABEL, productLine } from "./lines";
 
 export const SAMPLE_LABEL = "SAMPLE: truncated free preview, not the full product. Pay per call (x402) for the full, current response.";
@@ -73,10 +73,11 @@ export function productSample(route: PaidRoute, body: Record<string, unknown>) {
   return { sample, truncated: { arrays: cut, ...(omitted.length ? { omitted } : {}) } };
 }
 
-export const SAMPLE_ARGS: Partial<Record<PaidRoute, string>> = { signal: EXAMPLE_COIN, levels: EXAMPLE_COIN, lite: EXAMPLE_COIN, vendor_report: "printmoneylab", trust_check: "url=https%3A%2F%2Fapi.lumitrades.io%2Fv1%2Fbrief" };
+export const SAMPLE_ARGS: Partial<Record<PaidRoute, string>> = { vendor_report: "printmoneylab", trust_check: "url=https%3A%2F%2Fapi.lumitrades.io%2Fv1%2Fmarket" };
 
 export function sampleEntry(cfg: Config, base: string, route: PaidRoute) {
-  const e = PAID_ENDPOINTS.find((x) => x.route === route)!;
+  const e = PAID_ENDPOINTS.find((x) => x.route === route);
+  if (!e) throw new Error(`no catalog entry for ${route}`);
   const arg = SAMPLE_ARGS[route];
   const path = arg ? (e.path.includes("{") ? e.path.replace(/\{[^}]+\}/, arg) : `${e.path}?${arg}`) : e.path;
   return {
@@ -91,51 +92,7 @@ export function sampleEntry(cfg: Config, base: string, route: PaidRoute) {
   };
 }
 
-const OMIT = "[sample: omitted, in the paid response]";
-
-/** Fields removed from every paper-trade object in free samples: unrealised P/L, mark price and status. */
-export const SAMPLE_TRADE_HIDDEN = ["unrealized_pnl_pct", "pnl_pct", "mark_price", "status", "exit_price", "targets_hit", "outcome", "result", "r_multiple"];
-
-/** Recursively drop SAMPLE_TRADE_HIDDEN keys from objects that look like trade ideas (have a direction or entry). Returns the count removed. */
-export function stripTradeOutcome(v: unknown, depth = 0): number {
-  if (depth > 8 || !v || typeof v !== "object") return 0;
-  let n = 0;
-  if (Array.isArray(v)) {
-    for (const x of v) n += stripTradeOutcome(x, depth + 1);
-    return n;
-  }
-  const o = v as Record<string, unknown>;
-  const tradeLike = "direction" in o || "entry" in o || "entry_zone" in o || "stop" in o || ("conviction" in o && "bias" in o);
-  for (const k of Object.keys(o)) {
-    if (tradeLike && SAMPLE_TRADE_HIDDEN.includes(k)) {
-      delete o[k];
-      n++;
-    } else n += stripTradeOutcome(o[k], depth + 1);
-  }
-  return n;
-}
-
 /** Route-specific trims so a sample previews the product without replacing it. Returns the omitted field paths. */
-function reshape(route: PaidRoute, s: Record<string, any>): string[] {
-  const omitted: string[] = [];
-  const drop = (obj: Record<string, any> | undefined, key: string, label: string) => {
-    if (obj && key in obj) {
-      obj[key] = OMIT;
-      omitted.push(label);
-    }
-  };
-  if (route === "signal" && s.timeframes && typeof s.timeframes === "object") {
-    const keys = Object.keys(s.timeframes);
-    for (const k of keys.slice(1)) drop(s.timeframes, k, `timeframes.${k}`);
-    if (keys[0]) drop(s.timeframes[keys[0]], "indicators", `timeframes.${keys[0]}.indicators`);
-  }
-  // Paper-trade samples never show live P/L or outcome-like status (the track record is not public in samples).
-  if (route === "slate" || route === "brief") {
-    const n = stripTradeOutcome(s);
-    if (n) omitted.push("watchlist unrealized_pnl_pct, mark_price and status (not shown in free samples)");
-  }
-  if (route === "levels") {
-    for (const k of ["support", "resistance"]) if (Array.isArray(s[k]) && s[k].length > 1) { s[k] = s[k].slice(0, 1); omitted.push(`${k}[1..]`); }
-  }
-  return omitted;
+function reshape(_route: PaidRoute, _s: Record<string, any>): string[] {
+  return [];
 }

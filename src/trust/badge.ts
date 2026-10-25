@@ -376,7 +376,7 @@ export function badgePage(s: BadgeSummary, base: string, rel: Record<string, unk
     ? `Latest paid test-buy: <strong class="v ${s.latest.verdict}">${esc(s.latest.verdict_text)}</strong> on ${esc(s.latest.date)}${s.latest.chain ? ` (${esc(s.latest.chain)})` : ""}.`
     : s.kind === "self"
     ? "Lumi does not test or score its own API."
-    : `<strong>Not yet tested.</strong> Lumi has no stored test result for <code>${esc(s.key)}</code>. That is not a negative signal; Lumi has simply not bought from it (or the key is not the host Lumi bought).`;
+    : `<strong>Not yet tested.</strong> Lumi has no stored test result for <code>${esc(s.key)}</code>. That is not a negative finding; Lumi has simply not bought from it (or the key is not the host Lumi bought).`;
   const relHtml = rel.length ? `<div class="card disc"><strong>Commercial relationship:</strong> this seller pays Lumi for monitoring. That never changes a result.</div>` : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}: Tested by Lumi</title><meta name="description" content="${esc(`Lumi's dated paid test-buy results for ${title}. Factual test evidence, not an endorsement.`)}">

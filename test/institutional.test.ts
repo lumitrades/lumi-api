@@ -186,9 +186,11 @@ describe("institutionalView rules", () => {
     expect(linkType("confirmed")).toBe("confirmed");
   });
 
-  it("uses a provided markdown field (sanitized) and appends the disclaimer", () => {
-    const v: any = institutionalView({ generated_utc: "2026-10-22T12:00:00Z", big_picture: ["x"], items: [], no_notable_news: [{ entity: "R3" }], markdown: "# Hand-written\nBody." });
-    expect(v.markdown).toMatch(/^# Hand-written/);
+  it("ignores a provided markdown field (it can carry impact wording), renders from whitelisted fields, appends the disclaimer", () => {
+    const v: any = institutionalView({ generated_utc: "2026-10-22T12:00:00Z", big_picture: ["x"], items: [], no_notable_news: [{ entity: "R3" }], markdown: "# Hand-written\nBullish: go long XRP." });
+    expect(v.markdown).not.toContain("Hand-written");
+    expect(v.markdown).not.toMatch(/long|bullish/i);
+    expect(v.markdown).toMatch(/^# Lumi Trades: Institutional & Policy Brief/);
     expect(v.markdown).toContain("Not financial advice");
     expect(v.no_notable_news[0].note).toBe("No notable news in this window.");
   });
@@ -210,12 +212,12 @@ describe("institutional brief over MCP and A2A", () => {
     expect(fac.calls).toHaveLength(0);
   });
 
-  it("A2A routes institutional questions to the institutional skill, and the market brief still to brief", async () => {
+  it("A2A routes institutional questions to the institutional skill; market questions go to /v1/market (the brief is retired)", async () => {
     const { a2a } = setup();
     const p = await a2a([{ text: "what are the BIS and IMF doing that matters for XRP?" }]);
     expect(p[1].data.url).toBe(`${BASE}/v1/institutional`);
     expect(p[1].data.options.map((o: any) => o.amount)).toEqual(["0.1", "0.077", "0.1", "0.1"]);
-    expect((await a2a([{ text: "today's crypto market brief" }]))[1].data.url).toBe(`${BASE}/v1/brief`);
+    expect((await a2a([{ text: "today's crypto market brief" }]))[1].data.url).toBe(`${BASE}/v1/market`);
     expect((await a2a([{ data: { skill: "institutional" } }]))[1].data.url).toBe(`${BASE}/v1/institutional`);
   });
 });
@@ -224,7 +226,7 @@ describe("institutional brief over MCP and A2A", () => {
 describe("?format validation", () => {
   it("rejects unknown format values with 400 before any quote or settlement", async () => {
     const { get, fac } = setup();
-    for (const p of ["/v1/institutional?format=xml", "/v1/brief?format=pdf"]) {
+    for (const p of ["/v1/institutional?format=xml", "/v1/institutional?format=pdf"]) {
       const r = await get(p);
       expect(r.status).toBe(400);
       expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
@@ -244,7 +246,7 @@ describe("?format validation", () => {
 describe("Bazaar resource descriptions", () => {
   it("use the v2 listing text verbatim, with no price in the text (prices live in accepts[]), never cut and never instructions to agents", async () => {
     const { get } = setup();
-    for (const [p, route, usd] of [["/v1/signal/xrp", "signal", "0.01"], ["/v1/institutional", "institutional", "0.1"], ["/v1/trust/check?url=https://a.example/x", "trust_check", ""]] as const) {
+    for (const [p, route, usd] of [["/v1/market", "market", "0.02"], ["/v1/institutional", "institutional", "0.1"], ["/v1/trust/check?url=https://a.example/x", "trust_check", ""]] as const) {
       const d = (await (await get(p)).json()).resource.description as string;
       expect(d.length, p).toBeLessThanOrEqual(500);
       expect(d, p).toBe(BAZAAR_ROUTES[route].description);

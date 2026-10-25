@@ -27,10 +27,10 @@ describe("free endpoints", () => {
     const r = await get("/", { Accept: "text/html,application/xhtml+xml" });
     expect(r.headers.get("content-type")).toMatch(/text\/html/);
     const html = await r.text();
-    expect(html).toMatch(/<title>Lumi API: x402 seller checks, crypto market data and Lumi Trades market readings \(pay on XRPL, Base or Stellar\)/);
+    expect(html).toMatch(/<title>Lumi API: x402 seller checks before you pay, plus crypto market data \(pay on XRPL, Base or Stellar\)/);
     expect(html).toContain('<meta name="description"');
     expect(html).toContain("/v1/trust/vendors");
-    expect(html).toContain("/v1/brief");
+    expect(html).toContain("/v1/market");
     expect(html).toContain("lumi-trades-mcp");
     expect(html).toContain("x402Fetch");
     expect(html).not.toMatch(/win rate|track record/i);
@@ -43,7 +43,7 @@ describe("free endpoints", () => {
     const ld = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/s)![1]);
     expect(ld["@type"]).toBe("WebAPI");
     expect(ld.offers.length).toBeGreaterThan(5);
-    expect(html.match(/<tbody>([\s\S]*?)<\/tbody>/)![1]).toContain("/v1/brief");
+    expect(html.match(/<tbody>([\s\S]*?)<\/tbody>/)![1]).toContain("/v1/market");
     expect(html).not.toMatch(/<link[^>]+stylesheet|<script src=/);
     const j = await get("/", { Accept: "application/json" });
     expect(j.headers.get("content-type")).toMatch(/json/);
@@ -53,8 +53,7 @@ describe("free endpoints", () => {
     const { get } = setup();
     const index = await (await get("/")).json();
     expect(index.paid_endpoints.map((p: any) => [p.path, p.price_xrp])).toEqual([
-      ["/v1/signal/{coin}", "0.005"], ["/v1/levels/{coin}", "0.005"], ["/v1/scan", "0.015"], ["/v1/lite/{coin}", "0.003"], ["/v1/slate", "0.01"], ["/v1/market", "0.01"],
-      ["/v1/brief", "0.015"], ["/v1/macro/yen", "0.0075"], ["/v1/sentiment", "0.0038"], ["/v1/events", "0.0038"],
+      ["/v1/market", "0.01"], ["/v1/macro/yen", "0.0075"], ["/v1/sentiment", "0.0038"], ["/v1/events", "0.0038"],
       ["/v1/funding", "0.0023"], ["/v1/fear-greed", "0.0023"], ["/v1/events/next48h", "0.0023"],
       ["/v1/institutional", "0.077"], ["/v1/trust/check", "0.015"], ["/v1/trust/vendors/{id}/report", "0.015"],
       ["/v1/verdict", "0.0075"],
@@ -65,25 +64,23 @@ describe("free endpoints", () => {
     expect(skill).toContain("PAYMENT-SIGNATURE");
     expect(skill).toContain("x402Fetch");
     expect(skill).toContain("You only pay when you get data");
-    expect(skill).toContain("/v1/brief");
+    expect(skill).toContain("/v1/market");
     const wk = await (await get("/.well-known/x402")).json();
     expect(wk).toMatchObject({ x402Version: 2, kind: "resource-server" });
-    expect(wk.resources).toHaveLength(26); // /v1/trades removed Oct 24 2026; + Watch, Watch Plus, Watch Pro (per-endpoint plans); + /v1/verdict ($0.01, Oct 25 2026)
-    expect(wk.resources.filter((r: any) => r.plan).map((r: any) => r.url)).toEqual(["watch", "watch_plus", "watch_pro", "audit", "monitor", "monitor_plus"].map((p) => `${BASE}/v1/monitor/subscribe/${p}`).concat([`${BASE}/v1/feed/subscribe/feed`, `${BASE}/v1/feed/subscribe/feed_pro`, `${BASE}/v1/feed/credits`]));
+    expect(wk.resources).toHaveLength(18); // 2026-10-25: per-coin readings, slate, scan and brief retired (410); Monitor and Monitor Plus no longer sold
+    expect(wk.resources.filter((r: any) => r.plan).map((r: any) => r.url)).toEqual(["watch", "watch_plus", "watch_pro", "audit"].map((p) => `${BASE}/v1/monitor/subscribe/${p}`).concat([`${BASE}/v1/feed/subscribe/feed`, `${BASE}/v1/feed/subscribe/feed_pro`, `${BASE}/v1/feed/credits`]));
     expect(wk.resources.map((r: any) => r.url)).toContain(`${BASE}/v1/macro/yen`);
     const oa = await (await get("/openapi.json")).json();
-    expect(oa.paths["/v1/signal/{coin}"].get["x-payment-info"].price).toEqual({ mode: "fixed", currency: "USD", amount: "0.010000" });
-    expect(oa.paths["/v1/signal/{coin}"].get["x-payment-info"].protocols).toEqual([{ x402: {} }]);
-    expect(oa.paths["/v1/signal/{coin}"].get["x-payment-info"].xrp_price).toEqual({ mode: "fixed", currency: "XRP", amount: "0.005" });
-    const coins = await (await get("/v1/coins")).json();
-    expect(coins.count).toBe(49);
-    expect(coins.coins.map((c: any) => c.symbol)).toContain("ZBCN");
+    expect(oa.paths["/v1/macro/yen"].get["x-payment-info"].price).toEqual({ mode: "fixed", currency: "USD", amount: "0.010000" });
+    expect(oa.paths["/v1/macro/yen"].get["x-payment-info"].protocols).toEqual([{ x402: {} }]);
+    expect(oa.paths["/v1/macro/yen"].get["x-payment-info"].xrp_price).toEqual({ mode: "fixed", currency: "XRP", amount: "0.0075" });
+    expect((await get("/v1/coins")).status).toBe(410); // retired 2026-10-25
   });
 
-  it("returns 404 for unknown coins without a payment challenge", async () => {
+  it("per-coin paths are retired: 410 without a payment challenge, any coin", async () => {
     const { get, fac } = setup();
     const r = await get("/v1/signal/NOPE");
-    expect(r.status).toBe(404);
+    expect(r.status).toBe(410);
     expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
     expect(fac.calls).toHaveLength(0);
   });
@@ -92,7 +89,7 @@ describe("free endpoints", () => {
 describe("x402 paywall", () => {
   it("challenges unpaid requests with x402 v2 requirements", async () => {
     const { get } = setup();
-    for (const [path, amount] of [["/v1/signal/xrp", "5000"], ["/v1/levels/ripple", "5000"], ["/v1/slate", "10000"], ["/v1/market", "10000"]]) {
+    for (const [path, amount] of [["/v1/macro/yen", "7500"], ["/v1/sentiment", "3800"], ["/v1/market", "10000"], ["/v1/institutional", "77000"]]) {
       const req = await challenge(get, path);
       expect(req).toMatchObject({ scheme: "exact", network: "xrpl:1", asset: "XRP", amount, payTo: PAY_TO, maxTimeoutSeconds: 300 });
       expect(req.extra.sourceTag).toBe(5864);
@@ -102,24 +99,23 @@ describe("x402 paywall", () => {
 
   it("verifies, settles, serves data with a receipt, and refuses replay", async () => {
     const { get, fac, logs } = setup();
-    const req = await challenge(get, "/v1/signal/XRP");
+    const req = await challenge(get, "/v1/macro/yen");
     const header = paymentHeaderFor(req);
-    const r = await get("/v1/signal/XRP", { "PAYMENT-SIGNATURE": header });
+    const r = await get("/v1/macro/yen", { "PAYMENT-SIGNATURE": header });
     expect(r.status).toBe(200);
     expect(fac.calls.map((c) => c.path)).toEqual(["/verify", "/settle"]);
     expect(fac.calls[0].body.paymentRequirements).toEqual(req);
     const receipt = decodeB64Json(r.headers.get("PAYMENT-RESPONSE"));
     expect(receipt).toMatchObject({ success: true, transaction: "A".repeat(64), network: "xrpl:1" });
     const body = await r.json();
-    expect(body).toMatchObject({ kind: "signal", source: "lumitrades.io", coin: { symbol: "XRP" } });
-    expect(body.label).toBeTypeOf("string");
-    expect(Object.keys(body.timeframes)).toEqual(["1h", "4h", "1d"]);
-    expect(body.disclaimer).toMatch(/not financial advice/i);
+    expect(body).toMatchObject({ kind: "macro_yen", source: "lumitrades.io" });
+    expect(body.usd_jpy.price).toBeGreaterThan(100);
+    expect(body.disclaimer).toBeTruthy();
     expect(body.timestamp).toBeTruthy();
     expect(body.payment.explorer).toBe(`https://testnet.xrpl.org/transactions/${"A".repeat(64)}`);
-    expect(logs[0]).toMatchObject({ event: "x402_settled", route: "signal:XRP", amountDrops: "5000" });
+    expect(logs[0]).toMatchObject({ event: "x402_settled", route: "yen", amountDrops: "7500" });
 
-    const replay = await get("/v1/signal/XRP", { "PAYMENT-SIGNATURE": header });
+    const replay = await get("/v1/macro/yen", { "PAYMENT-SIGNATURE": header });
     expect(replay.status).toBe(402);
     expect((await replay.json()).error).toBe("invoice_already_used");
     expect(fac.calls).toHaveLength(2);
@@ -131,25 +127,25 @@ describe("x402 paywall", () => {
     const mk = () => createApp({ ...ENV, INVOICE_GUARD: ns }, { fetch: makeFetch(fac), log: () => {}, now: () => NOW });
     const isolateA = mk();
     const isolateB = mk();
-    const r402 = await isolateA.fetch(new Request(BASE + "/v1/slate"));
+    const r402 = await isolateA.fetch(new Request(BASE + "/v1/market"));
     const req = (await r402.json()).accepts[0];
     const h = { "PAYMENT-SIGNATURE": paymentHeaderFor(req) };
-    expect((await isolateA.fetch(new Request(BASE + "/v1/slate", { headers: h }))).status).toBe(200);
-    const replay = await isolateB.fetch(new Request(BASE + "/v1/slate", { headers: h }));
+    expect((await isolateA.fetch(new Request(BASE + "/v1/market", { headers: h }))).status).toBe(200);
+    const replay = await isolateB.fetch(new Request(BASE + "/v1/market", { headers: h }));
     expect(replay.status).toBe(402);
     expect((await replay.json()).error).toBe("invoice_already_used");
   });
 
   it("rejects an invoice issued for another route or a tampered amount without calling the facilitator", async () => {
     const { get, fac } = setup();
-    const req = await challenge(get, "/v1/signal/XRP");
-    const r1 = await get("/v1/signal/BTC", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
+    const req = await challenge(get, "/v1/sentiment");
+    const r1 = await get("/v1/events", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) }); // same price, other route
     expect(r1.status).toBe(402);
     expect((await r1.json()).error).toBe("invoice_route_mismatch");
-    const r2 = await get("/v1/signal/XRP", { "PAYMENT-SIGNATURE": paymentHeaderFor({ ...req, amount: "1" }) });
+    const r2 = await get("/v1/sentiment", { "PAYMENT-SIGNATURE": paymentHeaderFor({ ...req, amount: "1" }) });
     expect(r2.status).toBe(402);
     expect((await r2.json()).error).toBe("payment_requirements_mismatch");
-    const r3 = await get("/v1/signal/XRP", { "PAYMENT-SIGNATURE": "%%%not-base64" });
+    const r3 = await get("/v1/macro/yen", { "PAYMENT-SIGNATURE": "%%%not-base64" });
     expect(r3.status).toBe(402);
     const b3 = await r3.json();
     expect(b3.error).toBe("invalid_payment_signature_header");
@@ -157,7 +153,7 @@ describe("x402 paywall", () => {
     const h3 = JSON.parse(Buffer.from(r3.headers.get("PAYMENT-REQUIRED")!, "base64").toString("utf8"));
     expect(h3).toEqual(b3);
     for (const bad of [Buffer.from(JSON.stringify({ x402Version: 1, accepted: req })).toString("base64"), Buffer.from(JSON.stringify({ x402Version: 2, accepted: { ...req, extra: {} }, payload: {} })).toString("base64")]) {
-      const r = await get("/v1/signal/XRP", { "X-PAYMENT": bad });
+      const r = await get("/v1/macro/yen", { "X-PAYMENT": bad });
       expect(r.status).toBe(402);
       expect(["invalid_x402_version", "missing_invoiceId"]).toContain((await r.json()).error);
       expect(r.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
@@ -180,21 +176,21 @@ describe("x402 paywall", () => {
     const base = happyFacilitator();
     const fac: FakeFacilitator = { ...base, verify: (b) => (down ? jsonResponse(502, { error: "bad gateway" }) : base.verify(b)) };
     const { get } = setup(fac);
-    const req = await challenge(get, "/v1/slate");
+    const req = await challenge(get, "/v1/market");
     const h = paymentHeaderFor(req);
-    const r = await get("/v1/slate", { "PAYMENT-SIGNATURE": h });
+    const r = await get("/v1/market", { "PAYMENT-SIGNATURE": h });
     expect(r.status).toBe(503);
     expect(await r.json()).toMatchObject({ retryable: true, phase: "verify", settlementAttempted: false });
     down = false;
-    const ok = await get("/v1/slate", { "PAYMENT-SIGNATURE": h });
+    const ok = await get("/v1/market", { "PAYMENT-SIGNATURE": h });
     expect(ok.status).toBe(200);
   });
 
   it("reports settlement_status_unknown (409) when settle cannot be confirmed", async () => {
     const fac: FakeFacilitator = { ...happyFacilitator(), settle: () => { throw new Error("socket hang up"); } };
     const { get } = setup(fac);
-    const req = await challenge(get, "/v1/levels/BTC");
-    const r = await get("/v1/levels/BTC", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
+    const req = await challenge(get, "/v1/sentiment");
+    const r = await get("/v1/sentiment", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
     expect(r.status).toBe(409);
     expect(await r.json()).toMatchObject({ error: "settlement_status_unknown", settlementAttempted: true });
   });
@@ -202,8 +198,8 @@ describe("x402 paywall", () => {
   it("re-quotes when settlement fails on ledger", async () => {
     const fac: FakeFacilitator = { ...happyFacilitator(), settle: () => jsonResponse(200, { success: false, errorReason: "tecUNFUNDED_PAYMENT", transaction: "", network: "xrpl:1" }) };
     const { get } = setup(fac);
-    const req = await challenge(get, "/v1/levels/XRP");
-    const r = await get("/v1/levels/XRP", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
+    const req = await challenge(get, "/v1/events");
+    const r = await get("/v1/events", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
     expect(r.status).toBe(402);
     expect((await r.json()).error).toBe("settle_failed:tecUNFUNDED_PAYMENT");
   });
@@ -226,31 +222,6 @@ describe("paid payloads", () => {
     return r.json();
   }
 
-  it("levels: support/resistance only (no scenarios/projection), with private content stripped", async () => {
-    const b = await paid("/v1/levels/XRP");
-    expect(b.support.length).toBeGreaterThan(0);
-    expect(b.resistance.length).toBeGreaterThan(0);
-    expect(b).not.toHaveProperty("projection");
-    expect(b).not.toHaveProperty("scenarios");
-    expect(JSON.stringify(b)).not.toMatch(/canaryname/i);
-    expect(b.commentary).toContain("XRP held $1.30.");
-  });
-
-  it("slate: active ideas as bias/conviction/timeframe only, no trade plan, no private notes", async () => {
-    const b = await paid("/v1/slate");
-    expect(b.ideas.length).toBeGreaterThan(0);
-    for (const i of b.ideas) {
-      expect(["open", "pending"]).toContain(i.status);
-      expect(["positive bias", "negative bias", "neutral bias"]).toContain(i.bias);
-      for (const k of ["entry", "entry_zone", "stop", "targets", "leverage", "direction", "invalidation"]) expect(i).not.toHaveProperty(k);
-      expect(i).not.toHaveProperty("source");
-    }
-    const s = JSON.stringify(b);
-    expect(s).not.toMatch(/my holdings|user-specified|canaryname/i);
-    expect(b).not.toHaveProperty("track_record");
-    expect(s).not.toMatch(/win_rate/);
-  });
-
   it("market: BTC backdrop, macro with yen note, breadth", async () => {
     const b = await paid("/v1/market");
     expect(b.btc_backdrop.coin.symbol).toBe("BTC");
@@ -265,30 +236,27 @@ describe("openapi scanner hints", () => {
     const { get } = setup();
     const oa = await (await get("/openapi.json")).json();
     expect(oa.info.contact.email).toBe("hello@lumitrades.io");
-    expect(oa.paths["/v1/coins"].get.security).toEqual([]);
+    expect(oa.paths["/v1/coins"]).toBeUndefined();
     expect(oa.paths["/v1/trust/vendors"].get.security).toEqual([]);
     // Not products: documented without `security: []` so x402scan does not list them as free resources.
     for (const [p, m] of [["/health", "get"], ["/v1/reports", "post"], ["/v1/tips", "post"], ["/v1/trust/replies", "post"], ["/v1/trust/vendors/{id}", "get"]]) {
       expect(oa.paths[p][m], p).toBeDefined();
       expect(oa.paths[p][m].security, p).toBeUndefined();
     }
-    for (const p of ["/v1/coins", "/v1/samples", "/v1/trust/catalog", "/v1/trust/methodology"]) expect(oa.paths[p].get.security).toEqual([]);
+    for (const p of ["/v1/samples", "/v1/trust/catalog", "/v1/trust/methodology"]) expect(oa.paths[p].get.security).toEqual([]);
     expect(oa.paths["/v1/trust/observations"]).toBeUndefined();
     const wk = await (await get("/.well-known/x402")).json();
     const paid = Object.entries(oa.paths).flatMap(([p, ops]: any) => Object.values(ops).filter((o: any) => o["x-payment-info"]).map(() => BASE + p));
     expect(paid.sort()).toEqual(wk.resources.map((r: any) => r.template).sort());
     expect(oa.info.version).toBe((await (await get("/health")).json()).version);
     expect(oa.components.securitySchemes.bearer.scheme).toBe("bearer");
-    expect(oa.paths["/v1/signal/{coin}"].get.parameters[0].example).toBe("XRP");
     expect(oa.paths["/v1/trust/vendors/{id}/report"].get.parameters[0].example).toBe("printmoneylab");
-    expect(oa.paths["/v1/levels/{coin}"].get["x-example-url"]).toBe(BASE + "/v1/levels/XRP");
   });
 
   it("quotes an unpaid literally probed paid template (402, same rails/prices/payTo), refuses a paid one with 400 and no facilitator call", async () => {
     const { get, fac } = setup();
     const strip = (a: any[]) => a.map((x) => ({ network: x.network, asset: x.asset, amount: x.amount, payTo: x.payTo, scheme: x.scheme }));
-    for (const [p, ex, concrete] of [["/v1/signal/{coin}", "/v1/signal/xrp", "/v1/signal/xrp"], ["/v1/levels/%7Bcoin%7D", "/v1/levels/xrp", "/v1/levels/xrp"],
-      ["/v1/trust/vendors/%7Bid%7D/report", "/v1/trust/vendors/printmoneylab/report", "/v1/trust/vendors/printmoneylab/report"]]) {
+    for (const [p, ex, concrete] of [["/v1/trust/vendors/%7Bid%7D/report", "/v1/trust/vendors/printmoneylab/report", "/v1/trust/vendors/printmoneylab/report"]]) {
       const q = await get(p);
       expect(q.status, p).toBe(402);
       const body = await q.json();
@@ -316,8 +284,14 @@ describe("openapi scanner hints", () => {
 
   it("other placeholder styles and a /v1/trust/check without url are a 400 (no quote, never charged); the bare probe keeps its 402", async () => {
     const { get, fac } = setup();
-    for (const [p, ex] of [["/v1/signal/:coin", "/v1/signal/xrp"], ["/v1/levels/:COIN", "/v1/levels/xrp"], ["/v1/signal/%3Ccoin%3E", "/v1/signal/xrp"],
-      ["/v1/signal/%7B%7Bcoin%7D%7D", "/v1/signal/xrp"], ["/v1/signal/$%7Bcoin%7D", "/v1/signal/xrp"], ["/v1/trust/vendors/:id/report", "/v1/trust/vendors/printmoneylab/report"]]) {
+    for (const p of ["/v1/signal/{coin}", "/v1/levels/%7Bcoin%7D", "/v1/signal/:coin", "/v1/levels/:COIN", "/v1/signal/%3Ccoin%3E", "/v1/signal/%7B%7Bcoin%7D%7D", "/v1/signal/$%7Bcoin%7D", "/v1/lite/{coin}"]) {
+      for (const h of [{}, { "PAYMENT-SIGNATURE": "junk" }] as Record<string, string>[]) {
+        const r = await get(p, h);
+        expect(r.status, p).toBe(410); // retired per-coin templates: never quoted, never charged
+        expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
+      }
+    }
+    for (const [p, ex] of [["/v1/trust/vendors/:id/report", "/v1/trust/vendors/printmoneylab/report"]]) {
       const r = await get(p);
       expect(r.status, p).toBe(400);
       expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();

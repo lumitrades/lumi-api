@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { deriveAddress, deriveKeypair, generateSeed, sign } from "ripple-keypairs";
 import { privateKeyToAccount } from "viem/accounts";
 import { createApp } from "../src/app";
@@ -47,22 +47,26 @@ async function pay(s: ReturnType<typeof setup>, path: string) {
   return { quote: body, r, body: await r.json() };
 }
 
-describe("seller monitoring", () => {
+describe("seller monitoring (legacy Monitor terms, simulated as bought before the 2026-10-25 retirement)", () => {
+  // Monitor and Monitor Plus are no longer sold (test/monitor_retired.test.ts). These tests un-retire them only to exercise
+  // the code paths that grandfathered rows still run through.
+  beforeEach(() => { PLANS.monitor.retired = false; PLANS.monitor_plus.retired = false; });
+  afterEach(() => { PLANS.monitor.retired = true; PLANS.monitor_plus.retired = true; });
   it("enrols with an XRPL payTo proof, rejects reused nonces and endpoints above the cap", async () => {
     const s = setup({ PRICE_INSTITUTIONAL_XRP: "0.19", PRICE_INSTITUTIONAL_RLUSD: "0.25", PRICE_INSTITUTIONAL_USDC: "0.25" }); // above the $0.10 test-buy cap
-    const { r, body, proof } = await enroll(s, [{ url: `${BASE}/v1/lite/XRP` }, { url: `${BASE}/v1/institutional` }]);
+    const { r, body, proof } = await enroll(s, [{ url: `${BASE}/v1/fear-greed` }, { url: `${BASE}/v1/institutional` }]);
     expect(r.status).toBe(201);
     expect(body.enrollment_id).toMatch(/^men_[a-f0-9]{24}$/);
     expect(body.management_token).toMatch(/^lumi_mt_/);
-    expect(body.endpoints.map((e: any) => e.url)).toEqual([`${BASE}/v1/lite/XRP`]);
+    expect(body.endpoints.map((e: any) => e.url)).toEqual([`${BASE}/v1/fear-greed`]);
     expect(body.rejected[0].url).toBe(`${BASE}/v1/institutional`);
     expect(body.rejected[0].reason).toMatch(/unprofitable/);
     expect(body.test).toBeUndefined();
     // same challenge again
-    const again = await s.post("/v1/monitor/enroll", { ...proof, endpoints: [{ url: `${BASE}/v1/lite/XRP` }] });
+    const again = await s.post("/v1/monitor/enroll", { ...proof, endpoints: [{ url: `${BASE}/v1/fear-greed` }] });
     expect(again.status).toBe(409);
     // bad signature
-    const bad = await s.post("/v1/monitor/enroll", { ...(await xrplProof(s.req, "monitor")), signature: "00", endpoints: [{ url: `${BASE}/v1/lite/XRP` }] });
+    const bad = await s.post("/v1/monitor/enroll", { ...(await xrplProof(s.req, "monitor")), signature: "00", endpoints: [{ url: `${BASE}/v1/fear-greed` }] });
     expect(bad.status).toBe(403);
     // seller page stays private until a plan is paid
     expect((await s.req(`/v1/monitor/sellers/${body.enrollment_id}`)).status).toBe(404);
@@ -84,13 +88,13 @@ describe("seller monitoring", () => {
 
   it("charges the list price to sellers and the test price only to owner-flagged test wallets", async () => {
     const list = setup();
-    const e1 = await enroll(list, [{ url: `${BASE}/v1/lite/XRP` }]);
+    const e1 = await enroll(list, [{ url: `${BASE}/v1/fear-greed` }]);
     const q1 = await (await list.req(`/v1/monitor/subscribe/monitor?enrollment=${e1.body.enrollment_id}`)).json();
     const iou1 = q1.accepts.find((a: any) => a.asset !== "XRP");
     expect(iou1.amount).toBe("9");
 
     const test = setup({ SALES_TEST_WALLETS: SELLER });
-    const e2 = await enroll(test, [{ url: `${BASE}/v1/lite/XRP` }], { webhook_url: "https://hooks.example.com/lumi" });
+    const e2 = await enroll(test, [{ url: `${BASE}/v1/fear-greed` }], { webhook_url: "https://hooks.example.com/lumi" });
     expect(e2.body.test).toMatch(/test wallet/);
     const { quote, r, body } = await pay(test, `/v1/monitor/subscribe/monitor?enrollment=${e2.body.enrollment_id}`);
     expect(quote.accepts.find((a: any) => a.asset !== "XRP").amount).toBe("0.01");
@@ -111,7 +115,7 @@ describe("seller monitoring", () => {
     const due = await dueR.json();
     expect(due.tasks).toHaveLength(1);
     expect(due.tasks[0]).toMatchObject({ mode: "buy", test: true });
-    const base = { enrollment_id: e2.body.enrollment_id, plan_id: body.plan_id, endpoint: `${BASE}/v1/lite/XRP`, network: "xrpl:1", asset: "XRP", quote_pay_to: SELLER };
+    const base = { enrollment_id: e2.body.enrollment_id, plan_id: body.plan_id, endpoint: `${BASE}/v1/fear-greed`, network: "xrpl:1", asset: "XRP", quote_pay_to: SELLER };
     // Paying with another option of the same quote (enrolled RLUSD/XRP vs bought XRP) at the same USD price is not a price change.
     const listed = e2.body.endpoints[0].listed_price_usd;
     const r1 = await test.post("/v1/owner/monitor/results", { results: [{ ...base, asset: e2.body.endpoints[0].asset === "XRP" ? "RLUSD" : "XRP", amount: "1", quote_price_usd: listed, outcome: "delivered", http_status: 200, data_returned: true, tx_hash: "B".repeat(64), cost_usd: 0.003 }] }, auth);
@@ -146,7 +150,7 @@ describe("seller monitoring", () => {
   it("paying never changes the trust answer: only commercial_relationship is added", async () => {
     const s = setup({ SALES_TEST_WALLETS: SELLER });
     const before = await (await s.req(`/v1/trust/vendors?payTo=${SELLER}`)).json();
-    const e = await enroll(s, [{ url: `${BASE}/v1/lite/XRP` }]);
+    const e = await enroll(s, [{ url: `${BASE}/v1/fear-greed` }]);
     await pay(s, `/v1/monitor/subscribe/monitor?enrollment=${e.body.enrollment_id}`);
     const after = await (await s.req(`/v1/trust/vendors?payTo=${SELLER}`)).json();
     const strip = (x: any) => JSON.parse(JSON.stringify(x, (k, v) => (k === "commercial_relationship" || k === "generated_at" || k === "as_of" ? undefined : v)));
@@ -244,6 +248,13 @@ describe("commerce discovery", () => {
     const wk = await (await s.req("/.well-known/x402")).json();
     const oa = await (await s.req("/openapi.json")).json();
     for (const [id, p] of Object.entries(PLANS)) {
+      const r0 = wk.resources.find((x: any) => x.url === `${BASE}${p.path}`);
+      if (p.retired) {
+        expect(r0, id).toBeUndefined();
+        expect(oa.paths[p.path], id).toBeUndefined();
+        expect((await s.req(p.path)).status, id).toBe(410);
+        continue;
+      }
       const r = wk.resources.find((x: any) => x.url === `${BASE}${p.path}`);
       expect(r, id).toBeDefined();
       expect(r.accepts.find((a: any) => a.asset !== "XRP").amount).toBe(p.usd);
@@ -255,7 +266,8 @@ describe("commerce discovery", () => {
     const urls = wk.resources.map((r: any) => r.url);
     expect(new Set(urls).size).toBe(urls.length);
     const skill = await (await s.req("/skill.md")).text();
-    expect(skill).toContain("Monitor Plus");
+    expect(skill).toContain("Watch Plus");
+    expect(skill).not.toMatch(/Monitor Plus \$|\$29/);
     expect(skill).toContain("$1.5 per 1,000");
   });
 });

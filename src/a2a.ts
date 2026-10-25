@@ -19,7 +19,7 @@ import { DISCLAIMER, type CoinRef } from "./views";
 import type { PaidRoute } from "./config";
 import { VENDORS } from "./vendors";
 import { SERVICE_ICON } from "./bazaar";
-import { MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, MARKET_IDEAS_ROUTES } from "./lines";
+import { RETIRED_ON, RETIRED_SKILLS, retiredBody } from "./retired";
 
 const VENDOR_IDS = VENDORS.map((v) => v.id);
 
@@ -47,12 +47,11 @@ interface SkillDef {
 
 const SKILLS: SkillDef[] = [
   { id: "catalog", name: "Catalog: endpoints, prices, payment networks (free)", tags: ["catalog", "pricing", "x402", "free"], examples: ["catalog", "what do you sell and how much?"], match: /\b(catalog|prices?|pricing|endpoints?|help|menu)\b/i },
-  { id: "coins", name: "Supported coins (free)", tags: ["coins", "free"], examples: ["list coins"], match: /\b(coins|supported|tickers)\b/i },
   { id: "vendor_trust", name: "x402 seller lookup and observations (free)", tags: ["trust", "x402", "vendors", "observations", "lookup", "bazaar", "free"], examples: ["vendor trust scores", "{\"skill\":\"vendor_trust\",\"url\":\"https://example.com/api/x402\"}", "{\"skill\":\"vendor_trust\",\"payTo\":\"0x...\"}", "{\"skill\":\"vendor_trust\",\"vendor_id\":\"printmoneylab\"}"], match: /\b(vendors?|trust)\b/i },
   { id: "seller_monitoring", name: "Seller monitoring plans for x402 sellers (info free; plans paid at the REST URL)", tags: ["monitoring", "x402", "sellers", "badge", "audit"], examples: ["seller monitoring plans", "{\"skill\":\"seller_monitoring\"}"], match: /\b(monitor(ing)?|badge|audit)\b/i },
   { id: "trust_feed", name: "Trust data feed for facilitators, wallets and frameworks (info free; keys and plans at the REST URL)", tags: ["data", "feed", "license", "trust", "x402"], examples: ["trust data feed", "{\"skill\":\"trust_feed\"}"], match: /\b(data feed|trust feed|feed|licen[cs]e|bulk lookup)\b/i },
   { id: "samples", name: "Free samples of every paid product", tags: ["samples", "preview", "free"], examples: ["samples", "show me a free sample"], match: /\b(samples?|preview|try|demo)\b/i },
-  { id: "quote", name: "Price quote for a paid call, without paying (free)", tags: ["quote", "x402", "free"], examples: ["quote /v1/brief"], match: /\bquote\b/i },
+  { id: "quote", name: "Price quote for a paid call, without paying (free)", tags: ["quote", "x402", "free"], examples: ["quote /v1/market"], match: /\bquote\b/i },
   {
     id: "institutional",
     route: "institutional",
@@ -61,14 +60,8 @@ const SKILLS: SkillDef[] = [
     examples: ["institutional brief", "what are BIS, IMF and the big banks doing that matters for XRP and QNT?"],
     match: /\b(institution(al|s)?|policy|regulat(ion|ions|ory|ors?)|bis|imf|treasury|occ|sec|cftc|cbdcs?|jpmorgan|jpm|kinexys|sbi|cross river|securitize|corda|r3|banks?|tokeni[sz](ed|ation))\b/i,
   },
-  { id: "brief", route: "brief", name: "Daily crypto market brief", tags: ["crypto", "market", "brief", "newsletter", "paid"], examples: ["today's crypto market brief"], match: /\b(brief|summary|today|newsletter)\b/i },
-  { id: "scan", route: "scan", name: "Lumi Trades market readings: all-coins scan, 49 live readings in one call", tags: ["crypto", "screener", "signals", "scan", "market-ideas", "paid"], examples: ["scan all coins", "which coins have the highest momentum score?"], match: /\b(scan|screen|screener|all coins|strongest|weakest)\b/i },
-  { id: "lite", route: "lite", name: "Lumi Trades market readings: lite coin reading (bias, score, price)", tags: ["crypto", "signal", "lite", "market-ideas", "paid"], examples: ["lite XRP"], match: /\blite\b/i, needsCoin: true },
-  { id: "signal", route: "signal", name: "Lumi Trades market readings: coin signal (momentum/trend bias)", tags: ["crypto", "signal", "technical-analysis", "market-ideas", "paid"], examples: ["signal XRP", "what is BTC's momentum bias?"], match: /\b(signal|bias|momentum|rsi|macd)\b/i, needsCoin: true },
-  { id: "levels", route: "levels", name: "Lumi Trades market readings: chart reference zones", tags: ["crypto", "levels", "support", "resistance", "market-ideas", "paid"], examples: ["levels ETH"], match: /\b(levels?|support|resistance)\b/i, needsCoin: true },
-  { id: "slate", route: "slate", name: "Lumi Trades market readings: watchlist slate (momentum/trend bias only)", tags: ["crypto", "watchlist", "bias", "market-ideas", "paid"], examples: ["current watchlist items"], match: /\b(slate|ideas?|watchlist)\b/i },
-  { id: "market", route: "market", name: "BTC + macro market backdrop", tags: ["crypto", "bitcoin", "macro", "paid"], examples: ["BTC macro backdrop"], match: /\b(market|backdrop|macro|dominance)\b/i },
-  { id: "macro_yen", route: "yen", name: "Yen carry-trade watch (USD/JPY, Nikkei)", tags: ["macro", "yen", "carry-trade", "japan", "paid"], examples: ["yen carry trade risk"], match: /\b(yen|jpy|usd\/?jpy|nikkei|carry|japan|boj)\b/i },
+  { id: "market", route: "market", name: "BTC + macro market backdrop (data only)", tags: ["crypto", "bitcoin", "macro", "paid"], examples: ["BTC macro backdrop"], match: /\b(market|backdrop|macro|dominance)\b/i },
+  { id: "macro_yen", route: "yen", name: "Yen macro watch (USD/JPY, Nikkei)", tags: ["macro", "yen", "usd-jpy", "japan", "paid"], examples: ["yen macro watch"], match: /\b(yen|jpy|usd\/?jpy|nikkei|japan|boj)\b/i },
   { id: "funding", route: "funding", name: "Perpetual funding rates (OKX perps)", tags: ["crypto", "funding", "perpetuals", "derivatives", "paid"], examples: ["funding rates"], match: /\bfunding\b/i },
   { id: "fear_greed", route: "fear_greed", name: "Fear & Greed (CoinMarketCap, with history)", tags: ["crypto", "sentiment", "fear-greed", "paid"], examples: ["fear and greed index"], match: /\bfear\b.*\bgreed\b|\bfear[-_ ]?greed\b/i },
   { id: "events_48h", route: "events_48h", name: "Events in the next 48 hours", tags: ["macro", "events", "calendar", "48h", "paid"], examples: ["what's scheduled in the next 48 hours?"], match: /\b(48 ?h(ours)?|next two days|tomorrow)\b/i },
@@ -96,15 +89,14 @@ const SKILLS: SkillDef[] = [
 
 const FREE_DESCRIPTIONS: Record<string, string> = {
   catalog: "Lists every Lumi endpoint with live prices on every payment network (XRP Ledger, Base, Stellar), the MCP and A2A endpoints, and the no-charge-when-stale guarantee.",
-  coins: "The 50 coins Lumi covers (tickers and CoinGecko ids). Lumi Trades market readings (information only, not investment advice): signals for all 50; levels only for the 13 watchlist and major coins.",
   vendor_trust:
-    "Check an x402 seller before paying it: {\"url\":\"...\"}, {\"domain\":\"...\"} or {\"payTo\":\"...\"} (case-insensitive) looks it up in the full CDP x402 Bazaar catalog (free quote checks of listings on a rotating schedule: 'quote-checked, low confidence'; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys ('test-bought', counted per chain: Base USDC for Bazaar listings, XRPL for a small curated list). Answer-only; tx evidence is in the paid trust check. With no arguments: curated XRPL vendor observations; {\"vendor_id\":\"...\"} for one vendor's summary. Observations, not ratings; no match is not a negative signal.",
+    "Check an x402 seller before paying it: {\"url\":\"...\"}, {\"domain\":\"...\"} or {\"payTo\":\"...\"} (case-insensitive) looks it up in the full CDP x402 Bazaar catalog (free quote checks of listings on a rotating schedule: 'quote-checked, low confidence'; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys ('test-bought', counted per chain: Base USDC for Bazaar listings, XRPL for a small curated list). Answer-only; tx evidence is in the paid trust check. With no arguments: curated XRPL vendor observations; {\"vendor_id\":\"...\"} for one vendor's summary. Observations, not ratings; no match is not a negative finding.",
   samples: "Free, clearly labelled SAMPLE previews of every paid product (truncated, up to 10 minutes old), with the USD price of each. Use it to see the output shape before paying.",
   seller_monitoring:
     `${MONITOR_PRICE_TEXT.replace(/\.$/, "")}. Seller-funded, no auto-renew, payTo proven by signature; paying never changes a score. Answers with the plan table and enrolment steps; payment happens at GET /v1/monitor/subscribe/{plan}?enrollment=<id>&endpoints=<N>.`,
   trust_feed:
     "Licensed trust data feed: free key with 1,000 lookups/month (wallet signature), $1.50 per 1,000 extra lookups, Feed $99/30 days, Feed Pro $199/30 days (snapshot export, webhooks). Answers with plans, endpoints and licence terms; keys and payments at the REST URLs under /v1/feed.",
-  quote: "Live x402 v2 quote (all accepts options) for a paid skill or path, e.g. {\"skill\":\"signal\",\"coin\":\"XRP\"} or \"quote /v1/brief\". A 503 means the data is not fresh right now and would not be sold.",
+  quote: "Live x402 v2 quote (all accepts options) for a paid skill or path, e.g. {\"skill\":\"trust_check\",\"url\":\"...\"} or \"quote /v1/market\". A 503 means the data is not fresh right now and would not be sold.",
 };
 
 function priceLine(cfg: Config, route: PaidRoute): string {
@@ -138,10 +130,9 @@ export function agentCard(cfg: Config, base: string) {
     description:
       "Should I pay this x402 URL? Lumi Trades seller checks checks a seller before you pay: allow / warn / block with coded reasons from daily CDP Bazaar index checks and Lumi's own on-chain test-buys, " +
       "(free lookup, paid check, vendor reports); signed delivery receipts come with paid vendor reports and Feed catalog lookups, verifiable free. " +
-      "Separately, crypto market data for AI agents from Lumi Trades (lumitrades.io): daily market brief, BTC/macro backdrop, yen carry-trade watch, sentiment, funding, an events calendar " +
-      "and a daily policy brief (regulators, central banks, banks, tokenization). " +
-      `And ${MARKET_IDEAS_NAME}, a separate product line (${MARKET_IDEAS_NOTICE}): per-coin signals, lite reads, the all-coins scan, chart reference zones and a watchlist bias slate (signals cover 50 coins; levels and the slate cover 13 watchlist and major coins). ` +
-      `Pay per call over x402 v2 with no API key or account, in ${settledIn(cfg)}. Also available as a remote MCP server. Analytics only, not financial advice.`,
+      "Separately, neutral crypto market data for AI agents from Lumi Trades (lumitrades.io): BTC/macro backdrop, yen macro watch, sentiment, funding rates, an events calendar " +
+      "and a daily policy brief (regulators, central banks, banks, tokenization). No trade calls. " +
+      `Pay per call over x402 v2 with no API key or account, in ${settledIn(cfg)}. Also available as a remote MCP server. Information only, not financial advice.`,
     // A2A 1.0
     supportedInterfaces: A2A_VERSIONS.map((v) => ({ url: a2aUrl, protocolBinding: "JSONRPC", protocolVersion: v })),
     provider: { organization: "Lumi Trades", url: "https://lumitrades.io" },
@@ -327,6 +318,9 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
   const text = parts.map((p) => (typeof p?.text === "string" ? p.text : "")).join(" ").trim();
   const coins = await deps.coins();
 
+  if (typeof data.skill === "string" && RETIRED_SKILLS.includes(data.skill)) {
+    return { skill: data.skill, text: `The ${data.skill} skill was retired on ${RETIRED_ON}. Use the free seller check at ${base}/v1/check. Not charged.`, data: retiredBody(`skill:${data.skill}`, base) };
+  }
   let skill: SkillDef | undefined = typeof data.skill === "string" ? SKILLS.find((s) => s.id === data.skill || s.route === data.skill) : undefined;
   const pathArg = typeof data.path === "string" ? data.path : text.match(/\/v1\/[A-Za-z0-9/_.?=&%-]+/)?.[0];
   if (!skill && /\bquote\b/i.test(text)) skill = SKILLS.find((s) => s.id === "quote");
@@ -346,9 +340,9 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     return {
       skill: "catalog",
       text:
-        `Lumi Trades sells crypto market reads per call over x402 (${settledIn(cfg)}). ` +
-        "Free here: catalog, coins, quote, vendor_trust, seller_monitoring, trust_feed. Paid skills: " + SKILLS.filter((s) => s.route).map((s) => s.id).join(", ") +
-        ". Ask e.g. 'signal XRP' to get the live payment terms." + (skill ? "" : " (No skill matched your message, so here is the catalog.)"),
+        `Lumi Trades checks x402 sellers before you pay and sells neutral market data per call over x402 (${settledIn(cfg)}). ` +
+        "Free here: catalog, quote, vendor_trust, seller_monitoring, trust_feed. Paid skills: " + SKILLS.filter((s) => s.route).map((s) => s.id).join(", ") +
+        ". Ask e.g. 'should I pay https://example.com/api' or 'quote /v1/market' to get the live payment terms." + (skill ? "" : " (No skill matched your message, so here is the catalog.)"),
       data: {
         api: base,
         agent_card: `${base}/.well-known/agent-card.json`,
@@ -381,7 +375,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
       const summary = doc.self
         ? `${doc.self.name}: ${doc.self.label}.`
         : !doc.observed
-          ? `No Lumi observations for ${JSON.stringify(lq).slice(0, 200)}. No observation is not a negative signal.`
+          ? `No Lumi observations for ${JSON.stringify(lq).slice(0, 200)}. No observation is not a negative finding.`
           : `${doc.catalog?.total_matches ?? 0} catalog match(es)${doc.curated?.length ? ` + ${doc.curated.length} curated vendor(s)` : ""}; tiers: ${Object.entries(doc.catalog?.tiers_shown ?? {}).map(([k, v]) => `${v} ${k}`).join(", ") || "n/a"}. Observations, not ratings.`;
       return { skill: "vendor_trust", text: `${summary} Methodology: ${base}/v1/trust/methodology`, data: doc };
     }
@@ -404,9 +398,6 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
       data: doc ?? { url: `${base}/v1/samples` },
     };
   }
-  if (skill.id === "coins") {
-    return { skill: "coins", text: `Lumi covers ${coins.length} coins: ${coins.map((c) => c.symbol).join(", ")}.`, data: { coins } };
-  }
 
   // quote, or a paid skill: both return the live x402 terms (nothing is charged here)
   let path: string | undefined;
@@ -419,7 +410,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     }
   }
   if (!path) {
-    if (!target.route) return { skill: "quote", text: "Tell me which paid skill or path to quote, e.g. 'quote /v1/brief' or {\"skill\":\"quote\",\"path\":\"/v1/signal/XRP\"}.", data: { error: "missing_path" } };
+    if (!target.route) return { skill: "quote", text: "Tell me which paid skill or path to quote, e.g. 'quote /v1/market' or {\"skill\":\"quote\",\"path\":\"/v1/market\"}.", data: { error: "missing_path" } };
     const ep = PAID_ENDPOINTS.find((e) => e.route === target.route)!;
     if (target.needsVendor) {
       const vendorArg = (typeof data.vendor_id === "string" && data.vendor_id) || VENDOR_IDS.find((v) => new RegExp(`(^|[^a-z0-9-])${v}([^a-z0-9-]|$)`, "i").test(text));
@@ -435,7 +426,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     } else if (target.needsCoin && !coinArg) {
       return { skill: target.id, text: `Which coin? ${target.id} needs one of: ${coins.map((c) => c.symbol).join(", ")}.`, data: { error: "missing_coin", supported: coins.map((c) => c.symbol) } };
     }
-    if (!path) path = ep.template.replace("{coin}", encodeURIComponent(String(coinArg ?? ""))) + ((target.route === "brief" || target.route === "institutional") && data.format === "md" ? "?format=md" : "");
+    if (!path) path = ep.template.replace("{coin}", encodeURIComponent(String(coinArg ?? ""))) + (target.route === "institutional" && data.format === "md" ? "?format=md" : "");
   }
   const q = await deps.quote(path);
   const url = `${base}${path}`;
@@ -464,7 +455,6 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
       x402: q.body,
       options,
       how_to_pay: `${base}/skill.md`,
-      ...(target.route && MARKET_IDEAS_ROUTES.includes(target.route) ? { product_line: MARKET_IDEAS_NAME, notice: MARKET_IDEAS_NOTICE } : {}),
     },
   };
 }

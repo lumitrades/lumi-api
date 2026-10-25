@@ -26,9 +26,9 @@ describe("sales: client type, own wallets, retry (1.1.7)", () => {
   it("records the paying client's type on the sale row (no IP)", async () => {
     const salesStore = new MemorySalesStore();
     const app = createApp(ENV as any, { fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW, salesStore });
-    const q = await (await app.fetch(new Request(BASE + "/v1/signal/XRP"))).json();
+    const q = await (await app.fetch(new Request(BASE + "/v1/macro/yen"))).json();
     const hdr = paymentHeaderFor(q.accepts.find((a: any) => a.network.startsWith("xrpl:")));
-    const r = await app.fetch(new Request(BASE + "/v1/signal/XRP", { headers: { "PAYMENT-SIGNATURE": hdr, "User-Agent": "SettledScout/0.1 (+https://settled.tools/bot)", "CF-Connecting-IP": "203.0.113.9" } }));
+    const r = await app.fetch(new Request(BASE + "/v1/macro/yen", { headers: { "PAYMENT-SIGNATURE": hdr, "User-Agent": "SettledScout/0.1 (+https://settled.tools/bot)", "CF-Connecting-IP": "203.0.113.9" } }));
     expect(r.status).toBe(200);
     expect(salesStore.rows).toHaveLength(1);
     expect(salesStore.rows[0].client).toBe("bot: SettledScout/0.1");

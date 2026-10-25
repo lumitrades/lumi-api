@@ -2,7 +2,7 @@
 
 import type { Config, PaidRoute } from "./config";
 import { dropsToXrp } from "./config";
-import { LINE_LABEL, MARKET_IDEAS_LABEL, productLine } from "./lines";
+import { LINE_LABEL, productLine } from "./lines";
 
 export interface PaidEndpoint {
   route: PaidRoute;
@@ -19,69 +19,7 @@ export interface PaidEndpoint {
 /** Shared buyer guarantee on every paid endpoint. */
 export const NOT_CHARGED = "Not charged on bad input or stale data (every response carries as_of and stale_after).";
 
-/**
- * Fixed example coin for discovery (/.well-known/x402 resources, OpenAPI x-example-url, samples, docs).
- * Keep this XRP permanently: the XRPL AI Hub indexes the concrete example URLs, and switching the example to BTC
- * made it retire /v1/signal/XRP and /v1/levels/XRP as "Inactive". Guarded by test/example_coin.test.ts.
- */
-export const EXAMPLE_COIN = "XRP" as const;
-
 export const PAID_ENDPOINTS: PaidEndpoint[] = [
-  {
-    route: "signal",
-    name: "Lumi Trades: coin technical read (label, score, indicators)",
-    method: "GET",
-    path: "/v1/signal/{coin}",
-    template: "/v1/signal/{coin}",
-    summary:
-      MARKET_IDEAS_LABEL + " " +
-      "Use this when you need a fast, mechanical momentum/trend reading on one coin: overall positive/neutral/negative bias + score, per-timeframe (1h/4h/1d) bias and an indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume). 50 top coins (GET /v1/coins), computed live from public exchange candles; 1h refreshed about every 13 minutes. " + NOT_CHARGED,
-    example: `/v1/signal/${EXAMPLE_COIN}`,
-  },
-  {
-    route: "levels",
-    name: "Lumi Trades: chart reference zones",
-    method: "GET",
-    path: "/v1/levels/{coin}",
-    template: "/v1/levels/{coin}",
-    summary:
-      MARKET_IDEAS_LABEL + " " +
-      "Use this when you need chart reference zones for one coin (the support and resistance prices Lumi watches, not trade levels), a short bias note, commentary, catalysts and cited sources (no forecasts or scenario levels). " + NOT_CHARGED,
-    example: `/v1/levels/${EXAMPLE_COIN}`,
-  },
-  {
-    route: "scan",
-    name: "Lumi Trades: all-coins scan (50 indicator reads in one call)",
-    method: "GET",
-    path: "/v1/scan",
-    template: "/v1/scan",
-    summary:
-      MARKET_IDEAS_LABEL + " " +
-      "Use this when you need to screen the whole market in one call instead of 49: momentum/trend bias, score, 1h/4h/1d bias, 1h RSI, price and 24h change for every coin in the live 49-coin universe (GET /v1/coins lists all 50 covered coins), highest score first, plus bias counts and breadth. Computed live; 1h refreshed about every 13 minutes; freshness fields reflect the oldest coin included. Not sold when fewer than 40 coins are fresh. " + NOT_CHARGED,
-    example: "/v1/scan",
-  },
-  {
-    route: "lite",
-    name: "Lumi Trades: lite coin read (label, score, price)",
-    method: "GET",
-    path: "/v1/lite/{coin}",
-    template: "/v1/lite/{coin}",
-    summary:
-      MARKET_IDEAS_LABEL + " " +
-      "Use this when you only need the headline read on one coin, cheaply: overall label and score, 1h/4h/1d labels and price with 24h change. Same live computation as /v1/signal/{coin}, which adds the full indicator breakdown. " + NOT_CHARGED,
-    example: `/v1/lite/${EXAMPLE_COIN}`,
-  },
-  {
-    route: "slate",
-    name: "Lumi Trades: watchlist slate (momentum/trend bias)",
-    method: "GET",
-    path: "/v1/slate",
-    template: "/v1/slate",
-    summary:
-      MARKET_IDEAS_LABEL + " " +
-      "Use this when you want Lumi's current watchlist as a momentum/trend bias (information only, not advice): coin, positive/negative bias, conviction, timeframe and expiry, plus coins with no current idea. No entries, stops, targets or leverage. " + NOT_CHARGED,
-    example: "/v1/slate",
-  },
   {
     route: "market",
     name: "Lumi Trades: BTC + macro market backdrop",
@@ -89,30 +27,18 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     path: "/v1/market",
     template: "/v1/market",
     summary:
-      "Use this when you need the whole crypto backdrop in one call: BTC support/resistance and momentum/trend bias, macro (USD/JPY note, total cap, dominance, Fear & Greed, BTC perp funding/OI) and breadth across tracked coins. " + NOT_CHARGED,
+      "Use this when you need the whole crypto backdrop in one call: BTC price and 24h change, macro (USD/JPY note, total cap, dominance, Fear & Greed, BTC perp funding/OI), dated catalysts with sources and 24h up/down breadth across tracked coins. " + NOT_CHARGED,
     example: "/v1/market",
   },
   {
-    route: "brief",
-    name: "Lumi Trades: daily crypto market brief",
-    method: "GET",
-    path: "/v1/brief",
-    template: "/v1/brief",
-    summary:
-      "Use this when you need a ready-to-read daily crypto brief (the same read as Lumi's newsletter): BTC price/levels/momentum bias, Fear & Greed, funding, " +
-      "top/bottom movers, key levels, yen watch, events in the next 48h and sourced news (no trade plans). JSON with a " +
-      "ready-to-use `markdown` field; add ?format=md (or Accept: text/markdown) for text/markdown. " + NOT_CHARGED,
-    example: "/v1/brief",
-  },
-  {
     route: "yen",
-    name: "Lumi Trades: yen carry-trade watch (USD/JPY, Nikkei)",
+    name: "Lumi Trades: yen macro watch (USD/JPY, Nikkei)",
     method: "GET",
     path: "/v1/macro/yen",
     template: "/v1/macro/yen",
     summary:
-      "Use this when you need to check whether yen carry-trade stress could spill into crypto: USD/JPY and Nikkei 225 (price, 1d/5d change, ranges), " +
-      "a rule-based carry-trade risk level (low/watch/elevated) around the 155 USD/JPY line with reasons, BTC context, upcoming Japan events (BOJ, CPI) and sources. " + NOT_CHARGED,
+      "Use this when you need to check whether a fast yen move could spill into crypto: USD/JPY and Nikkei 225 (price, 1d/5d change, ranges), " +
+      "a rule-based macro risk level (low/watch/elevated) against a 155 USD/JPY reference with reasons, BTC context, upcoming Japan events (BOJ, CPI) and sources. " + NOT_CHARGED,
     example: "/v1/macro/yen",
   },
   {
@@ -122,8 +48,8 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     path: "/v1/sentiment",
     template: "/v1/sentiment",
     summary:
-      "Use this when you need a quick read of crowd positioning: Fear & Greed (value, band, day-over-day change), BTC perp funding rate with a plain-English " +
-      "read + open interest, total market cap/volume/dominance, and breadth/signal-label counts across tracked coins. " + NOT_CHARGED,
+      "Use this when you need a quick market-mood snapshot: Fear & Greed (value, band, day-over-day change), the BTC perp funding rate (sign and size) " +
+      "+ open interest, total market cap/volume/dominance, and 24h up/down breadth across tracked coins. " + NOT_CHARGED,
     example: "/v1/sentiment",
   },
   {
@@ -144,7 +70,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     path: "/v1/funding",
     template: "/v1/funding",
     summary:
-      "Use this when you need derivatives positioning: the current perpetual funding rate for every Lumi coin listed on OKX (rate, 8h-normalised, annualised, next funding time, plain-English read), BTC read, median and the most positive/negative. Refreshed every 15 minutes; positive = longs pay shorts. " + NOT_CHARGED,
+      "Use this when you need perpetual funding data: the current perpetual funding rate for every tracked coin listed on OKX (rate, 8h-normalised, annualised, next funding time, size band), the BTC rate, the median and the most positive/negative. Refreshed every 15 minutes; a positive rate means the perpetual price is above its index. " + NOT_CHARGED,
     example: "/v1/funding",
   },
   {
@@ -175,7 +101,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     template: "/v1/institutional",
     summary:
       "Use this when you need a sourced daily summary of what central banks, standard-setters, regulators, banks and tokenization firms are doing in " +
-      "digital assets and stablecoins, and which tracked networks each move touches. Every item has a source URL, date, why-it-matters, impact and " +
+      "digital assets and stablecoins, and which tracked networks each move touches. Every item has a source URL, date, why-it-matters and " +
       "confidence, and a link_type that separates confirmed links from indirect-alignment analysis. Also: big picture, per-coin map, cross-item " +
       "connections, no-news notes and dated what-to-watch. JSON with a `markdown` field; ?format=md returns text/markdown. Neutral and apolitical; " +
       "not financial advice. " + NOT_CHARGED,
@@ -229,7 +155,9 @@ export function paidEndpoints(cfg: Pick<Config, "verdictPaid">): PaidEndpoint[] 
 
 /** Catalog entry for a paid route, including /v1/verdict (whether or not it is currently priced). */
 export function endpointFor(route: PaidRoute): PaidEndpoint {
-  return route === "verdict" ? VERDICT_ENDPOINT : PAID_ENDPOINTS.find((e) => e.route === route)!;
+  const e = route === "verdict" ? VERDICT_ENDPOINT : PAID_ENDPOINTS.find((x) => x.route === route);
+  if (!e) throw new Error(`no catalog entry for paid route ${route}`);
+  return e;
 }
 
 export function priceTable(cfg: Config) {

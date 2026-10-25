@@ -375,7 +375,7 @@ export function methodologyDoc(base: string) {
         "test-bought": "Lumi paid for one call from its own wallet. Bazaar catalog listings are bought in USDC on Base; the curated vendor list is bought on XRPL (see the curated list below). The two are counted separately (catalog summary purchase_verified_by_chain) and never added into one XRPL figure; the payment is confirmed on-chain before it is stored, with HTTP status, data returned yes/no and latency.",
         "self, not scored": "Lumi's own endpoints.",
       },
-      no_match: "{observed:false, note}: Lumi has not seen this seller. No observation is not a negative signal.",
+      no_match: "{observed:false, note}: Lumi has not seen this seller. No observation is not a negative finding.",
       not_scored: "Catalog entries get labels, not scores; scores apply only to the curated XRPL list below.",
       free_evidence: {
         bazaar_quality: "Coinbase CDP Bazaar publishes per-listing quality fields (30-day call count, 30-day unique payers, last called). Lumi stores them at most every 20 h and shows them as bazaar_quality, attributed to Coinbase Bazaar and dated (as_of).",

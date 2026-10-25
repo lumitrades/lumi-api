@@ -4,7 +4,7 @@
  *   checks_passed  "Delivered in recent checks"
  *   check_first    "Check first"
  *   checks_failed  "Recent checks failed"
- *   no_data        "Not enough data" (not a negative signal)
+ *   no_data        "Not enough data" (not a negative finding)
  *
  * The label is computed by labelFor() from the shared check core (trustVerdict in src/quick.ts + the review/appeal gate in
  * src/trust/reviews.ts) and Lumi's own dated test-buys. /v1/check and /v1/verdict call the same function on the same data,
@@ -30,7 +30,7 @@ export const VERDICT_KIND = "lumi_verdict";
 export const VERDICT_RULES_VERSION = "2026-10-25.4";
 export const DISPUTE_URL = "https://lumitrades.io/contact/";
 export const DEFINITION =
-  "This is a summary of Lumi's own dated observations of this endpoint, not a rating of the business or a statement about its honesty. checks_failed means that, in the window shown, at least two of Lumi's paid test-buys on different days paid and got no usable data, a confirming re-buy failed too, no later buy succeeded and a person at Lumi reviewed it (or the quote paid an unlisted address, an address that is not the seller's, a higher price than listed, or an address on the OFAC SDN list). no_data means Lumi has too little evidence and is not a negative signal. Sellers can reply or ask for a re-test at hello@lumitrades.io, https://lumitrades.io/contact/ or /v1/trust/replies; an open re-test request pauses checks_failed for up to 72 hours while Lumi re-buys. Paying Lumi never changes this result.";
+  "This is a summary of Lumi's own dated observations of this endpoint, not a rating of the business or a statement about its honesty. checks_failed means that, in the window shown, at least two of Lumi's paid test-buys on different days paid and got no usable data, a confirming re-buy failed too, no later buy succeeded and a person at Lumi reviewed it (or the quote paid an unlisted address, an address that is not the seller's, a higher price than listed, or an address on the OFAC SDN list). no_data means Lumi has too little evidence and is not a negative finding. Sellers can reply or ask for a re-test at hello@lumitrades.io, https://lumitrades.io/contact/ or /v1/trust/replies; an open re-test request pauses checks_failed for up to 72 hours while Lumi re-buys. Paying Lumi never changes this result.";
 
 /**
  * The evidence bar for a test-buy based checks_failed (M1). Live quote mismatches and OFAC hits do not use it (immediate).
@@ -120,11 +120,11 @@ export const WORDING: Record<string, (t: TestBuyEvidence, th: VerdictThresholds)
   untested: () => "Listing and quote checks agree, but Lumi has not completed a paid test-buy of this seller yet.",
   // Free probe checks passed (Checked, not test-bought). Still check_first: a probe never substitutes for a delivered test-buy.
   probe_checked_only: () => "Checked, not test-bought: Lumi's free checks passed (valid x402 payment response, reachable, valid TLS, complete listing), but Lumi has not paid this seller, so nothing is known about what a paid call returns.",
-  old_evidence: (t) => `Lumi's newest test-buy evidence for this seller (${day(t.last_at)}) is more than ${EVIDENCE_AGE.noDataAfterDays} days old, so it no longer supports a label. This is not a negative signal.`,
+  old_evidence: (t) => `Lumi's newest test-buy evidence for this seller (${day(t.last_at)}) is more than ${EVIDENCE_AGE.noDataAfterDays} days old, so it no longer supports a label. This is not a negative finding.`,
   stale_test: (t, th) => `Lumi's last delivered test-buy was on ${day(t.last_delivered_at)}, more than ${th.payMaxAgeDays} days ago.`,
   // no_data
-  not_observed: () => "Lumi has no observations of this seller yet. This is not a negative signal.",
-  not_quote_checked: () => "Listed in the x402 Bazaar, but Lumi has not checked it yet. This is not a negative signal.",
+  not_observed: () => "Lumi has no observations of this seller yet. This is not a negative finding.",
+  not_quote_checked: () => "Listed in the x402 Bazaar, but Lumi has not checked it yet. This is not a negative finding.",
   lumi_itself: () => "This is Lumi's own API; Lumi does not rate itself.",
   // checks_passed
   delivered_recently: (t) => `Lumi's paid test-buy on ${day(t.last_delivered_at)} delivered, and the listing and quote checks agree.`,

@@ -104,14 +104,14 @@ describe("Stellar x402 option", () => {
 
   it("refuses a replayed header and the same signed transaction against a fresh invoice", async () => {
     const { get, st } = setup();
-    const first = await (await get("/v1/slate")).json();
+    const first = await (await get("/v1/market")).json();
     const h = header(stellarOf(first));
-    expect((await get("/v1/slate", { "PAYMENT-SIGNATURE": h })).status).toBe(200);
-    const replay = await get("/v1/slate", { "PAYMENT-SIGNATURE": h });
+    expect((await get("/v1/market", { "PAYMENT-SIGNATURE": h })).status).toBe(200);
+    const replay = await get("/v1/market", { "PAYMENT-SIGNATURE": h });
     expect(replay.status).toBe(402);
     expect((await replay.json()).error).toBe("invoice_already_used");
-    const second = await (await get("/v1/slate")).json();
-    const again = await get("/v1/slate", { "PAYMENT-SIGNATURE": header(stellarOf(second)) });
+    const second = await (await get("/v1/market")).json();
+    const again = await get("/v1/market", { "PAYMENT-SIGNATURE": header(stellarOf(second)) });
     expect(again.status).toBe(402);
     expect((await again.json()).error).toBe("authorization_already_used");
     expect(st.calls.filter((c) => c.path === "/settle")).toHaveLength(1);
@@ -119,25 +119,25 @@ describe("Stellar x402 option", () => {
 
   it("rejects a tampered amount, maps facilitator failures (re-quote, 503, 409)", async () => {
     const { get, st } = setup();
-    const body = await (await get("/v1/brief")).json();
-    const bad = await get("/v1/brief", { "PAYMENT-SIGNATURE": header({ ...stellarOf(body), amount: "1" }) });
+    const body = await (await get("/v1/market")).json();
+    const bad = await get("/v1/market", { "PAYMENT-SIGNATURE": header({ ...stellarOf(body), amount: "1" }) });
     expect(bad.status).toBe(402);
     expect(st.calls).toHaveLength(0);
 
     const inval = setup({ st: stFacilitator({ verify: () => jsonResponse(200, { isValid: false, invalidReason: "invalid_exact_stellar_payload_wrong_amount" }) }) });
-    const b2 = await (await inval.get("/v1/brief")).json();
-    const r2 = await inval.get("/v1/brief", { "PAYMENT-SIGNATURE": header(stellarOf(b2)) });
+    const b2 = await (await inval.get("/v1/market")).json();
+    const r2 = await inval.get("/v1/market", { "PAYMENT-SIGNATURE": header(stellarOf(b2)) });
     expect(r2.status).toBe(402);
     expect((await r2.json()).error).toMatch(/^verify_failed:/);
 
     const down = setup({ st: stFacilitator({ verify: () => new Response("x", { status: 502 }) }) });
-    const b3 = await (await down.get("/v1/brief")).json();
-    const r3 = await down.get("/v1/brief", { "PAYMENT-SIGNATURE": header(stellarOf(b3)) });
+    const b3 = await (await down.get("/v1/market")).json();
+    const r3 = await down.get("/v1/market", { "PAYMENT-SIGNATURE": header(stellarOf(b3)) });
     expect(r3.status).toBe(503);
 
     const unk = setup({ st: stFacilitator({ settle: () => new Response("x", { status: 500 }) }) });
-    const b4 = await (await unk.get("/v1/brief")).json();
-    const r4 = await unk.get("/v1/brief", { "PAYMENT-SIGNATURE": header(stellarOf(b4)) });
+    const b4 = await (await unk.get("/v1/market")).json();
+    const r4 = await unk.get("/v1/market", { "PAYMENT-SIGNATURE": header(stellarOf(b4)) });
     expect(r4.status).toBe(409);
   });
 

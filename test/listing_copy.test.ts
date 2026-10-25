@@ -22,8 +22,10 @@ describe("Bazaar listing copy (owner-approved cleanup 2026-10-25)", () => {
     }
   });
 
-  it("slate, signal and levels listing copy has no targets, entries, stops, leverage, buy/sell ratings or scenarios", () => {
-    for (const r of ["slate", "signal", "levels"] as PaidRoute[]) {
+  it("no listing copy has targets, entries, stops, leverage, buy/sell ratings or scenarios (trading routes retired 2026-10-25)", () => {
+    expect(ROUTES).not.toEqual(expect.arrayContaining(["slate"]));
+    for (const gone of ["slate", "signal", "levels", "lite", "scan", "brief", "coins"]) expect(ROUTES as string[], gone).not.toContain(gone);
+    for (const r of ROUTES) {
       expect(BAZAAR_ROUTES[r].description, r).not.toMatch(FORBIDDEN_IDEAS);
       expect(routeHeadline(r), r).not.toMatch(FORBIDDEN_IDEAS);
       expect(JSON.stringify(BAZAAR_ROUTES[r].example), r).not.toMatch(/entry_zone|"stop"|"targets"|"leverage"|Strong (Buy|Sell)|scenarios|projection|"bull"|"bear"/);
@@ -46,7 +48,7 @@ describe("Bazaar listing copy (owner-approved cleanup 2026-10-25)", () => {
       const out = (bazaarExtension(r, r === "vendor_report" ? "x" : "XRP").schema as any).properties.output;
       expect(out.description, r).toMatch(/^Errors: /);
     }
-    expect(errorDocs("signal").map((e) => e.status)).toEqual(expect.arrayContaining([400, 404]));
+    expect(errorDocs("institutional").map((e) => e.status)).toContain(400);
     expect(errorDocs("vendor_report").map((e) => e.status)).toEqual(expect.arrayContaining([400, 404]));
     expect(errorDocs("trust_check").map((e) => e.status)).toContain(400);
     expect(errorDocs("verdict").map((e) => e.status)).toContain(400);

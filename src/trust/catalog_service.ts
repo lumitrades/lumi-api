@@ -713,7 +713,7 @@ export function createCatalog(deps: CatalogDeps) {
     if (!curated.length && !entries.length) {
       return {
         kind: "trust_lookup", query, observed: false, generated_at: iso(t),
-        note: "Lumi has no observations for this URL, domain or payTo. It is not in the CDP x402 Bazaar catalog Lumi ingests (refreshed daily) nor in Lumi's curated list. No observation is not a negative signal.",
+        note: "Lumi has no observations for this URL, domain or payTo. It is not in the CDP x402 Bazaar catalog Lumi ingests (refreshed daily) nor in Lumi's curated list. No observation is not a negative finding.",
       };
     }
     if (!free && deps.receipts) {

@@ -22,15 +22,10 @@ export interface Env {
   /** XRPL SourceTag stamped on every payment to this API (on-ledger usage metrics). */
   SOURCE_TAG?: string;
   /** Prices in XRP (decimal strings). */
-  PRICE_SIGNAL_XRP?: string;
-  PRICE_LEVELS_XRP?: string;
-  PRICE_SLATE_XRP?: string;
   PRICE_MARKET_XRP?: string;
-  PRICE_BRIEF_XRP?: string;
   PRICE_YEN_XRP?: string;
   PRICE_SENTIMENT_XRP?: string;
   PRICE_EVENTS_XRP?: string;
-  PRICE_TRADES_XRP?: string;
   /** Any PRICE_<ROUTE>_<XRP|RLUSD|USDC> override. */
   [price: `PRICE_${string}`]: string | undefined;
   /** Accept RLUSD (Ripple USD, XRPL issued token) as a second asset. "false" disables. Default on. */
@@ -38,18 +33,12 @@ export interface Env {
   /** RLUSD issuer override. Defaults to Ripple's official issuer for the network (docs.ripple.com). */
   RLUSD_ISSUER?: string;
   /** Prices in RLUSD (decimal strings, USD-equivalent). */
-  PRICE_SIGNAL_RLUSD?: string;
-  PRICE_LEVELS_RLUSD?: string;
-  PRICE_SLATE_RLUSD?: string;
   PRICE_MARKET_RLUSD?: string;
   /** Accept Circle USDC (XRPL issued token) as a third asset. "false" disables. Default on. */
   ACCEPT_USDC?: string;
   /** USDC issuer override. Defaults to Circle's official issuer for the network (developers.circle.com). */
   USDC_ISSUER?: string;
   /** Prices in USDC (decimal strings). */
-  PRICE_SIGNAL_USDC?: string;
-  PRICE_LEVELS_USDC?: string;
-  PRICE_SLATE_USDC?: string;
   PRICE_MARKET_USDC?: string;
   /** Where Lumi's published JSON lives. */
   DATA_BASE_URL?: string;
@@ -194,8 +183,12 @@ export interface KVLike {
   put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void>;
 }
 
-export type PaidRoute = "signal" | "levels" | "slate" | "market" | "brief" | "yen" | "sentiment" | "events" | "institutional" | "vendor_report"
-  | "scan" | "lite" | "trust_check" | "funding" | "fear_greed" | "events_48h" | "verdict";
+/**
+ * Paid routes. The per-coin readings and watchlist routes (signal, levels, lite, scan, slate) and the daily market brief
+ * were retired on 2026-10-25: they answer 410 Gone (see src/retired.ts) and are never quoted.
+ */
+export type PaidRoute = "market" | "yen" | "sentiment" | "events" | "institutional" | "vendor_report"
+  | "trust_check" | "funding" | "fear_greed" | "events_48h" | "verdict";
 
 /**
  * Default prices per route: XRP and USD-stablecoin (RLUSD/USDC). Override with PRICE_<ROUTE>_XRP / _RLUSD / _USDC
@@ -203,11 +196,7 @@ export type PaidRoute = "signal" | "levels" | "slate" | "market" | "brief" | "ye
  * printmoneylab), composite reads ~0.02-0.025 (Strale Fear & Greed, invinoveritas signals). XRP ~= $1.33.
  */
 export const DEFAULT_PRICES: Record<PaidRoute, { xrp: string; usd: string }> = {
-  signal: { xrp: "0.005", usd: "0.01" },
-  levels: { xrp: "0.005", usd: "0.01" },
-  slate: { xrp: "0.01", usd: "0.02" },
   market: { xrp: "0.01", usd: "0.02" },
-  brief: { xrp: "0.015", usd: "0.02" },
   yen: { xrp: "0.0075", usd: "0.01" },
   sentiment: { xrp: "0.0038", usd: "0.005" },
   events: { xrp: "0.0038", usd: "0.005" },
@@ -218,9 +207,6 @@ export const DEFAULT_PRICES: Record<PaidRoute, { xrp: string; usd: string }> = {
   // Paid detailed x402 vendor report (trust layer): $0.02. Stablecoins exactly 0.02; XRP fixed from XRP ~= $1.32 on
   // Oct 22 2026 (0.02 / 1.32 = 0.0152 -> 0.015 XRP), same no-live-repricing rule as PRICE_INSTITUTIONAL_XRP.
   vendor_report: { xrp: "0.015", usd: "0.02" },
-  // Stage C (0.12.0) focused reads. XRP defaults from XRP ~= $1.32; live XRP pricing (XRP_PRICING=live) overrides them.
-  scan: { xrp: "0.015", usd: "0.02" },
-  lite: { xrp: "0.003", usd: "0.004" },
   // Full pay-check: $0.02 (owner approved 2026-10-25: "Raise the full trust check to $0.02"; was $0.004).
   trust_check: { xrp: "0.015", usd: "0.02" },
   funding: { xrp: "0.0023", usd: "0.003" },

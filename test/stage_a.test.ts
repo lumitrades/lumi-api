@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
-import { productSample, stripTradeOutcome } from "../src/samples";
+import { productSample } from "../src/samples";
 import { staleRefusal } from "../src/x402";
 import { nextSiteUpdate, metaFrom, isoTimestamps } from "../src/freshness";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor } from "./helpers";
@@ -18,7 +18,7 @@ function setup() {
 describe("freshness metadata", () => {
   it("every paid response carries as_of, data_age_seconds, next_update, stale_after (ISO UTC)", async () => {
     const { get } = setup();
-    for (const path of ["/v1/signal/BTC", "/v1/slate", "/v1/brief", "/v1/market", "/v1/macro/yen", "/v1/events", "/v1/sentiment"]) {
+    for (const path of ["/v1/macro/yen", "/v1/market", "/v1/market", "/v1/market", "/v1/macro/yen", "/v1/events", "/v1/sentiment"]) {
       const q = await (await get(path)).json();
       const r = await get(path, { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) });
       expect(r.status, path).toBe(200);
@@ -61,15 +61,10 @@ describe("stale refusal", () => {
 });
 
 describe("free samples hide trade outcomes", () => {
-  it("strips unrealised P/L, mark price and status from trade-like objects", () => {
-    const t = { trades: [{ coin: "BTC", direction: "long", entry: 1, stop: 0.9, unrealized_pnl_pct: 4.2, mark_price: 1.04, status: "win" }] };
-    expect(stripTradeOutcome(t)).toBe(3);
-    expect(t.trades[0]).toEqual({ coin: "BTC", direction: "long", entry: 1, stop: 0.9 });
-  });
   it("GET /v1/samples never shows P/L or win/loss status", async () => {
     const { get } = setup();
     const j: any = await (await get("/v1/samples")).json();
-    const s = JSON.stringify(j.products.filter((p: any) => ["slate", "brief"].includes(p.route)));
+    const s = JSON.stringify(j.products);
     expect(s).not.toMatch(/"(unrealized_pnl_pct|pnl_pct|mark_price)":|"status":"(win|loss|open|closed|stopped|target)/i);
   });
 });

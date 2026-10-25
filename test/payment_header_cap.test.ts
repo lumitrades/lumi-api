@@ -81,9 +81,9 @@ describe("payment header size cap", () => {
   it("requirePayment returns 431 before decoding, never calls serve or a facilitator", async () => {
     let served = false;
     const r = await requirePayment(
-      new Request(BASE + "/v1/slate", { headers: { "PAYMENT-SIGNATURE": bomb() } }),
+      new Request(BASE + "/v1/market", { headers: { "PAYMENT-SIGNATURE": bomb() } }),
       {} as any, { replay: { isUsed: async () => false, claim: async () => true } } as any,
-      { routeKey: "slate", amountDrops: "1", description: "d", resourceUrl: BASE + "/v1/slate" },
+      { routeKey: "slate", amountDrops: "1", description: "d", resourceUrl: BASE + "/v1/market" },
       () => { served = true; return new Response("x"); },
     );
     expect(r.status).toBe(431);
@@ -95,7 +95,7 @@ describe("payment header size cap", () => {
     const h = bomb();
     expect(h.length).toBeGreaterThan(100_000);
     for (const name of PAYMENT_HEADERS) {
-      for (const path of ["/v1/slate", "/v1/trust/check?url=https://seller.test/x", "/mcp", "/v1/sentiment"]) {
+      for (const path of ["/v1/market", "/v1/trust/check?url=https://seller.test/x", "/mcp", "/v1/sentiment"]) {
         const r = await get(path, { [name]: h, "X-Lumi-Trial": "1" });
         expect(r.status).toBe(431);
         expect(await r.json()).toMatchObject({ error: "payment_header_too_large", header: name, note: "Not charged." });
@@ -107,7 +107,7 @@ describe("payment header size cap", () => {
 
   it("app: a normal unpaid request still gets the 402", async () => {
     const { get } = setup();
-    const r = await get("/v1/slate");
+    const r = await get("/v1/market");
     expect(r.status).toBe(402);
     expect(r.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
   });

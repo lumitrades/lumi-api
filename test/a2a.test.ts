@@ -47,7 +47,7 @@ describe("A2A agent card", () => {
       { url: `${BASE}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "1.0" },
       { url: `${BASE}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "0.3" },
     ]);
-    expect(card.skills.map((s: any) => s.id)).toEqual(["trust_check", "vendor_trust", "vendor_report", "catalog", "coins", "seller_monitoring", "trust_feed", "samples", "quote", "institutional", "brief", "scan", "lite", "signal", "levels", "slate", "market", "macro_yen", "funding", "fear_greed", "events_48h", "sentiment", "events"]);
+    expect(card.skills.map((s: any) => s.id)).toEqual(["trust_check", "vendor_trust", "vendor_report", "catalog", "seller_monitoring", "trust_feed", "samples", "quote", "institutional", "market", "macro_yen", "funding", "fear_greed", "events_48h", "sentiment", "events"]);
     expect(card.iconUrl).toBe("https://lumitrades.io/assets/icon-512.png");
     for (const s of card.skills) expect(s).toMatchObject({ id: expect.any(String), name: expect.any(String), description: expect.any(String), tags: expect.any(Array) });
     const x402 = card.capabilities.extensions.find((e: any) => e.uri === "https://x402.org");
@@ -61,13 +61,11 @@ describe("A2A agent card", () => {
 describe("A2A JSON-RPC", () => {
   it("SendMessage (1.0): free skills answer inline as a Message", async () => {
     const { rpc, fac } = setup();
-    const r = await rpc(send1([{ text: "list coins please" }]), { "A2A-Version": "1.0" });
+    const r = await rpc(send1([{ data: { skill: "samples" } }]), { "A2A-Version": "1.0" });
     expect(r.status).toBe(200);
     const m = r.body.result.message;
-    expect(m).toMatchObject({ role: "ROLE_AGENT", metadata: { skill: "coins" } });
+    expect(m).toMatchObject({ role: "ROLE_AGENT", metadata: { skill: "samples" } });
     expect(m.contextId).toBeTruthy();
-    expect(m.parts[0].text).toMatch(/49 coins/);
-    expect(m.parts[1].data.coins).toHaveLength(49);
     const cat = await rpc(send1([{ data: { skill: "catalog" } }]));
     expect(cat.body.result.message.parts[1].data.networks.map((n: any) => n.network)).toEqual(["eip155:84532", "xrpl:1"]);
     expect(fac.calls).toHaveLength(0);
@@ -75,23 +73,25 @@ describe("A2A JSON-RPC", () => {
 
   it("message/send (0.3): paid skill returns live x402 terms for every network, nothing charged", async () => {
     const { rpc, fac } = setup();
-    const r = await rpc(send03([{ kind: "text", text: "give me the signal for XRP" }]));
+    const r = await rpc(send03([{ kind: "text", text: "what is the yen doing" }]));
     const m = r.body.result;
-    expect(m).toMatchObject({ kind: "message", role: "agent", metadata: { skill: "signal" } });
+    expect(m).toMatchObject({ kind: "message", role: "agent", metadata: { skill: "macro_yen" } });
     const d = m.parts[1].data;
-    expect(d).toMatchObject({ status: "payment_required", charged: false, url: `${BASE}/v1/signal/XRP` });
+    expect(d).toMatchObject({ status: "payment_required", charged: false, url: `${BASE}/v1/macro/yen` });
     expect(d.options.map((o: any) => [o.network, o.asset, o.amount])).toEqual([
-      ["eip155:84532", "USDC", "0.01"], ["xrpl:1", "XRP", "0.005"], ["xrpl:1", "RLUSD", "0.01"], ["xrpl:1", "USDC", "0.01"],
+      ["eip155:84532", "USDC", "0.01"], ["xrpl:1", "XRP", "0.0075"], ["xrpl:1", "RLUSD", "0.01"], ["xrpl:1", "USDC", "0.01"],
     ]);
     expect(d.x402.x402Version).toBe(2);
     expect(fac.calls).toHaveLength(0);
   });
 
-  it("asks for a coin, quotes paths, and refuses stale data without a quote", async () => {
+  it("quotes paths, never offers a retired one, and refuses stale data without a quote", async () => {
     const { rpc } = setup();
-    expect((await rpc(send1([{ text: "support and resistance" }]))).body.result.message.parts[1].data.error).toBe("missing_coin");
-    const q = await rpc(send1([{ text: "quote /v1/brief" }]));
-    expect(q.body.result.message.parts[1].data.url).toBe(`${BASE}/v1/brief`);
+    const q = await rpc(send1([{ text: "quote /v1/market" }]));
+    expect(q.body.result.message.parts[1].data.url).toBe(`${BASE}/v1/market`);
+    const gone = await rpc(send1([{ data: { skill: "signal", coin: "XRP" } }]));
+    expect(JSON.stringify(gone.body)).toMatch(/gone/);
+    expect(JSON.stringify(gone.body)).not.toMatch(/"accepts"/);
     const stale = setup(NOW + 3 * 86_400_000);
     const s = await stale.rpc(send1([{ data: { skill: "sentiment" } }]));
     expect(s.body.result.message.parts[1].data).toMatchObject({ status: 503, charged: false });

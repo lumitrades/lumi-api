@@ -176,7 +176,7 @@ describe("signed submissions", () => {
     const c = await s.issue(1, [w, seller], { own_domains: ["myshop.example"] });
     expect((await s.submit(c, await s.receipt(w, 10, { payTo: seller.address }))).j).toMatchObject({ error: "self_testing", reason: "self_test_pay_to" });
     expect((await s.submit(c, await s.receipt(w, 11, { endpoint: "https://api.myshop.example/data", payTo: wallet(6).address }))).j).toMatchObject({ error: "self_testing", reason: "self_test_domain" });
-    expect((await s.submit(c, await s.receipt(w, 12, { endpoint: "https://api.lumitrades.io/v1/brief", payTo: wallet(6).address }))).j).toMatchObject({ error: "self_testing", reason: "lumi_endpoint" });
+    expect((await s.submit(c, await s.receipt(w, 12, { endpoint: "https://api.lumitrades.io/v1/market", payTo: wallet(6).address }))).j).toMatchObject({ error: "self_testing", reason: "lumi_endpoint" });
     expect((await s.submit(c, await s.receipt(w, 13, { payTo: PAY_TO }))).j.reason).toBe("lumi_endpoint");
   });
 

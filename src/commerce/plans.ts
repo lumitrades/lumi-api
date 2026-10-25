@@ -1,6 +1,6 @@
 /**
  * Paid plans outside the per-call data routes: seller monitoring (per-endpoint Watch / Watch Plus / Watch Pro, Audit, and
- * the grandfathered Monitor / Monitor Plus ids) and the data licence
+ * the retired Monitor / Monitor Plus ids, honoured to term end but no longer sold) and the data licence
  * feed (Feed, Feed Pro, metered credits). Each payment is one x402 payment (XRPL XRP/RLUSD/USDC or Base USDC) for a
  * fixed term. Nothing auto-renews: renewing means paying again.
  *
@@ -29,7 +29,7 @@ export interface PlanDef {
   path: string;
   /** Watch tiers: usd is the price per endpoint per 30-day term; the quote is usd × endpoints × terms less one discount (the larger of volume/prepay). */
   perEndpoint?: boolean;
-  /** Grandfathered 2026-10-22 plan ids (Monitor $9 / Monitor Plus $29): still valid and purchasable, superseded by Watch. */
+  /** Grandfathered 2026-10-22 plan ids (Monitor / Monitor Plus), superseded by Watch; retired 2026-10-25 (see `retired`). */
   legacy?: boolean;
   /** Set to true to stop selling a legacy id (subscribe answers 410 plan_retired); existing rows keep working to term end. */
   retired?: boolean;
@@ -39,8 +39,8 @@ export const DAY_MS = 86_400_000;
 export const TERM_DAYS = 30;
 
 export const PLANS: Record<PlanId, PlanDef> = {
-  monitor: { id: "monitor", name: "Monitor", usd: "9", days: TERM_DAYS, family: "monitor", legacy: true, path: "/v1/monitor/subscribe/monitor", summary: "30 days: one seller-funded test-buy of 1 endpoint per term (one recheck after a failure) + alerts." },
-  monitor_plus: { id: "monitor_plus", name: "Monitor Plus", usd: "29", days: TERM_DAYS, family: "monitor", legacy: true, path: "/v1/monitor/subscribe/monitor_plus", summary: "30 days: weekly seller-funded test-buys of up to 20 endpoints + alerts." },
+  monitor: { id: "monitor", name: "Monitor", usd: "9", days: TERM_DAYS, family: "monitor", legacy: true, retired: true, path: "/v1/monitor/subscribe/monitor", summary: "30 days: one seller-funded test-buy of 1 endpoint per term (one recheck after a failure) + alerts." },
+  monitor_plus: { id: "monitor_plus", name: "Monitor Plus", usd: "29", days: TERM_DAYS, family: "monitor", legacy: true, retired: true, path: "/v1/monitor/subscribe/monitor_plus", summary: "30 days: weekly seller-funded test-buys of up to 20 endpoints + alerts." },
   watch: { id: "watch", name: "Watch", usd: "5", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch", summary: "Per endpoint per 30 days: hourly quote checks, a weekly seller-funded test-buy (small per-buy cap), alerts, 30-day history, status page and badge." },
   watch_plus: { id: "watch_plus", name: "Watch Plus", usd: "12", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch_plus", summary: "Per endpoint per 30 days: quote checks every 30 min, a daily seller-funded test-buy (capped per buy) rotating across the chains the endpoint accepts, schema and p95-latency alerts, 90-day history." },
   watch_pro: { id: "watch_pro", name: "Watch Pro", usd: "20", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch_pro", summary: "Per endpoint per 30 days: quote checks every 15 min, daily buys on up to 3 chains, limited by the test-buy budget (seller-funded, capped per buy), all Watch Plus alerts, 90-day history and a monthly report signed by Lumi's wallet." },
@@ -49,8 +49,11 @@ export const PLANS: Record<PlanId, PlanDef> = {
   feed_pro: { id: "feed_pro", name: "Feed Pro", usd: "199", days: TERM_DAYS, family: "feed", path: "/v1/feed/subscribe/feed_pro", summary: "30 days: 500,000 lookups, delta feed, licensed full snapshot export, status-change webhooks, receipts." },
   feed_credits: { id: "feed_credits", name: "Feed credits", usd: "1.5", days: null, family: "feed", path: "/v1/feed/credits", summary: "1,000 metered lookups (prepaid, credits never expire) on top of the free 1,000/month." },
 };
-/** Paid monitoring ids, sold side by side: the new per-endpoint Watch tiers, Audit, and the grandfathered Monitor ids. */
+/** Paid monitoring ids the subscribe route knows: the per-endpoint Watch tiers, Audit, and the retired Monitor ids
+ *  (which answer 410 plan_retired, never quoted; rows bought before 2026-10-25 keep running to their term end). */
 export const MONITOR_PLANS: PlanId[] = ["watch", "watch_plus", "watch_pro", "audit", "monitor", "monitor_plus"];
+/** Monitoring ids that are sold (listed and quoted). */
+export const SOLD_MONITOR_PLANS: PlanId[] = MONITOR_PLANS.filter((id) => !PLANS[id].retired);
 export const WATCH_PLANS: PlanId[] = ["watch", "watch_plus", "watch_pro"];
 export const LEGACY_MONITOR_PLANS: PlanId[] = ["monitor", "monitor_plus"];
 export const FEED_PLANS: PlanId[] = ["feed", "feed_pro"];
@@ -204,7 +207,7 @@ export function planQuote(cfg: Config, plan: PlanId, subject: string, usd: strin
 
 /** Public, apolitical price table for discovery docs. */
 export function planTable() {
-  return Object.values(PLANS).map((p) => ({ plan: p.id, name: p.name, price_usd: p.usd, ...(p.perEndpoint ? { per: "endpoint" } : {}), ...(p.legacy ? { legacy: true } : {}), term_days: p.days, auto_renew: false, path: p.path, summary: p.summary }));
+  return Object.values(PLANS).filter((p) => !p.retired).map((p) => ({ plan: p.id, name: p.name, price_usd: p.usd, ...(p.perEndpoint ? { per: "endpoint" } : {}), ...(p.legacy ? { legacy: true } : {}), term_days: p.days, auto_renew: false, path: p.path, summary: p.summary }));
 }
 
 /** Shared random id/token helpers. */
@@ -228,4 +231,4 @@ export const MONITOR_PRICE_TEXT =
   `For x402 sellers, priced per endpoint per 30 days: Watch $${PLANS.watch.usd} (hourly quote checks, weekly test-buy), Watch Plus $${PLANS.watch_plus.usd} (30 min checks, daily test-buy rotating chains, schema/p95 alerts), ` +
   `Watch Pro $${PLANS.watch_pro.usd} (15 min checks, daily buys on up to 3 chains, limited by the test-buy budget, signed monthly report); ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}% (discounts do not stack: the larger applies). ` +
   `Audit $${PLANS.audit.usd} one-off (every listed endpoint, signed report). Free Watch tier (${WATCH_FREE.endpoints} endpoint, daily quote check, no test-buys) and a one-per-seller ${WATCH_TRIAL.days}-day Watch Plus trial (no card, never converts; on day ${WATCH_TRIAL.days} nothing is charged, checks stop, the badge comes off and history freezes read-only). ` +
-  `Legacy Monitor/Monitor Plus are grandfathered.`;
+  `The old Monitor/Monitor Plus plans are no longer sold; existing terms run to their end.`;

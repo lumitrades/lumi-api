@@ -20,8 +20,8 @@ async function listTools() {
   return tools;
 }
 
-test("0.9.7: versions agree across package.json, server.json and the server", () => {
-  assert.equal(VERSION, "0.9.7");
+test("0.10.0: versions agree across package.json, server.json and the server", () => {
+  assert.equal(VERSION, "0.10.0");
   assert.equal(pkg.version, VERSION);
   assert.equal(srv.version, VERSION);
   assert.equal(srv.packages[0].version, VERSION);
@@ -30,9 +30,8 @@ test("0.9.7: versions agree across package.json, server.json and the server", ()
   assert.match(srv.description, /x402 sellers/);
 });
 
-test("coin counts are current (50 coins, 13 for levels; no Solana)", () => {
-  assert.doesNotMatch(pkg.description, /12 more coins/);
-  assert.match(pkg.description, /50 coins/);
+test("descriptions are current (no per-coin readings since 0.10.0; no Solana)", () => {
+  assert.doesNotMatch(pkg.description, /\d+ coins|trend readings|signals?\b|levels/);
   assert.match(pkg.description, /Lumi Check/);
   assert.match(pkg.description, /XRPL, Base and Stellar/);
   assert.doesNotMatch(pkg.description + srv.description, /solana/i);
@@ -43,14 +42,14 @@ test("coin counts are current (50 coins, 13 for levels; no Solana)", () => {
   assert.doesNotMatch(readme, /12 more coins|The 13 coins covered|The 50 coins covered|top 50|top-50|7-day projection|solana/i);
 });
 
-test("tools: seller monitoring and trust feed present; coins says 50; no projection wording", async () => {
+test("tools: seller monitoring and trust feed present; retired trading tools gone; no projection wording", async () => {
   const tools = await listTools();
   const by = Object.fromEntries(tools.map((t) => [t.name, t]));
   assert.ok(by.lumi_seller_monitoring && by.lumi_trust_feed);
   assert.match(by.lumi_seller_monitoring.description, /paying never changes a score/);
-  assert.match(by.lumi_coins.description, /50 coins/);
-  for (const t of tools) assert.doesNotMatch(t.description, /projection/, t.name);
-  assert.equal(tools.length, 27);
+  for (const n of ["lumi_coins", "lumi_signal", "lumi_lite", "lumi_scan", "lumi_levels", "lumi_slate", "lumi_brief"]) assert.ok(!by[n], `${n} retired`);
+  for (const t of tools) assert.doesNotMatch(t.description, /projection|leverage|support|resistance|\bsignal\b|trade idea/i, t.name);
+  assert.equal(tools.length, 20);
   assert.ok(by.lumi_verdict, "lumi_verdict present");
   assert.match(by.lumi_verdict.description, /never changes a result/);
   assert.ok(!tools.some((t) => t.name === "lumi_trades"), "lumi_trades removed");

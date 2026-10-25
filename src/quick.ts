@@ -1,12 +1,11 @@
 /**
- * Stage C products: cheap, focused reads (lite signal, all-coins scan, funding, Fear & Greed, next-48h events) and the
- * "should I pay this x402 URL?" verdict. Mechanical readings and observations only; not financial advice.
+ * Stage C products: cheap, focused market data (funding, Fear & Greed, next-48h events) and the "should I pay this x402
+ * URL?" verdict. Data and observations only; not financial advice. (The lite read and the all-coins scan were retired
+ * on 2026-10-25.)
  */
-import { envelope, isExcludedCoin, type CoinRef } from "./views";
-import { BIASES, BIAS_NOTE, BIAS_RULE, biasLabel } from "./bias";
+import { envelope, type CoinRef } from "./views";
 import { compact, eventRows, catalystRows } from "./products";
 import { band } from "./feeds";
-import type { LiveRow } from "./live";
 import { VENDORS, vendorById, vendorPayTos } from "./vendors";
 import { sanctionedReason, type SanctionsScreen } from "./sanctions";
 import { failureStreak, FAILED_RULE, EVIDENCE_AGE } from "./trust/verdict";
@@ -14,59 +13,14 @@ import { failureStreak, FAILED_RULE, EVIDENCE_AGE } from "./trust/verdict";
 type Json = any;
 const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
 
-// ---------------------------------------------------------------- lite signal
-/** Lite read: momentum/trend bias + score, price, 1h/4h/1d bias. Built from the full signal body. */
-export function liteView(full: Json) {
-  const tf = (k: string) => (full?.timeframes?.[k] ? { label: biasLabel(full.timeframes[k].label, num(full.timeframes[k].score)), score: num(full.timeframes[k].score) } : null);
-  return envelope("signal_lite", compact({
-    coin: full?.coin,
-    label: biasLabel(full?.label, num(full?.score)),
-    score: num(full?.score),
-    price: { usd: num(full?.price?.usd), change_24h_pct: num(full?.price?.change_24h_pct) },
-    timeframes: { "1h": tf("1h"), "4h": tf("4h"), "1d": tf("1d") },
-    computed: full?.computed ?? "site",
-    full_read: `GET /v1/signal/${full?.coin?.symbol ?? "{coin}"} adds the per-indicator breakdown (RSI, MACD, EMA, Bollinger, StochRSI, volume) and 24h range.`,
-  }));
-}
-
-// ---------------------------------------------------------------- scan
-/** Every fresh live row, highest score first, with bias counts (momentum/trend readings, not buy/sell calls). */
-export function scanView(rows: LiveRow[], universe: CoinRef[]) {
-  const shown = rows.filter((r) => !isExcludedCoin(r));
-  const sorted = [...shown].sort((a, b) => (b.score ?? -9) - (a.score ?? -9));
-  const bias = (r: LiveRow) => biasLabel(r.label, r.score);
-  const counts = Object.fromEntries(BIASES.map((l) => [l, sorted.filter((r) => bias(r) === l).length]));
-  const have = new Set(shown.map((r) => r.id));
-  const pos = counts["positive bias"], neg = counts["negative bias"];
-  const tfBias = (r: LiveRow, k: string) => (r.timeframes[k] ? biasLabel(r.timeframes[k]?.label, r.timeframes[k]?.score) : null);
-  return envelope("scan", {
-    count: sorted.length,
-    universe: universe.filter((c) => !isExcludedCoin(c)).length,
-    label_counts: counts,
-    breadth: { positive: pos, neutral: counts["neutral bias"], negative: neg, read: pos > neg * 1.5 ? "broadly positive" : neg > pos * 1.5 ? "broadly negative" : "mixed" },
-    coins: sorted.map((r) => ({
-      symbol: r.symbol,
-      id: r.id,
-      label: bias(r),
-      score: r.score,
-      tf: { "1h": tfBias(r, "1h"), "4h": tfBias(r, "4h"), "1d": tfBias(r, "1d") },
-      rsi_1h: num(r.timeframes["1h"]?.indicators?.rsi?.value),
-      price_usd: num(r.price?.usd),
-      change_24h_pct: num(r.price?.change_24h_pct),
-      computed_at: new Date(r.computed_at).toISOString(),
-    })),
-    missing: universe.filter((c) => !isExcludedCoin(c) && !have.has(c.id)).map((c) => c.symbol),
-    method: `Same mechanical 1h/4h/1d indicator score as GET /v1/signal/{coin}, computed live from public exchange candles (1h refreshed about every 13 minutes); ${BIAS_RULE}. ${BIAS_NOTE} Coins without a fresh reading are listed in missing.`,
-  });
-}
-
 // ---------------------------------------------------------------- funding
+/** Neutral size band of an 8h-normalised funding rate (describes the number, not a market call). */
 function fundingRead(rate8h: number) {
-  if (rate8h >= 0.05) return "longs paying a lot: crowded long";
-  if (rate8h >= 0.015) return "longs paying: mildly long-leaning";
-  if (rate8h > -0.015) return "near neutral";
-  if (rate8h > -0.05) return "shorts paying: mildly short-leaning";
-  return "shorts paying a lot: crowded short";
+  if (rate8h >= 0.05) return "strongly positive";
+  if (rate8h >= 0.015) return "positive";
+  if (rate8h > -0.015) return "near zero";
+  if (rate8h > -0.05) return "negative";
+  return "strongly negative";
 }
 
 export function fundingView(doc: Json) {
@@ -85,7 +39,7 @@ export function fundingView(doc: Json) {
     most_positive: rows.slice(0, 5).map((c) => ({ symbol: c.symbol, rate_8h_pct: c.rate_8h_pct })),
     most_negative: rows.slice(-5).reverse().map((c) => ({ symbol: c.symbol, rate_8h_pct: c.rate_8h_pct })),
     coins: rows,
-    note: "rate_pct is the current period's rate; rate_8h_pct normalises it to 8 hours; annualized_pct = rate x periods per year. Positive = longs pay shorts. Positioning context, not a prediction.",
+    note: "rate_pct is the current period's rate; rate_8h_pct normalises it to 8 hours; annualized_pct = rate x periods per year. A positive rate means the perpetual traded above its index over the period; negative means below. Data only, not a prediction.",
   });
 }
 
@@ -167,7 +121,7 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
   if (self) {
     add("lumi_itself", "info", "This is Lumi's own API; Lumi does not score itself.");
   } else if (!e && !domEntries.length && !curated.length) {
-    add("not_observed", "info", "Not in the CDP x402 Bazaar catalog Lumi ingests (refreshed daily) or Lumi's curated list. Lumi has no evidence either way; this is not a negative signal.");
+    add("not_observed", "info", "Not in the CDP x402 Bazaar catalog Lumi ingests (refreshed daily) or Lumi's curated list. Lumi has no evidence either way; this is not a negative finding.");
   } else if (!e && !domEntries.length) {
     add("curated_vendor", "info", `In Lumi's curated XRPL vendor list (${curated[0].name}), which Lumi probes every 30 minutes and test-buys; see ${curated[0].detail}.`);
     const xps: Json[] = curated[0].purchases ?? [];

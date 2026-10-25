@@ -115,7 +115,7 @@ describe("catalog pipeline", () => {
     expect(byPay.body.catalog.total_matches).toBe(4);
     const none = await get(app, "/v1/trust/vendors?domain=unknown.example");
     expect(none.body).toMatchObject({ observed: false });
-    expect(none.body.note).toContain("not a negative signal");
+    expect(none.body.note).toContain("not a negative finding");
     expect(JSON.stringify([byUrl, byDom, byPay, none])).not.toMatch(/\bscam\b/i);
   });
 

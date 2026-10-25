@@ -10,7 +10,6 @@
 import type { Json } from "./data";
 import { DISCLAIMER, envelope } from "./views";
 import { compact } from "./products";
-import { sanitize } from "./sanitize";
 
 /** Tokens the brief maps institutions to (core coverage). */
 export const CORE_TOKENS = ["XRP", "XLM", "XDC", "QNT", "AXL", "HBAR"] as const;
@@ -25,7 +24,6 @@ export const LINK_TYPE_GUIDE: Record<LinkType, string> = {
   context: "Sector-wide policy or market development that affects these tokens without naming them (e.g. a stablecoin rule).",
 };
 
-const IMPACTS = new Set(["bullish", "bearish", "neutral", "mixed"]);
 const CONFIDENCE = new Set(["high", "medium", "low"]);
 
 const isUrl = (v: unknown): v is string => typeof v === "string" && /^https?:\/\/[^\s]+$/i.test(v);
@@ -54,7 +52,6 @@ function itemView(i: Json) {
     coins: tokens(i.coins),
     link_type: linkType(i.link_type),
     link_basis: s(i.link_basis),
-    impact: enumOr(i.impact, IMPACTS),
     confidence: enumOr(i.confidence, CONFIDENCE),
   };
 }
@@ -134,12 +131,13 @@ export function institutionalView(d: Json) {
     method:
       "Sourced from official releases, filings, speeches and reputable outlets in the coverage window. Institutions are linked to tokens either because " +
       "they announced it (confirmed) or because their stated goals closely match a token's mission (indirect_alignment: Lumi's analysis, not a partnership). " +
-      "Impact describes likely sentiment direction, not a price prediction. Institutions only; neutral and apolitical.",
+      "Institutions only; neutral and apolitical. No price or market-direction calls.",
     brief_note: s(d.disclaimer),
   });
-  const provided = s(d.markdown);
+  // Always rendered from the whitelisted fields (2026-10-25): the site's own markdown can carry wording (impact / direction)
+  // that the API no longer publishes, so it is never passed through.
   const env = envelope("institutional", body as Record<string, unknown>);
-  const md = provided ? sanitize(provided) : institutionalMarkdown(env as Json);
+  const md = institutionalMarkdown(env as Json);
   return { ...env, markdown: md && !md.includes(DISCLAIMER) ? `${md.trimEnd()}\n\n_${DISCLAIMER}_\n` : md };
 }
 
@@ -161,7 +159,7 @@ export function institutionalMarkdown(b: Json): string {
       L.push(
         "",
         `**${i.entity}: ${i.headline}**${i.date ? ` (${i.date})` : ""} · [source](${i.source_url})${extra ? `, ${extra}` : ""}`,
-        `${i.why_it_matters ? `${i.why_it_matters} ` : ""}_Coins:_ ${(i.coins ?? []).join(", ") || "n/a"} · _Link:_ ${LABEL[i.link_type] ?? i.link_type}${i.impact ? ` · _Impact:_ ${i.impact}` : ""}${i.confidence ? ` · _Confidence:_ ${i.confidence}` : ""}`,
+        `${i.why_it_matters ? `${i.why_it_matters} ` : ""}_Coins:_ ${(i.coins ?? []).join(", ") || "n/a"} · _Link:_ ${LABEL[i.link_type] ?? i.link_type}${i.confidence ? ` · _Confidence:_ ${i.confidence}` : ""}`,
       );
       if (i.link_basis) L.push(`_Basis:_ ${i.link_basis}`);
     }

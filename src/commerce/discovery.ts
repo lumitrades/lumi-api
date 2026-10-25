@@ -4,7 +4,8 @@ import { dropsToXrp } from "../config";
 import { usdToDrops } from "../pricing";
 import { FEED_LIMITS, MONITOR_LIMITS, PLANS, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TIERS, WATCH_TRIAL, WATCH_PRO_BUYS, WATCH_TRIAL_END, type PlanId } from "./plans";
 
-export const PLAN_ORDER: PlanId[] = ["watch", "watch_plus", "watch_pro", "audit", "monitor", "monitor_plus", "feed", "feed_pro", "feed_credits"];
+/** Listed (sold) plans, in discovery order. Monitor / Monitor Plus were retired 2026-10-25: not listed, never quoted (410). */
+export const PLAN_ORDER: PlanId[] = ["watch", "watch_plus", "watch_pro", "audit", "feed", "feed_pro", "feed_credits"];
 
 /** Extra query parameters of the per-endpoint Watch subscribe paths. */
 export const WATCH_QTY_PARAMS = [
@@ -70,15 +71,18 @@ export const COMMERCE_FREE_ENDPOINTS = [
   { method: "GET", path: "/v1/monitor/status/{id}", summary: "Public seller status page (also .json): uptime from quote probes, test-buy outcomes, tier label" },
   { method: "GET", path: "/v1/monitor/sellers", summary: "Monitored sellers (each pays Lumi for monitoring; disclosed)" },
   { method: "GET", path: "/v1/monitor/sellers/{id}", summary: "Public seller entry: disclosure, plan status, test-buy outcomes, findings with seller replies" },
-  { method: "GET", path: "/v1/monitor/badge/{id}.svg", summary: "Live 'Monitored by Lumi' badge (also .json); removed automatically when a test fails or the plan lapses" },
+  { method: "GET", path: "/v1/monitor/badge/{file}", summary: "Live 'Monitored by Lumi' badge: {id}.svg or {id}.json; removed automatically when a test fails or the plan lapses" },
   { method: "POST", path: "/v1/monitor/replies", summary: "Seller reply to a finding (management token); findings cannot be removed" },
   { method: "GET", path: "/v1/monitor/corrections", summary: "Public correction log" },
   { method: "GET", path: "/v1/feed", summary: "Trust data feed for facilitators, wallets and frameworks: plans, metering, endpoints" },
   { method: "GET", path: "/v1/feed/license", summary: "Feed licence terms (no resale, attribution, no warranty)" },
+  { method: "GET", path: "/v1/feed/challenge?wallet=", summary: "Message to sign with your wallet before requesting a free feed key" },
   { method: "POST", path: "/v1/feed/keys", summary: `Free feed key (${FEED_LIMITS.freePerMonth} lookups/month) with a wallet signature (challenge: GET /v1/feed/challenge?wallet=)` },
   { method: "POST", path: "/v1/feed/lookup", summary: `Keyed bulk lookup of up to ${FEED_LIMITS.maxBatch} URLs/payTos (metered)` },
+  { method: "GET", path: "/v1/feed/lookup?url=|payTo=", summary: "Keyed single lookup (metered, 1 lookup)" },
   { method: "GET", path: "/v1/feed/delta?since=", summary: "Keyed status-change feed (Feed, Feed Pro)" },
   { method: "GET", path: "/v1/feed/snapshot?cursor=", summary: "Keyed licensed full export (Feed Pro)" },
+  { method: "POST", path: "/v1/feed/webhook", summary: "Keyed: set the status-change webhook (Feed Pro); the secret is shown once" },
   { method: "GET", path: "/v1/feed/usage", summary: "Keyed usage and quota" },
 ];
 
@@ -92,6 +96,10 @@ export function commerceOpenApiPaths(cfg: Config, base: string) {
     "/v1/monitor": { get: { tags: tagM, security: [], summary: "Seller monitoring: plans, how to enrol, methodology, safeguards (free)", responses: R({ "200": "OK" }) } },
     "/v1/monitor/challenge": { get: { tags: tagM, security: [], summary: "Challenge to sign with the payTo wallet (free)", parameters: [{ name: "pay_to", in: "query", required: true, schema: { type: "string" }, example: cfg.payTo }], responses: R({ "200": "Message to sign", "400": "Invalid address (never charged)" }) } },
     "/v1/monitor/enroll": { post: { tags: tagM, summary: "Enrol endpoints (free; signature-proven payTo)", requestBody: body({ message: { type: "string" }, signature: { type: "string" }, public_key: { type: "string", description: "XRPL only" }, endpoints: { type: "array", maxItems: 20, items: { type: "object", properties: { url: { type: "string" }, method: { type: "string", enum: ["GET", "POST"] }, body: { type: "object" } }, required: ["url"] } }, webhook_url: { type: "string" }, email: { type: "string", description: "Kept private" } }, ["message", "signature"]), responses: R({ "201": "Enrolled: enrollment_id, per-plan eligibility, management token and webhook secret (shown once)", "403": "Signature proof failed", "422": "No endpoint qualifies (each rejection explained)" }) } },
+    "/v1/monitor/free": { post: { tags: tagM, security: [{ managementToken: [] }], summary: `Free Watch tier: ${WATCH_FREE.endpoints} endpoint, a daily quote check, no test-buys, no badge (free)`, requestBody: body({ enrollment_id: { type: "string" } }, ["enrollment_id"]), responses: R({ "201": "Free tier active", "401": "Management token required", "404": "Unknown enrolment" }) } },
+    "/v1/monitor/trial/challenge": { get: { tags: tagM, security: [], summary: `Challenge for the one-per-seller ${WATCH_TRIAL.days}-day Watch Plus trial: proves the domain (well-known file or DNS TXT) and the payTo (free)`, parameters: [{ name: "pay_to", in: "query", required: true, schema: { type: "string" } }, { name: "domain", in: "query", required: true, schema: { type: "string" } }], responses: R({ "200": "Challenge", "400": "Invalid input (never charged)" }) } },
+    "/v1/monitor/trial": { post: { tags: tagM, security: [{ managementToken: [] }], summary: `Start the Watch Plus trial (no card, never auto-converts, test-buys capped at $${WATCH_TRIAL.capUsd} total)`, requestBody: body({ enrollment_id: { type: "string" }, message: { type: "string" }, signature: { type: "string" }, public_key: { type: "string" } }, ["enrollment_id", "message", "signature"]), responses: R({ "201": "Trial started", "403": "Proof failed", "409": "Trial already used" }) } },
+    "/v1/monitor/status/{id}": { get: { tags: tagM, security: [], summary: "Public seller status page (HTML; also {id}.json): uptime from quote probes, test-buy outcomes, tier label (free)", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: R({ "200": "OK", "404": "Unknown enrolment" }) } },
     "/v1/monitor/sellers": { get: { tags: tagM, security: [], summary: "Monitored sellers (free)", responses: R({ "200": "OK" }) } },
     "/v1/monitor/sellers/{id}": { get: { tags: tagM, security: [], summary: "Public seller entry with disclosure, findings and replies (free)", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^men_[a-f0-9]{24}$" } }], responses: R({ "200": "OK", "404": "Unknown, or no plan paid yet" }) } },
     "/v1/monitor/badge/{file}": { get: { tags: tagM, security: [], summary: "Live badge: {id}.svg or {id}.json (free)", parameters: [{ name: "file", in: "path", required: true, schema: { type: "string", pattern: "^men_[a-f0-9]{24}\\.(svg|json)$" } }], responses: R({ "200": "Badge", "404": "Unknown seller" }) } },
@@ -157,7 +165,7 @@ Docs: \`GET ${base}/v1/monitor\`. Plans priced **per endpoint per 30 days**, pai
 - **Audit** ${m("audit")} one-off: a test-buy of every listed endpoint, full report signed by Lumi's XRPL wallet.
 - **Free Watch**: $0, ${WATCH_FREE.endpoints} endpoint, a daily quote check, no test-buys, no badge (\`POST /v1/monitor/free\`).
 - **${WATCH_TRIAL.days}-day Watch Plus trial**: one per seller (prove the domain and the payTo wallet), test-buys capped at $${WATCH_TRIAL.capUsd} total, no card, never auto-converts. ${WATCH_TRIAL_END}
-- Legacy plans **Monitor** (\`monitor\`, ${m("monitor")}/30 days) and **Monitor Plus** (\`monitor_plus\`, ${m("monitor_plus")}/30 days) stay valid and are grandfathered: existing terms run to their end and renewals still work. New sellers should pick a Watch tier.
+- The old **Monitor** and **Monitor Plus** plans are no longer sold (their subscribe paths answer 410, never charged); terms bought before 2026-10-25 run to their end.
 
 Steps: \`GET /v1/monitor/challenge?pay_to=<payTo>\` → sign it with the payTo wallet (XRPL: ripple-keypairs; Base: EIP-191) → \`POST /v1/monitor/enroll\` with endpoints and a webhook URL and/or email → pay \`GET /v1/monitor/subscribe/{watch|watch_plus|watch_pro|audit}?enrollment=<id>&endpoints=<N>&terms=<1|3>\`. Each test-buy is capped at $${MONITOR_LIMITS.maxBuyUsd} (Watch: $${WATCH_TIERS.watch.maxBuyUsd}); test-buys never exceed ${MONITOR_LIMITS.budgetShare * 100}% of the fee. Public status page: \`/v1/monitor/status/<id>\`. Alerts: paid but no/invalid data, 5xx/timeouts, payTo change, price change, schema change, recovery. Paying never changes a score; seller-funded tests are labelled; findings can be replied to, not removed; the badge (\`/v1/monitor/badge/<id>.svg\`) is removed automatically on failure or lapse; corrections: \`/v1/monitor/corrections\`.
 

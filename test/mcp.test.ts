@@ -56,7 +56,7 @@ describe("remote MCP: protocol", () => {
     const mismatch = await rpc("tools/list", meta, { headers: { "MCP-Protocol-Version": "2025-06-18" } });
     expect(mismatch.status).toBe(400);
     expect(mismatch.body.error.code).toBe(-32020);
-    const nameMismatch = await rpc("tools/call", { ...meta, name: "lumi_coins" }, { headers: { "Mcp-Name": "lumi_brief" } });
+    const nameMismatch = await rpc("tools/call", { ...meta, name: "lumi_catalog" }, { headers: { "Mcp-Name": "lumi_market" } });
     expect(nameMismatch.body.error.code).toBe(-32020);
     const nf = await rpc("nope/nope", meta);
     expect(nf.status).toBe(404);
@@ -88,7 +88,7 @@ describe("remote MCP: protocol", () => {
     expect(r.headers.get("Content-Type")).toBe("text/event-stream");
     const t = await r.text();
     expect(t).toMatch(/^event: message\ndata: /);
-    expect(JSON.parse(t.split("data: ")[1]).result.tools.length).toBe(24);
+    expect(JSON.parse(t.split("data: ")[1]).result.tools.length).toBe(17);
   });
 });
 
@@ -99,7 +99,7 @@ describe("remote MCP: tools", () => {
     const src = readFileSync(join(__dirname, "..", "mcp", "src", "index.js"), "utf8");
     const wrapper = [...src.matchAll(/name: "(lumi_[a-z0-9_]+)"/g), ...src.matchAll(/registerTool\(\s*"(lumi_[a-z0-9_]+)"/g)].map((m) => m[1]);
     expect(new Set(names)).toEqual(new Set(wrapper));
-    expect(names).toHaveLength(24);
+    expect(names).toHaveLength(17);
   });
 
   it("lumi_verdict answers with a label when the verdict is free (VERDICT_PRICING=free)", async () => {
@@ -124,55 +124,55 @@ describe("remote MCP: tools", () => {
 
   it("free tools work without a key", async () => {
     const { call } = setup();
-    const coins = JSON.parse(textOf((await call("lumi_coins")).body));
-    expect(coins).toHaveLength(49);
     const cat = JSON.parse(textOf((await call("lumi_catalog")).body));
-    expect(cat.endpoints).toHaveLength(17);
+    expect(cat.endpoints).toHaveLength(11);
     expect(cat.access).toMatch(/^public/);
-    const q = JSON.parse(textOf((await call("lumi_quote", { path: "/v1/brief" })).body));
+    const q = JSON.parse(textOf((await call("lumi_quote", { path: "/v1/market" })).body));
     expect(q.status).toBe(402);
-    expect(q.options[0]).toMatchObject({ asset: "XRP", amount: "0.015" });
+    expect(q.options[0]).toMatchObject({ asset: "XRP", amount: "0.01" });
+    const gone = JSON.parse(textOf((await call("lumi_quote", { path: "/v1/brief" })).body));
+    expect(gone.status).toBe(410);
   });
 
   it("paid tool without a key: payment explanation, no charge, no facilitator call", async () => {
     const { call, fac } = setup();
-    const r = await call("lumi_brief");
+    const r = await call("lumi_market");
     expect(r.status).toBe(200);
     expect(r.body.result.isError).toBe(true);
     const t = textOf(r.body);
-    expect(t).toMatch(/0\.015 XRP/);
+    expect(t).toMatch(/0\.01 XRP/);
     expect(t).toMatch(/x402/);
     expect(t).toMatch(/lumi-trades-mcp/);
-    expect(t).toContain(`${BASE}/v1/brief`);
-    expect(t).not.toMatch(/"btc"/);
+    expect(t).toContain(`${BASE}/v1/market`);
+    expect(t).not.toMatch(/"btc_backdrop"/);
     expect(fac.calls).toHaveLength(0);
     // a wrong bearer is just public access
-    const w = await call("lumi_signal", { coin: "XRP" }, { headers: { Authorization: "Bearer wrong" } });
+    const w = await call("lumi_macro_yen", {}, { headers: { Authorization: "Bearer wrong" } });
     expect(textOf(w.body)).toMatch(/payment_required/);
   });
 
   it("paid tool with the owner key (header and path) returns data, free", async () => {
     const { call, fac, logs } = setup();
-    const viaHeader = await call("lumi_signal", { coin: "xrp" }, { headers: { Authorization: `Bearer ${KEY}` } });
+    const viaHeader = await call("lumi_macro_yen", {}, { headers: { Authorization: `Bearer ${KEY}` } });
     expect(viaHeader.body.result.isError).toBeUndefined();
-    const sig = JSON.parse(textOf(viaHeader.body));
-    expect(sig).toMatchObject({ kind: "signal", coin: { symbol: "XRP" }, access: { mode: "owner", charged: false } });
-    const viaPath = await call("lumi_brief", {}, { path: `/mcp/${KEY}` });
-    const brief = JSON.parse(textOf(viaPath.body));
-    expect(brief.kind).toBe("brief");
-    const md = await call("lumi_brief", { format: "md" }, { path: `/mcp/${KEY}` });
+    const yen = JSON.parse(textOf(viaHeader.body));
+    expect(yen).toMatchObject({ kind: "macro_yen", access: { mode: "owner", charged: false } });
+    const viaPath = await call("lumi_market", {}, { path: `/mcp/${KEY}` });
+    const market = JSON.parse(textOf(viaPath.body));
+    expect(market.kind).toBe("market");
+    const md = await call("lumi_institutional_brief", { format: "md" }, { path: `/mcp/${KEY}` });
     expect(textOf(md.body)).toMatch(/^#|\*\*/m);
     expect(fac.calls).toHaveLength(0);
     expect(JSON.stringify(logs)).not.toContain(KEY);
   });
 
-  it("wrong path key is 404; unknown coin and bad args are tool errors", async () => {
+  it("wrong path key is 404; retired tools and bad args are tool errors", async () => {
     const { call, rpc } = setup();
-    expect((await call("lumi_brief", {}, { path: "/mcp/" + "x".repeat(52) })).status).toBe(404);
-    const unk = await call("lumi_signal", { coin: "NOPE" }, { headers: { Authorization: `Bearer ${KEY}` } });
-    expect(unk.body.result.isError).toBe(true);
-    expect(textOf(unk.body)).toMatch(/unknown_coin/);
-    expect((await call("lumi_signal", {})).body.result.isError).toBe(true);
+    expect((await call("lumi_market", {}, { path: "/mcp/" + "x".repeat(52) })).status).toBe(404);
+    const gone = await call("lumi_signal", { coin: "XRP" }, { headers: { Authorization: `Bearer ${KEY}` } });
+    expect(gone.body.result.isError).toBe(true);
+    expect(textOf(gone.body)).toMatch(/"gone"/);
+    expect((await call("lumi_trust_check", {})).body.result.isError).toBe(true);
     expect((await rpc("tools/call", { name: "nope" })).body.error.code).toBe(-32602);
   });
 

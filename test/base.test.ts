@@ -75,10 +75,10 @@ describe("Base config", () => {
       eip712: { name: "USD Coin", version: "2" }, explorer: "https://basescan.org/tx/",
     });
     expect(main.evm!.prices).toEqual(Object.fromEntries(main.ious[1].prices ? Object.entries(main.ious[1].prices) : []));
-    expect(main.evm!.amounts).toMatchObject({ signal: "10000", brief: "20000", yen: "10000", sentiment: "5000" });
+    expect(main.evm!.amounts).toMatchObject({ market: "20000", yen: "10000", sentiment: "5000", institutional: "100000" });
     expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO, EVM_PAY_TO, ACCEPT_BASE_USDC: "false" }).evm).toBeUndefined();
     expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO, EVM_PAY_TO, EVM_NETWORK: "eip155:84532" }).evm!.facilitatorUrl).toBe("https://x402.org/facilitator");
-    expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO, EVM_PAY_TO, PRICE_SLATE_BASE_USDC: "0.05" }).evm!.amounts.slate).toBe("50000");
+    expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO, EVM_PAY_TO, PRICE_MARKET_BASE_USDC: "0.05" }).evm!.amounts.market).toBe("50000");
     expect(() => loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO, EVM_PAY_TO: "0x123" })).toThrow(/EVM_PAY_TO/);
     expect(() => loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO, EVM_PAY_TO, EVM_NETWORK: "eip155:1" })).toThrow(/EVM_NETWORK/);
   });
@@ -98,7 +98,7 @@ describe("Base USDC in the 402", () => {
   it("adds Base after the unchanged XRPL options, sharing one invoice, valid per the x402 v2 schema", async () => {
     const { get } = setup();
     const plain = setup({ env: { EVM_PAY_TO: "" } });
-    for (const [path, atomic] of [["/v1/signal/XRP", "10000"], ["/v1/slate", "20000"], ["/v1/brief", "20000"], ["/v1/macro/yen", "10000"]]) {
+    for (const [path, atomic] of [["/v1/macro/yen", "10000"], ["/v1/market", "20000"], ["/v1/market", "20000"], ["/v1/macro/yen", "10000"]]) {
       const r = await get(path);
       expect(r.status).toBe(402);
       const body = await r.json();
@@ -149,7 +149,7 @@ describe("Base payment with the official @x402/fetch client", () => {
     });
     const { appFetch } = setup({ evm });
     const { account, client } = buyer();
-    const r = await wrapFetchWithPayment(appFetch, client)(BASE + "/v1/slate");
+    const r = await wrapFetchWithPayment(appFetch, client)(BASE + "/v1/market");
     expect(r.status).toBe(200);
     expect((await r.json()).payment.payer).toBe(account.address);
     expect(decodePaymentResponseHeader(r.headers.get("PAYMENT-RESPONSE")!).payer).toBe(account.address);
@@ -158,16 +158,16 @@ describe("Base payment with the official @x402/fetch client", () => {
   it("refuses replay of the same header and reuse of one authorization against a fresh invoice", async () => {
     const { get, evm } = setup();
     const { client } = buyer();
-    const first = await (await get("/v1/slate")).json();
+    const first = await (await get("/v1/market")).json();
     const { header, payload } = await signBase(first, client);
-    expect((await get("/v1/slate", { "PAYMENT-SIGNATURE": header })).status).toBe(200);
-    const replay = await get("/v1/slate", { "PAYMENT-SIGNATURE": header });
+    expect((await get("/v1/market", { "PAYMENT-SIGNATURE": header })).status).toBe(200);
+    const replay = await get("/v1/market", { "PAYMENT-SIGNATURE": header });
     expect(replay.status).toBe(402);
     expect((await replay.json()).error).toBe("invoice_already_used");
     // same signed authorization, new invoice
-    const second = await (await get("/v1/slate")).json();
+    const second = await (await get("/v1/market")).json();
     const reused = { ...payload, accepted: second.accepts[0] };
-    const r = await get("/v1/slate", { "PAYMENT-SIGNATURE": Buffer.from(JSON.stringify(reused)).toString("base64") });
+    const r = await get("/v1/market", { "PAYMENT-SIGNATURE": Buffer.from(JSON.stringify(reused)).toString("base64") });
     expect(r.status).toBe(402);
     expect((await r.json()).error).toBe("authorization_already_used");
     expect(evm.calls.filter((c) => c.path === "/settle")).toHaveLength(1);
@@ -210,8 +210,8 @@ describe("Base payment with the official @x402/fetch client", () => {
   it("maps facilitator outcomes like the XRPL path (re-quote, retryable 503, 409 unknown)", async () => {
     const run = async (evm: FakeFacilitator) => {
       const s = setup({ evm });
-      const { header } = await signBase(await (await s.get("/v1/slate")).json());
-      return { r: await s.get("/v1/slate", { "PAYMENT-SIGNATURE": header }), evm };
+      const { header } = await signBase(await (await s.get("/v1/market")).json());
+      return { r: await s.get("/v1/market", { "PAYMENT-SIGNATURE": header }), evm };
     };
     let x = await run(evmFacilitator({ verify: () => jsonResponse(400, { isValid: false, invalidReason: "insufficient_funds" }) }));
     expect(x.r.status).toBe(402);
@@ -253,13 +253,13 @@ describe("Base payment with the official @x402/fetch client", () => {
 
   it("leaves the XRPL flow unchanged when Base is enabled", async () => {
     const { get, evm, xrpl } = setup();
-    const body = await (await get("/v1/signal/XRP")).json();
-    const r = await get("/v1/signal/XRP", { "PAYMENT-SIGNATURE": paymentHeaderFor(body.accepts[1]) });
+    const body = await (await get("/v1/macro/yen")).json();
+    const r = await get("/v1/macro/yen", { "PAYMENT-SIGNATURE": paymentHeaderFor(body.accepts[1]) });
     expect(r.status).toBe(200);
     expect(xrpl.calls.map((c) => c.path)).toEqual(["/verify", "/settle"]);
     expect(xrpl.calls[0].body).toEqual({ paymentPayload: expect.any(Object), paymentRequirements: body.accepts[1] });
     expect(evm.calls).toHaveLength(0);
-    expect((await r.json()).payment).toMatchObject({ asset: "XRP", amount: "0.005", amount_drops: "5000", network: "xrpl:1" });
+    expect((await r.json()).payment).toMatchObject({ asset: "XRP", amount: "0.0075", amount_drops: "7500", network: "xrpl:1" });
   });
 });
 
@@ -272,17 +272,17 @@ describe("discovery lists both networks", () => {
     expect(index.payment.assets[0]).toMatchObject({ symbol: "USDC", network: "eip155:84532", asset: SEPOLIA_USDC, accepts_index: 0 });
     expect(index.payment.assets[1]).toMatchObject({ symbol: "XRP", accepts_index: 1 });
     expect(index.free_endpoints.map((e: any) => e.path)).toContain("/.well-known/agent-card.json");
-    expect(index.paid_endpoints[0].prices[0]).toMatchObject({ asset: "USDC", network: "eip155:84532", amount: "0.01" });
+    expect(index.paid_endpoints[0].prices[0]).toMatchObject({ asset: "USDC", network: "eip155:84532", amount: "0.02" }); // /v1/market
     expect((await (await get("/health")).json()).evm).toMatchObject({ network: "eip155:84532", pay_to: EVM_PAY_TO });
     const wk = await (await get("/.well-known/x402")).json();
-    expect(wk.resources[0].accepts[0]).toMatchObject({ network: "eip155:84532", asset: SEPOLIA_USDC, amount: "10000", payTo: EVM_PAY_TO });
+    expect(wk.resources[0].accepts[0]).toMatchObject({ network: "eip155:84532", asset: SEPOLIA_USDC, amount: "20000", payTo: EVM_PAY_TO });
     expect(wk.facilitators).toEqual([FACILITATOR, EVM_FAC]);
     expect(wk.agent_card).toBe(`${BASE}/.well-known/agent-card.json`);
     const oa = await (await get("/openapi.json")).json();
     expect(oa.info.version).toBe("1.1.7");
     // Base first: the primary x-payment-info is Base USDC; XRPL rails follow as alternatives.
-    expect(oa.paths["/v1/brief"].get["x-payment-info"]).toMatchObject({ network: "eip155:84532", amount: "20000" });
-    expect(oa.paths["/v1/brief"].get["x-payment-info"].alternatives[0].network).toBe("xrpl:1");
+    expect(oa.paths["/v1/market"].get["x-payment-info"]).toMatchObject({ network: "eip155:84532", amount: "20000" });
+    expect(oa.paths["/v1/market"].get["x-payment-info"].alternatives[0].network).toBe("xrpl:1");
     for (const p of ["/skill.md", "/llms.txt"]) {
       const md = await (await get(p)).text();
       expect(md).toContain("eip155:84532");

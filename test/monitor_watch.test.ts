@@ -34,7 +34,7 @@ function setup(extra: Record<string, string> = {}) {
 }
 type S = ReturnType<typeof setup>;
 
-async function enroll(s: S, endpoints: unknown[] = [{ url: `${BASE}/v1/lite/XRP` }]) {
+async function enroll(s: S, endpoints: unknown[] = [{ url: `${BASE}/v1/fear-greed` }]) {
   const { message } = await (await s.req(`/v1/monitor/challenge?pay_to=${SELLER}`)).json();
   const r = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints });
   expect(r.status).toBe(201);
@@ -173,24 +173,24 @@ describe("Watch pricing", () => {
     expect(settles(s)).toBe(2);
   });
 
-  it("legacy plans stay sellable (grandfathered) and answer 410 only once retired", async () => {
+  it("legacy Monitor terms bought before retirement keep running; new purchases answer 410", async () => {
     const s = setup({ SALES_TEST_WALLETS: SELLER });
     const e = await enroll(s);
-    const r = await pay(s, `/v1/monitor/subscribe/monitor?enrollment=${e.enrollment_id}`);
+    PLANS.monitor.retired = false; // simulate a purchase made before 2026-10-25
+    let r;
+    try {
+      r = await pay(s, `/v1/monitor/subscribe/monitor?enrollment=${e.enrollment_id}`);
+    } finally {
+      PLANS.monitor.retired = true;
+    }
     expect(r.status).toBe(201);
     expect(r.body.legacy).toMatch(/Grandfathered/);
-    PLANS.monitor.retired = true;
-    try {
-      const gone = await s.req(`/v1/monitor/subscribe/monitor?enrollment=${e.enrollment_id}`);
-      expect(gone.status).toBe(410);
-      const e2 = await enroll(s);
-      expect(e2.pay.monitor).toBeUndefined();
-      // the existing legacy term keeps running
-      const page = await (await s.req(`/v1/monitor/sellers/${e.enrollment_id}`)).json();
-      expect(page.commercial_relationship.status).toBe("active");
-    } finally {
-      delete PLANS.monitor.retired;
-    }
+    const gone = await s.req(`/v1/monitor/subscribe/monitor?enrollment=${e.enrollment_id}`);
+    expect(gone.status).toBe(410);
+    const e2 = await enroll(s);
+    expect(e2.pay.monitor).toBeUndefined();
+    const page = await (await s.req(`/v1/monitor/sellers/${e.enrollment_id}`)).json();
+    expect(page.commercial_relationship.status).toBe("active");
   });
 });
 
@@ -209,7 +209,7 @@ describe("Free Watch", () => {
     expect((await s.post("/v1/monitor/free", { enrollment_id: e2.enrollment_id }, { Authorization: `Bearer ${e2.management_token}` })).status).toBe(409);
     const due = await (await s.req("/v1/owner/monitor/due", { headers: auth })).json();
     expect(due.tasks.filter((t: any) => t.enrollment_id === e.enrollment_id)).toHaveLength(0);
-    const res = await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: b.plan_id, endpoint: `${BASE}/v1/lite/XRP`, network: "xrpl:1", asset: "XRP", outcome: "delivered", http_status: 200, data_returned: true, tx_hash: "D".repeat(64), cost_usd: 0.003 }] }, auth);
+    const res = await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: b.plan_id, endpoint: `${BASE}/v1/fear-greed`, network: "xrpl:1", asset: "XRP", outcome: "delivered", http_status: 200, data_returned: true, tx_hash: "D".repeat(64), cost_usd: 0.003 }] }, auth);
     expect(JSON.stringify(await res.json())).toMatch(/free|no_test_buys|rejected/i);
     const badge = await (await s.req(`/v1/monitor/badge/${e.enrollment_id}.json`)).json();
     expect(badge.status).toBe("removed");
@@ -313,7 +313,7 @@ describe("legal wording (review 2026-10-23)", () => {
     const e = await enroll(s);
     const paid = await pay(s, `/v1/monitor/subscribe/watch?enrollment=${e.enrollment_id}&endpoints=1`);
     const planId = paid.body.plan_id ?? paid.body.plans?.[0]?.plan_id;
-    const r = await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: planId, endpoint: `${BASE}/v1/lite/XRP`, network: "xrpl:1", asset: "XRP", quote_pay_to: SELLER, outcome: "delivered", http_status: 200, data_returned: true, tx_hash: "A".repeat(64), cost_usd: 0.003 }] }, auth);
+    const r = await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: planId, endpoint: `${BASE}/v1/fear-greed`, network: "xrpl:1", asset: "XRP", quote_pay_to: SELLER, outcome: "delivered", http_status: 200, data_returned: true, tx_hash: "A".repeat(64), cost_usd: 0.003 }] }, auth);
     expect(r.status).toBe(200);
     const b = await (await s.req(`/v1/monitor/badge/${e.enrollment_id}.json`)).json();
     expect(b).toMatchObject({ label: PAID_BADGE_LABEL, paid: true });
@@ -337,7 +337,7 @@ describe("uptime rollups and status page", () => {
   it("accepts daily rollups inside the plan period, turns transitions into findings and renders a status page", async () => {
     const s = setup({ SALES_TEST_WALLETS: SELLER });
     const e = await enroll(s);
-    const ep = `${BASE}/v1/lite/XRP`;
+    const ep = `${BASE}/v1/fear-greed`;
     await pay(s, `/v1/monitor/subscribe/watch?enrollment=${e.enrollment_id}&endpoints=1`);
     const today = new Date(s.now()).toISOString().slice(0, 10);
     const probes = await (await s.req("/v1/owner/monitor/probes", { headers: auth })).json();
@@ -365,7 +365,7 @@ describe("uptime rollups and status page", () => {
 describe("independence: no tier changes a score", () => {
   it("trust answers are identical before and after free, trial, Watch, Watch Plus, Watch Pro and Audit", async () => {
     const strip = (x: any) => JSON.parse(JSON.stringify(x, (k, v) => (k === "commercial_relationship" || k === "generated_at" || k === "as_of" ? undefined : v)));
-    for (const tier of ["watch_free", "watch_plus_trial", "watch", "watch_plus", "watch_pro", "audit", "monitor_plus"]) {
+    for (const tier of ["watch_free", "watch_plus_trial", "watch", "watch_plus", "watch_pro", "audit"]) {
       const s = setup({ SALES_TEST_WALLETS: SELLER });
       const before = await (await s.req(`/v1/trust/vendors?payTo=${SELLER}`)).json();
       const catBefore = await (await s.req("/v1/trust/catalog")).json();
