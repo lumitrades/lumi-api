@@ -71,14 +71,14 @@ describe("v1.1.1 policies and metadata", () => {
     expect(JSON.stringify(mon)).toMatch(/refund/i);
   });
 
-  it("trust routes are listed as 'Lumi Trust'; trust check declares url required in Bazaar; no 'Crypto crypto'", async () => {
+  it("every route is listed as 'Lumi Trades'; trust check declares url required in Bazaar; no 'Crypto crypto'", async () => {
     const { get } = setup();
     const t = await (await get("/v1/trust/check")).json();
-    expect(t.resource.serviceName).toBe("Lumi Trust");
+    expect(t.resource.serviceName).toBe("Lumi Trades");
     expect(t.extensions.bazaar.info.input.queryParams?.url ?? t.extensions.bazaar.info.input.queryParams).toBeTruthy();
     expect(JSON.stringify(t.extensions.bazaar.schema)).toContain('"required":["url"]');
     const s = await (await get("/v1/signal/xrp")).json();
-    expect(s.resource.serviceName).toBe("Lumi Market Ideas");
+    expect(s.resource.serviceName).toBe("Lumi Trades");
     for (const p of ["/v1/signal/btc", "/v1/lite/btc", "/v1/levels/btc", "/v1/scan"]) expect(JSON.stringify(await (await get(p)).json()), p).not.toMatch(/crypto crypto/i);
     for (const r of Object.values(BAZAAR_ROUTES)) expect(r.description.length).toBeLessThanOrEqual(500);
   });

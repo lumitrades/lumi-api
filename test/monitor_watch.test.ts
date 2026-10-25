@@ -327,7 +327,7 @@ describe("legal wording (review 2026-10-23)", () => {
     expect(PLANS.watch_pro.summary).toContain(WATCH_PRO_BUYS);
     const s = setup();
     const texts = [MONITOR_PRICE_TEXT, PLANS.watch_plus.summary, await (await s.req("/llms.txt")).text(), JSON.stringify(await (await s.req("/v1/monitor")).json())];
-    for (const t of texts) { expect(t).not.toContain("15-30"); expect(t).not.toMatch(/the owner/); }
+    for (const t of texts) { expect(t).not.toContain("15-30"); expect(t).not.toMatch(/approved by/i); if (process.env.LUMI_OWNER_NAME) expect(t).not.toContain(process.env.LUMI_OWNER_NAME); }
     expect(texts[2]).toContain(WATCH_PRO_BUYS);
     expect(texts[2]).toContain(WATCH_TRIAL_END);
   });

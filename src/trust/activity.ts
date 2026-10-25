@@ -64,6 +64,19 @@ export type ActivityPublic =
 export function activityFlags(r: Pick<ActivityRow, "self_funded_share">, th: Pick<VerdictThresholds, "selfFundedPct">): ActivityFlag[] {
   return r.self_funded_share != null && r.self_funded_share * 100 >= th.selfFundedPct ? ["self_funded_loop"] : [];
 }
+/** Qualified wording for the check's organic_payers reason when the seller is flagged self_funded_loop (owner decision 2026-10-25). */
+export const ORGANIC_QUALIFIED_NOTE = "Lumi's funding-source analysis flags this seller as self_funded_loop: much of its paying volume comes from wallets the seller funded or from its own promotional credits or prizes, so this payer count may not show independent demand.";
+/**
+ * Check reasons with organic_payers qualified when the seller's activity row carries the self_funded_loop flag: each
+ * organic_payers reason becomes organic_payers_qualified (detail extended) and one self_funded_loop info reason is added.
+ * Severity stays "info", so the decision and label are unchanged. Reasons are returned untouched when there is no flag.
+ */
+export function qualifyOrganicPayers<R extends { code: string; severity: string; detail?: string }>(reasons: R[], flags: ActivityFlag[]): R[] {
+  if (!flags.includes("self_funded_loop") || !reasons.some((r) => r.code === "organic_payers")) return reasons;
+  const out = reasons.map((r) => (r.code === "organic_payers" ? { ...r, code: "organic_payers_qualified", detail: `${r.detail ?? ""} ${ORGANIC_QUALIFIED_NOTE}`.trim() } : r));
+  if (!out.some((r) => r.code === "self_funded_loop")) out.push({ code: "self_funded_loop", severity: "info", detail: SELF_FUNDED_NOTE } as R);
+  return out;
+}
 const HOST_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$/;
 const PAYTO_RE = /^(?:0x[0-9a-f]{40}|r[1-9a-hj-np-z]{24,34}|g[a-z2-7]{55}|[1-9a-hj-np-z]{32,44})$/;
 
