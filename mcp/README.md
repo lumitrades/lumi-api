@@ -37,7 +37,7 @@ use this package when you want paid tools to pay automatically from your own wal
 | `lumi_check` | free | `url?` `pay_to?` `amount_usd?` `network?` | **Lumi Check** before you pay any x402 seller: allow / warn / block with reasons, the seller's score and a link to its live report. Signed by Lumi and verified locally. Only origin + path of the URL is sent. Fail-open: warn if Lumi is unreachable within 2.5 s |
 | `lumi_scan_seller` | free | `url` | Fetch an x402 seller's 402 quote without paying, plus a dry-run test-buy plan against local caps |
 | `lumi_report_receipt` | free | `endpoint` `network` `tx_hash` … | Sign a receipt for a purchase you already made. `submit: true` is tier 2 sharing: off by default, needs `LUMI_SHARE_RECEIPTS=1` or `lumi-scan sharing on`. Shares the payment's chain and transaction ID, which is public on-chain and linkable to the paying wallet. Verified receipts earn a public badge only |
-| `lumi_trust_check` | paid | $0.004 | Pre-payment check of any x402 URL you are about to pay: payTo/price mismatches vs listings and Lumi's observations. `url` required |
+| `lumi_trust_check` | paid | $0.02 | Pre-payment check of any x402 URL you are about to pay: payTo/price mismatches vs listings and Lumi's observations. `url` required |
 | `lumi_vendor_report` | paid | $0.02 | Full observation history for one x402 vendor on Lumi's trust list: every quote check (90 days) and paid test-buy with tx hash and delivered yes/no, latency stats and trend, uptime %, verified agent reports, vendor replies, confidence labels. `vendor_id` required |
 
 **Market data**

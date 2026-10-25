@@ -71,7 +71,7 @@ export const VENDOR_REPORT_TOOL_DESCRIPTION =
 export const TRUST_CHECK_TOOL_DESCRIPTION =
   "Should I pay this x402 URL? allow / warn / block with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
   "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Links the free lookup and, for curated vendors, the $0.02 full report. " +
-  "Observations, not a guarantee. Paid: $0.004 per call (USDC/RLUSD, or the XRP equivalent).";
+  "Observations, not a guarantee. Paid: $0.02 per call (USDC/RLUSD, or the XRP equivalent).";
 
 export const INSTITUTIONAL_TOOL_DESCRIPTION =
   "Daily policy brief: what BIS, IMF, US Treasury/OCC, Fed, SEC, CFTC, JPMorgan (Kinexys), SBI, Cross River, Securitize, R3 " +

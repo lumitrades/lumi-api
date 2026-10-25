@@ -785,7 +785,7 @@ export function catalogView(row: CatalogRow, buys: BuyRow[], dom: DomainRow | un
 
 /**
  * Free, answer-only view of one catalog entry: tier and the yes/no outcome of the latest checks. No tx hashes, receipts,
- * check history or latency series: that evidence is in the paid /v1/trust/check ($0.004) and vendor report ($0.02).
+ * check history or latency series: that evidence is in the paid /v1/trust/check ($0.02) and vendor report ($0.02).
  */
 export function catalogFreeView(row: CatalogRow, buys: BuyRow[], now: number) {
   let accepts: any[] = [];

@@ -22,7 +22,7 @@ describe("config", () => {
     expect(cfg.pricesDrops).toEqual({
       signal: "5000", levels: "5000", slate: "10000", market: "10000",
       brief: "15000", yen: "7500", sentiment: "3800", events: "3800", institutional: "77000", vendor_report: "15000",
-      scan: "15000", lite: "3000", trust_check: "3000", funding: "2300", fear_greed: "2300", events_48h: "2300", verdict: "7500",
+      scan: "15000", lite: "3000", trust_check: "15000", funding: "2300", fear_greed: "2300", events_48h: "2300", verdict: "7500",
     });
     expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_YEN_XRP: "0.02" }).pricesDrops.yen).toBe("20000");
   });
