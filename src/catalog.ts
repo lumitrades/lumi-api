@@ -29,7 +29,7 @@ export const EXAMPLE_COIN = "XRP" as const;
 export const PAID_ENDPOINTS: PaidEndpoint[] = [
   {
     route: "signal",
-    name: "Lumi Market Ideas: coin signal (buy/sell read)",
+    name: "Lumi Trades: coin technical read (label, score, indicators)",
     method: "GET",
     path: "/v1/signal/{coin}",
     template: "/v1/signal/{coin}",
@@ -40,7 +40,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "levels",
-    name: "Lumi Market Ideas: support/resistance + 7-day scenario levels",
+    name: "Lumi Trades: support and resistance levels",
     method: "GET",
     path: "/v1/levels/{coin}",
     template: "/v1/levels/{coin}",
@@ -51,7 +51,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "scan",
-    name: "Lumi Market Ideas: all-coins scan (50 signals in one call)",
+    name: "Lumi Trades: all-coins scan (50 indicator reads in one call)",
     method: "GET",
     path: "/v1/scan",
     template: "/v1/scan",
@@ -62,7 +62,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "lite",
-    name: "Lumi Market Ideas: lite coin signal (label, score, price)",
+    name: "Lumi Trades: lite coin read (label, score, price)",
     method: "GET",
     path: "/v1/lite/{coin}",
     template: "/v1/lite/{coin}",
@@ -73,7 +73,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "slate",
-    name: "Lumi Market Ideas: paper-trade slate (current ideas)",
+    name: "Lumi Trades: paper-trade journal (current ideas)",
     method: "GET",
     path: "/v1/slate",
     template: "/v1/slate",
@@ -84,7 +84,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "market",
-    name: "Lumi BTC + macro market backdrop",
+    name: "Lumi Trades: BTC + macro market backdrop",
     method: "GET",
     path: "/v1/market",
     template: "/v1/market",
@@ -94,7 +94,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "brief",
-    name: "Lumi daily crypto market brief",
+    name: "Lumi Trades: daily crypto market brief",
     method: "GET",
     path: "/v1/brief",
     template: "/v1/brief",
@@ -106,7 +106,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "yen",
-    name: "Lumi yen carry-trade watch (USD/JPY, Nikkei)",
+    name: "Lumi Trades: yen carry-trade watch (USD/JPY, Nikkei)",
     method: "GET",
     path: "/v1/macro/yen",
     template: "/v1/macro/yen",
@@ -117,7 +117,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "sentiment",
-    name: "Lumi crypto sentiment (Fear & Greed, funding)",
+    name: "Lumi Trades: crypto sentiment (Fear & Greed, funding)",
     method: "GET",
     path: "/v1/sentiment",
     template: "/v1/sentiment",
@@ -128,7 +128,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "events",
-    name: "Lumi macro + crypto events calendar",
+    name: "Lumi Trades: macro + crypto events calendar",
     method: "GET",
     path: "/v1/events",
     template: "/v1/events",
@@ -139,7 +139,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "funding",
-    name: "Lumi perpetual funding rates (OKX perps)",
+    name: "Lumi Trades: perpetual funding rates (OKX perps)",
     method: "GET",
     path: "/v1/funding",
     template: "/v1/funding",
@@ -149,7 +149,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "fear_greed",
-    name: "Lumi Fear & Greed (CoinMarketCap, with history)",
+    name: "Lumi Trades: Fear & Greed (CoinMarketCap, with history)",
     method: "GET",
     path: "/v1/fear-greed",
     template: "/v1/fear-greed",
@@ -159,7 +159,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "events_48h",
-    name: "Lumi events in the next 48 hours",
+    name: "Lumi Trades: events in the next 48 hours",
     method: "GET",
     path: "/v1/events/next48h",
     template: "/v1/events/next48h",
@@ -169,7 +169,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "institutional",
-    name: "Lumi Institutional & Policy Brief (daily)",
+    name: "Lumi Trades: Institutional & Policy Brief (daily)",
     method: "GET",
     path: "/v1/institutional",
     template: "/v1/institutional",
@@ -183,7 +183,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "trust_check",
-    name: "Lumi x402 pay check (allow / warn / block)",
+    name: "Lumi Trades: check before paying an x402 URL (allow / warn / block)",
     method: "GET",
     path: "/v1/trust/check",
     template: "/v1/trust/check",
@@ -193,7 +193,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "vendor_report",
-    name: "Lumi x402 vendor report (full observation history)",
+    name: "Lumi Trades: x402 seller reputation report (full observation history)",
     method: "GET",
     path: "/v1/trust/vendors/{id}/report",
     template: "/v1/trust/vendors/{id}/report",
@@ -213,7 +213,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
  */
 export const VERDICT_ENDPOINT: PaidEndpoint = {
   route: "verdict",
-  name: "Lumi pre-payment check: one label (checks_passed / check_first / checks_failed / no_data)",
+  name: "Lumi Trades: check before paying, one label (checks_passed / check_first / checks_failed / no_data)",
   method: "GET",
   path: "/v1/verdict",
   template: "/v1/verdict",

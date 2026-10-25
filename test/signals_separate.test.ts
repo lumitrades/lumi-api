@@ -78,8 +78,9 @@ describe("Lumi Market Ideas is separated from the trust brand", () => {
     for (const s of ideaSkills) expect(s.name, s.id).toMatch(/^Lumi Market Ideas: /);
     for (const r of MARKET_IDEAS_ROUTES) {
       const b = (BAZAAR_ROUTES as any)[r];
-      expect(b.description, r).toMatch(/^Lumi Market Ideas \(educational, not financial advice\)\./);
-      expect(b.description, r).toContain("not investment advice");
+      // Owner decision 2026-10-25: listings start "Use when", one brand ("Lumi Trades"), disclaimers at the end.
+      expect(b.description, r).toMatch(/^Use when /);
+      expect(b.description, r.toString()).toMatch(/Educational, not financial advice\. Paper-trade analysis, not investment advice\. Lumi does not trade real money\.$/);
       expect(b.description.length, r).toBeLessThanOrEqual(BAZAAR_MAX_DESCRIPTION);
     }
     for (const t of PAID_TOOLS.filter((t) => MARKET_IDEAS_ROUTES.includes(t.route))) expect(t.description, t.name).toContain(MARKET_IDEAS_NOTICE);

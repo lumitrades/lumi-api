@@ -5,7 +5,7 @@ import { WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./com
 import type { Config, PaidRoute } from "./config";
 import { EXPLORERS, dropsToXrp } from "./config";
 import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable, EXAMPLE_COIN } from "./catalog";
-import { BAZAAR_ROUTES, TRUST_ROUTES, VENDOR_ID_PATTERN, serviceNameFor } from "./bazaar";
+import { BAZAAR_ROUTES, TRUST_ROUTES, VENDOR_ID_PATTERN, errorDocs, serviceNameFor } from "./bazaar";
 import { DISCLAIMER, SOURCE, type CoinRef } from "./views";
 import { RECEIPT_OUTCOMES } from "./trust/receipts";
 import { LINE_LABEL, MARKET_IDEAS_LABEL, MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, MARKET_IDEAS_ROUTES, MARKET_IDEAS_TOOLS, HEADER_NOTICE, HEADER_PRODUCT_LINE, OPENAPI_TAG, OPENAPI_TAGS, productLine } from "./lines";
@@ -205,8 +205,8 @@ export function wellKnownX402(cfg: Config, base: string) {
   return {
     x402Version: 2,
     kind: "resource-server",
-    name: "Lumi API",
-    description: `Pay-per-call reads from lumitrades.io, settled in ${settledIn(cfg)}, in three groups: Lumi Trust (an x402 pay-check and a detailed x402 vendor report from Lumi's trust observations); market data (macro, daily brief, yen carry-trade watch, sentiment, funding, Fear & Greed, events and a 48h window, and a daily policy brief); and ${MARKET_IDEAS_NAME} (signals, all-coins scan, lite reads, levels, paper-trade ideas and history; ${MARKET_IDEAS_NOTICE}). Each resource carries product_line. Also: seller monitoring plans (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d; Audit $99; free tier and 14-day trial) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
+    name: "Lumi Trades",
+    description: `Pay-per-call reads from Lumi Trades (lumitrades.io), settled in ${settledIn(cfg)}, in three groups: checks before paying an x402 seller (a pre-payment check, a one-label verdict and seller reputation reports from Lumi's trust observations); market data (macro, daily brief, yen carry-trade watch, sentiment, funding, Fear & Greed, events and a 48h window, and a daily policy brief); and educational crypto analysis (technical indicator reads, all-coins scan, lite reads, support and resistance levels, and a paper-trade journal; educational, not financial advice; ${MARKET_IDEAS_NOTICE}). Each resource carries product_line. Also: seller monitoring plans (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d; Audit $99; free tier and 14-day trial) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
     resources: paidEndpoints(cfg).map((e) => ({
       name: e.name,
       url: `${base}${e.example}`,
@@ -216,6 +216,7 @@ export function wellKnownX402(cfg: Config, base: string) {
       description: BAZAAR_ROUTES[e.route].description,
       serviceName: serviceNameFor(e.route),
       product_line: LINE_LABEL[productLine(e.route)],
+      errors: errorDocs(e.route),
       accepts: [
         ...(cfg.evm
           ? [{
@@ -390,7 +391,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
           "402": { description: "Payment required. x402 v2 PaymentRequired in the body and the PAYMENT-REQUIRED header. accepts[] order: Base USDC, XRP, then XRPL IOUs." },
           ...(e.template.includes("{")
             ? { "400": { description: "Path template not filled in (e.g. :coin, <coin>, ${coin}), or any unfilled path sent with a payment header; the body gives an example URL (never charged). Without a payment header, the literal OpenAPI template path ({coin} / {id}, as discovery crawlers request it) returns the route's normal 402 quote with a note to fill the placeholder; a payment sent to it is refused with this 400." } }
-            : e.route === "trust_check"
+            : e.route === "trust_check" || e.route === "verdict"
             ? { "400": { description: "url missing, empty or not an absolute http(s) URL, or payTo/amount malformed (never charged). A request with no query string at all, as discovery crawlers send it, returns the normal 402 quote; a payment sent without url is refused with this 400." } }
             : e.route === "brief" || e.route === "institutional"
             ? { "400": { description: "format is not json or md (never charged)." } }
@@ -400,9 +401,13 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
             : e.template.includes("{coin}")
             ? { "404": { description: e.route === "levels" ? "Unknown coin, or a coin outside Lumi's levels watchlist (never charged)." : "Unknown coin (never charged)." } }
             : {}),
-          "409": { description: "Idempotency-Key (or payment-identifier id) already used with a different payment (never charged)." },
+          "403": { description: "verifiable_intent_denied: the payment's signed intent does not allow this purchase (never charged)." },
+          "409": { description: "Idempotency-Key (or payment-identifier id) already used with a different payment (never charged), or settlement_status_unknown: the facilitator did not confirm settlement; check the transaction before paying again." },
+          "429": { description: "Not returned on paid calls. The free lookups (/v1/check, /v1/trust/vendors, /v1/trust/catalog) return 429 rate_limited with Retry-After over their limits; a facilitator 429 surfaces as a retryable 503 facilitator_unavailable." },
+          "500": { description: "internal_error: unexpected server error; retry later." },
+          "502": { description: "invalid_verify_response or settle_http_error: the payment facilitator returned an unusable answer; not retryable as-is (nothing is settled on invalid_verify_response)." },
           "503": {
-            description: (e.route === "vendor_report" ? "No observation of this vendor in the last 48 h, so the report is not sold. " : "Inputs missing or past stale_after, so the data is not sold. ") + "Body: {error: 'stale_data' (or 'data_unavailable' when an upstream is down), data_age_seconds (null when unknown), retry_after_seconds, retryable, note}; Retry-After header set. Never charged.",
+            description: (e.route === "vendor_report" ? "No observation of this vendor in the last 48 h, so the report is not sold. " : "Inputs missing or past stale_after, so the data is not sold. ") + "Body: {error: 'stale_data' (or 'data_unavailable' when an upstream is down, or 'facilitator_unavailable' when the payment facilitator is busy or rate-limited), data_age_seconds (null when unknown), retry_after_seconds, retryable, note}; Retry-After header set. Never charged.",
             content: { "application/json": { example: { error: "stale_data", detail: "Inputs are past stale_after; not sold until refreshed.", data_age_seconds: 7260, retry_after_seconds: 300, retryable: true, note: "Not charged." } } },
           },
         },
@@ -412,7 +417,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
   return {
     openapi: "3.1.0",
     info: {
-      title: "Lumi Trades API: x402 pay-checks (Lumi Trust), crypto market data and Lumi Market Ideas (x402)",
+      title: "Lumi Trades API: x402 checks before paying, crypto market data and educational crypto analysis (x402)",
       version: VERSION,
       contact: { name: "Lumi Trades", url: "https://lumitrades.io", email: "hello@lumitrades.io" },
       description:
