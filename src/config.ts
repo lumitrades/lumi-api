@@ -221,7 +221,8 @@ export const DEFAULT_PRICES: Record<PaidRoute, { xrp: string; usd: string }> = {
   // Stage C (0.12.0) focused reads. XRP defaults from XRP ~= $1.32; live XRP pricing (XRP_PRICING=live) overrides them.
   scan: { xrp: "0.015", usd: "0.02" },
   lite: { xrp: "0.003", usd: "0.004" },
-  trust_check: { xrp: "0.003", usd: "0.004" },
+  // Full pay-check: $0.02 (owner approved 2026-10-25: "Raise the full trust check to $0.02"; was $0.004).
+  trust_check: { xrp: "0.015", usd: "0.02" },
   funding: { xrp: "0.0023", usd: "0.003" },
   fear_greed: { xrp: "0.0023", usd: "0.003" },
   events_48h: { xrp: "0.0023", usd: "0.003" },

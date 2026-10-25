@@ -56,7 +56,7 @@ describe("free endpoints", () => {
       ["/v1/signal/{coin}", "0.005"], ["/v1/levels/{coin}", "0.005"], ["/v1/scan", "0.015"], ["/v1/lite/{coin}", "0.003"], ["/v1/slate", "0.01"], ["/v1/market", "0.01"],
       ["/v1/brief", "0.015"], ["/v1/macro/yen", "0.0075"], ["/v1/sentiment", "0.0038"], ["/v1/events", "0.0038"],
       ["/v1/funding", "0.0023"], ["/v1/fear-greed", "0.0023"], ["/v1/events/next48h", "0.0023"],
-      ["/v1/institutional", "0.077"], ["/v1/trust/check", "0.003"], ["/v1/trust/vendors/{id}/report", "0.015"],
+      ["/v1/institutional", "0.077"], ["/v1/trust/check", "0.015"], ["/v1/trust/vendors/{id}/report", "0.015"],
       ["/v1/verdict", "0.0075"],
     ]);
     expect(index.guarantee).toMatch(/only pay when you get data/i);

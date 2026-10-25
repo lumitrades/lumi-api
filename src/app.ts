@@ -751,7 +751,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   /**
    * GET /v1/verdict: the shared label (checks_passed | check_first | checks_failed | no_data) on top of the SAME check core as
    * the free /v1/check (same lookup, same reasons, same review gate, same signing key). The embedded check_receipt is exactly
-   * what /v1/check signs at the same moment. Free alias by default; paid (<= $0.004) when VERDICT_PRICING = "paid".
+   * what /v1/check signs at the same moment. Free alias by default; paid ($0.01) when VERDICT_PRICING = "paid".
    * Never an input: monitoring/commercial status, relationship flags, payment for this call, observed on-chain payments.
    */
   type VerdictOut = { ok: true; body: Record<string, unknown>; t: number; onServed: () => Promise<unknown> } | { ok: false; status: number; error: Record<string, unknown> };
