@@ -505,6 +505,13 @@ describe("trust: scoring", () => {
     expect(scoreVendor(P(10, 10, [2750]), [], [], NOW).components.latency).toMatchObject({ value: 0.5 });
   });
 
+  it("confidence counts 90-day paid test-buys (weekly rotation), score stays 30-day", () => {
+    const five = [obs(true), obs(true), obs(true), obs(true), obs(true)];
+    const s = scoreVendor(P(10, 10, [500]), five, [], NOW, 24);
+    expect(s).toMatchObject({ value: 100, confidence: "high", samples: { paid_test_buys: 5, paid_test_buys_90d: 24 } });
+    expect(scoreVendor(P(10, 10, [500]), five.slice(0, 4), [], NOW, 12).confidence).toBe("medium");
+  });
+
   it("reports: hold, per-day cap, corroboration weight", () => {
     const t = NOW - 2 * DAY;
     const reports = [rep("delivered", "rA", t), rep("delivered", "rA", t + 1000), rep("no_data", "rB", t), rep("delivered", "rC", NOW - 3600_000)];
