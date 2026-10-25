@@ -18,7 +18,7 @@ function setup() {
 describe("freshness metadata", () => {
   it("every paid response carries as_of, data_age_seconds, next_update, stale_after (ISO UTC)", async () => {
     const { get } = setup();
-    for (const path of ["/v1/signal/BTC", "/v1/slate", "/v1/brief", "/v1/trades", "/v1/market", "/v1/macro/yen", "/v1/events", "/v1/sentiment"]) {
+    for (const path of ["/v1/signal/BTC", "/v1/slate", "/v1/brief", "/v1/market", "/v1/macro/yen", "/v1/events", "/v1/sentiment"]) {
       const q = await (await get(path)).json();
       const r = await get(path, { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) });
       expect(r.status, path).toBe(200);
@@ -69,8 +69,7 @@ describe("free samples hide trade outcomes", () => {
   it("GET /v1/samples never shows P/L or win/loss status", async () => {
     const { get } = setup();
     const j: any = await (await get("/v1/samples")).json();
-    const s = JSON.stringify(j.products.filter((p: any) => ["trades", "slate", "brief"].includes(p.route)));
+    const s = JSON.stringify(j.products.filter((p: any) => ["slate", "brief"].includes(p.route)));
     expect(s).not.toMatch(/"(unrealized_pnl_pct|pnl_pct|mark_price)":|"status":"(win|loss|open|closed|stopped|target)/i);
-    expect(productSample("trades", { trades: [{ direction: "long", entry: 1, status: "loss", unrealized_pnl_pct: -2 }] } as any)).toBeTruthy();
   });
 });

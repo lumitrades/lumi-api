@@ -20,8 +20,8 @@ async function listTools() {
   return tools;
 }
 
-test("0.9.4: versions agree across package.json, server.json and the server", () => {
-  assert.equal(VERSION, "0.9.4");
+test("0.9.5: versions agree across package.json, server.json and the server", () => {
+  assert.equal(VERSION, "0.9.5");
   assert.equal(pkg.version, VERSION);
   assert.equal(srv.version, VERSION);
   assert.equal(srv.packages[0].version, VERSION);
@@ -49,6 +49,7 @@ test("tools: seller monitoring and trust feed present; coins says 50; no project
   assert.match(by.lumi_seller_monitoring.description, /paying never changes a score/);
   assert.match(by.lumi_coins.description, /51 coins/);
   for (const t of tools) assert.doesNotMatch(t.description, /projection/, t.name);
-  assert.equal(tools.length, 27);
+  assert.equal(tools.length, 26);
+  assert.ok(!tools.some((t) => t.name === "lumi_trades"), "lumi_trades removed");
   assert.ok(by.lumi_scan_seller && by.lumi_report_receipt);
 });

@@ -58,7 +58,7 @@ export function envelope(kind: string, data: Record<string, unknown>, extra: Rec
     source: SOURCE,
     ...sanitize(data),
     ...extra,
-    // Lumi Market Ideas (signal, lite, scan, levels, slate, trades): additive, backward-compatible label + notice.
+    // Lumi Market Ideas (signal, lite, scan, levels, slate): additive, backward-compatible label + notice.
     ...(MARKET_IDEAS_KINDS.includes(kind) ? { product_line: MARKET_IDEAS_NAME, notice: MARKET_IDEAS_NOTICE } : {}),
     // Trust responses carry the trust disclaimer (no trade-idea wording).
     disclaimer: kind === "trust_check" ? TRUST_DISCLAIMER : DISCLAIMER,
@@ -200,48 +200,52 @@ export function levelsView(coin: CoinRef, analysis: Json, prices: Json) {
   });
 }
 
+/**
+ * Fields of a CURRENT paper-trade idea (the plan only). Source: lumitrades.io/data/ideas.json, which carries pending/open
+ * ideas only (since Oct 24 2026 the trade history is private and /v1/trades is gone). Outcome and P/L fields (exit price,
+ * realized or unrealized P&L, mark price, targets hit, close/cancel details) are never copied, even if present upstream.
+ */
 export const TRADE_FIELDS = [
   "id", "direction", "market", "leverage", "conviction", "leverage_reason", "status",
-  "entry", "planned_entry", "entry_zone", "stop", "targets", "targets_hit", "move_stop_to_be",
-  "opened_at", "filled_at", "expiry", "fill_by", "expires", "closed_at", "exit_price",
-  "pnl_pct", "unrealized_pnl_pct", "mark_price", "timeframe", "timeframe_note",
-  "missed_it", "plan_type", "trigger", "parent_id", "reasoning", "cancel_reason",
+  "entry", "planned_entry", "entry_zone", "stop", "targets", "move_stop_to_be",
+  "opened_at", "filled_at", "expiry", "fill_by", "expires", "timeframe", "timeframe_note",
+  "plan_type", "trigger", "parent_id", "reasoning",
 ] as const;
 
-/** Outcome fields are never published: no win/loss track record anywhere in the API. */
-const OUTCOME_FIELDS = new Set<string>(["exit_price", "pnl_pct", "targets_hit"]);
-const ACTIVE = new Set(["open", "pending"]);
+export const ACTIVE_IDEA = new Set(["open", "pending"]);
+
+/** Active ideas from ideas.json (`ideas`), tolerating the legacy `trades` key; anything not pending/open is dropped. */
+export function activeIdeas(doc: Json): Json[] {
+  const all: Json[] = Array.isArray(doc?.ideas) ? doc.ideas : Array.isArray(doc?.trades) ? doc.trades : [];
+  return all.filter((t) => t && ACTIVE_IDEA.has(String(t.status)));
+}
 
 export function tradeView(t: Json, coins: CoinRef[]) {
   const coin = coins.find((c) => c.id === t.coin);
   const out: Record<string, unknown> = { coin: coin ? coin.symbol : t.coin };
-  const active = ACTIVE.has(String(t.status));
   for (const f of TRADE_FIELDS) {
     if (t[f] === undefined || t[f] === null) continue;
-    if (OUTCOME_FIELDS.has(f) || (!active && (f === "unrealized_pnl_pct" || f === "mark_price"))) continue;
     out[f] = t[f];
   }
-  // Outcome statuses are normalised so a closed idea never reads as a win or a loss.
-  if (!active && t.status !== "cancelled") out.status = "closed";
   return out;
 }
 
-export function slateView(trades: Json, coins: CoinRef[]) {
-  const all: Json[] = Array.isArray(trades?.trades) ? trades.trades : [];
-  const active = all.filter((t) => ACTIVE.has(String(t.status)));
+export function slateView(ideas: Json, coins: CoinRef[]) {
+  const active = activeIdeas(ideas);
   const noSetup: Record<string, string> = {};
-  for (const [id, entry] of Object.entries<Json>(trades?.slate?.coins ?? {})) {
+  for (const [id, entry] of Object.entries<Json>(ideas?.slate?.coins ?? {})) {
     if (!entry?.trade_id && typeof entry?.note === "string") {
       const c = coins.find((x) => x.id === id);
       noSetup[c ? c.symbol : id] = entry.note;
     }
   }
   return envelope("slate", {
-    slate_as_of: trades?.slate?.as_of ?? null,
-    rules: trades?.slate?.rules ?? null,
+    slate_as_of: ideas?.slate?.as_of ?? null,
+    rules: ideas?.slate?.rules ?? null,
     ideas: active.map((t) => tradeView(t, coins)),
     no_setup_notes: noSetup,
-    evaluated_utc: trades?.tracked_utc ?? trades?.evaluated_utc ?? null,
+    note: "Lumi's current paper-trade ideas (pending/open) only: no closed ideas, outcomes or P/L.",
+    evaluated_utc: ideas?.as_of ?? null,
   });
 }
 

@@ -92,7 +92,6 @@ const SKILLS: SkillDef[] = [
     match: /\b(should i pay|pay[- ]check|trust[- ]check|safe to pay)\b/i,
     needsUrl: true,
   },
-  { id: "trades", route: "trades", name: "Lumi Market Ideas: paper-trade history", tags: ["crypto", "paper-trading", "market-ideas", "paid"], examples: ["your paper-trade history"], match: /\b(trades|trade history|paper[- ]?trades?)\b/i },
 ];
 
 const FREE_DESCRIPTIONS: Record<string, string> = {
@@ -141,7 +140,7 @@ export function agentCard(cfg: Config, base: string) {
       "(free lookup, paid check, vendor reports); signed delivery receipts come with paid vendor reports and Feed catalog lookups, verifiable free. " +
       "Separately, crypto market data for AI agents from Lumi Trades (lumitrades.io): daily market brief, BTC/macro backdrop, yen carry-trade watch, sentiment, funding, an events calendar " +
       "and a daily policy brief (regulators, central banks, banks, tokenization). " +
-      `And ${MARKET_IDEAS_NAME}, a separate product line (${MARKET_IDEAS_NOTICE}): per-coin signals, lite reads, the all-coins scan, support/resistance levels and paper-trade ideas and history (signals cover 51 coins; levels and paper trades cover 14 watchlist and major coins). ` +
+      `And ${MARKET_IDEAS_NAME}, a separate product line (${MARKET_IDEAS_NOTICE}): per-coin signals, lite reads, the all-coins scan, support/resistance levels and current paper-trade ideas (signals cover 51 coins; levels and ideas cover 14 watchlist and major coins). ` +
       `Pay per call over x402 v2 with no API key or account, in ${settledIn(cfg)}. Also available as a remote MCP server. Analytics only, not financial advice.`,
     // A2A 1.0
     supportedInterfaces: A2A_VERSIONS.map((v) => ({ url: a2aUrl, protocolBinding: "JSONRPC", protocolVersion: v })),

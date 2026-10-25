@@ -100,7 +100,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     template: "/v1/brief",
     summary:
       "Use this when you need a ready-to-read daily crypto brief (the same read as Lumi's newsletter): BTC price/levels/signal, Fear & Greed, funding, " +
-      "top/bottom movers, key levels, yen watch, events in the next 48h, open paper trades and sourced news. JSON with a " +
+      "top/bottom movers, key levels, yen watch, events in the next 48h, current paper-trade ideas (pending/open only, no outcomes or P/L) and sourced news. JSON with a " +
       "ready-to-use `markdown` field; add ?format=md (or Accept: text/markdown) for text/markdown. " + NOT_CHARGED,
     example: "/v1/brief",
   },
@@ -166,17 +166,6 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     summary:
       "Use this when you need to know what could move crypto in the next 48 hours: scheduled macro releases and decisions with exact UTC and US Central times, why each matters and its source, plus dated per-coin catalysts. An empty window is a valid answer. " + NOT_CHARGED,
     example: "/v1/events/next48h",
-  },
-  {
-    route: "trades",
-    name: "Lumi Market Ideas: paper-trade history",
-    method: "GET",
-    path: "/v1/trades",
-    template: "/v1/trades",
-    summary:
-      MARKET_IDEAS_LABEL + " " +
-      "Use this when you need the full list of Lumi's paper-trade ideas (not advice): every idea with entry, stop, targets, leverage and reasoning. " + NOT_CHARGED,
-    example: "/v1/trades",
   },
   {
     route: "institutional",

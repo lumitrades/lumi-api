@@ -19,7 +19,7 @@ export function mcpServerCard(base: string) {
     version: VERSION,
     description:
       "Lumi Trust (should I pay this x402 URL? allow / warn / block, with signed test-buy receipts) plus crypto market data and daily briefs for agents; " +
-      `separately, ${MARKET_IDEAS_NAME} (signals, levels, scan and paper trades; ${MARKET_IDEAS_NOTICE}). ` +
+      `separately, ${MARKET_IDEAS_NAME} (signals, levels, scan and current paper-trade ideas; ${MARKET_IDEAS_NOTICE}). ` +
       "Free tools answer directly; paid tools return the x402 price (USDC on Base, XRP / RLUSD / USDC on the XRP Ledger, or USDC on Stellar).",
     websiteUrl: `${base}/skill.md`,
     repository: { url: "https://github.com/cypher-osiris/lumi-api", source: "github", subfolder: "mcp" },

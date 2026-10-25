@@ -127,7 +127,7 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       "Lumi Trust: an x402 'should I pay this URL?' check and paid x402 vendor reports. " +
       "Market data: the BTC/macro backdrop, a daily market brief, a yen carry-trade watch, a sentiment snapshot (Fear & Greed + funding), an events calendar, " +
       "funding rates, CoinMarketCap Fear & Greed with history, the next 48h of events and a daily policy brief. " +
-      `${MARKET_IDEAS_LABEL} Indicator signals, lite per-coin reads, an all-coins scan, support/resistance levels, current paper-trade ideas and the paper-trade history. ` +
+      `${MARKET_IDEAS_LABEL} Indicator signals, lite per-coin reads, an all-coins scan, support/resistance levels, and current paper-trade ideas. ` +
       `Trial: ${TRIAL_SHORT} (see free_trial). ` +
       `Agents call an endpoint, receive HTTP 402 with the price in ${acceptsOrder(cfg)}, sign ${cfg.evm ? "an EIP-3009 USDC authorization or " : ""}${cfg.stellar ? "a Stellar USDC transfer or " : ""}a small XRPL Payment, retry, and get JSON back. ` +
       FRESHNESS_FIELDS,
@@ -407,10 +407,10 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
         "GET /v1/funding gives perp funding rates; GET /v1/fear-greed gives CoinMarketCap Fear & Greed with history; " +
         "GET /v1/events gives sourced upcoming macro/crypto events; GET /v1/events/next48h gives what is scheduled in the next 48 hours; " +
         "GET /v1/institutional gives a daily sourced policy brief (regulators, central banks, banks, tokenization). " +
-        `${MARKET_IDEAS_LABEL} Signals cover ${coins.length} top coins (computed live, 1h refreshed about every 13 minutes); levels, slate and trades cover ${siteOnly(coins).map((c) => c.symbol).join(", ")}. ` +
+        `${MARKET_IDEAS_LABEL} Signals cover ${coins.length} top coins (computed live, 1h refreshed about every 13 minutes); levels and slate cover ${siteOnly(coins).map((c) => c.symbol).join(", ")}. ` +
         "GET /v1/signal/{coin} gives the indicator-based buy/sell read; GET /v1/lite/{coin} gives a cheap label + score + price read; " +
         "GET /v1/scan gives all coins' signal labels in one call; GET /v1/levels/{coin} gives support/resistance, rule-based 7-day scenario levels (not forecasts) and commentary; " +
-        "GET /v1/slate gives current paper-trade ideas; GET /v1/trades gives the raw paper-trade history. " +
+        "GET /v1/slate gives current paper-trade ideas (pending/open only, no outcomes or P/L). " +
         `Each paid call is one x402 v2 'exact' payment: ${acceptsOrder(cfg)}` +
         (cfg.evm ? ` (Base: ${cfg.evm.network}, token ${cfg.evm.asset}; XRPL: ${cfg.network}${cfg.stellar ? `; Stellar: ${cfg.stellar.network}, token ${cfg.stellar.asset}` : ""})` : ` (${cfg.network})`) +
         `; pick an option by network and asset. Unknown coins return 404 and stale data 503 before any payment is requested (not charged). ` +
@@ -523,7 +523,7 @@ function mcpInfo(base: string) {
     tools: {
       free: ["lumi_catalog", "lumi_coins", "lumi_samples", "lumi_quote", "lumi_vendor_scores"],
       market_ideas: MARKET_IDEAS_TOOLS,
-      paid: ["lumi_brief", "lumi_scan", "lumi_signal", "lumi_lite", "lumi_levels", "lumi_slate", "lumi_market", "lumi_macro_yen", "lumi_sentiment", "lumi_funding", "lumi_fear_greed", "lumi_events", "lumi_events_48h", "lumi_trades", "lumi_institutional_brief", "lumi_trust_check", "lumi_vendor_report"],
+      paid: ["lumi_brief", "lumi_scan", "lumi_signal", "lumi_lite", "lumi_levels", "lumi_slate", "lumi_market", "lumi_macro_yen", "lumi_sentiment", "lumi_funding", "lumi_fear_greed", "lumi_events", "lumi_events_48h", "lumi_institutional_brief", "lumi_trust_check", "lumi_vendor_report"],
     },
     note: "On the remote server, paid tools return the price and how to pay (x402 at the REST endpoint, or the npm package with your wallet). Stale data is never sold.",
   };
@@ -696,7 +696,7 @@ Which one to call (market data):
 Which one to call (${MARKET_IDEAS_NAME}; ${MARKET_IDEAS_NOTICE}):
 - Screening the whole market? \`GET /v1/scan\`: all ${coins.length} coins' labels, scores, 1h RSI and price in one call (cheaper than ${coins.length} signal calls).
 - Only the headline for one coin? \`GET /v1/lite/{coin}\` (label, score, 1h/4h/1d labels, price); \`/v1/signal/{coin}\` adds every indicator.
-- Every past paper-trade idea as a raw list? \`GET /v1/trades\`. Current ideas only? \`GET /v1/slate\`.
+- Lumi's current paper-trade ideas (pending/open)? \`GET /v1/slate\`.
 - One coin? \`GET /v1/signal/{coin}\` or \`/v1/lite/{coin}\` (any of ${coins.length}) + \`GET /v1/levels/{coin}\` (watchlist and majors).
 
 Lumi Trust lookups:
@@ -901,7 +901,7 @@ print(decode_payment_response(r.headers["PAYMENT-RESPONSE"]))
   return the price and how to pay, since a remote connector has no wallet:
   Lumi Trust \`lumi_trust_check\`, \`lumi_vendor_report\`; market data \`lumi_brief\`, \`lumi_market\`, \`lumi_macro_yen\`, \`lumi_sentiment\`, \`lumi_funding\`,
   \`lumi_fear_greed\`, \`lumi_events\`, \`lumi_events_48h\`, \`lumi_institutional_brief\`; ${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}) \`lumi_signal\`, \`lumi_lite\`,
-  \`lumi_scan\`, \`lumi_levels\`, \`lumi_slate\`, \`lumi_trades\`.
+  \`lumi_scan\`, \`lumi_levels\`, \`lumi_slate\`.
 - **Local MCP server that pays for you:** \`npx -y lumi-trades-mcp\` with \`XRPL_SEED\` (XRP/RLUSD/USDC on the XRP Ledger) and/or
   \`EVM_PRIVATE_KEY\` (USDC on Base, gasless) set (npm \`lumi-trades-mcp\`, MCP Registry \`io.github.cypher-osiris/lumi-trades-mcp\`).
   Same tools; each paid call is an x402 payment from your wallet within a per-call cap (\`LUMI_MAX_USD_PER_CALL\`, default 0.30, which covers every endpoint) and a session budget.
@@ -955,7 +955,7 @@ export function indexHtml(cfg: Config, base: string, coins: CoinRef[]): string {
   const title = "Lumi API: x402 seller checks, crypto market data and Lumi Market Ideas (pay on XRPL, Base or Stellar)";
   const desc =
     "Free x402 vendor trust observations and paid pay-checks (Lumi Trust), crypto market data (daily market brief, funding, Fear & Greed, sentiment, events) " +
-    "and Lumi Market Ideas (signals for 51 coins, scan, levels, paper trades; paper-trade analysis, not investment advice) for AI agents. No API key: most calls cost $0.003-$0.02 with x402 in USDC on Base, XRP/RLUSD/USDC on the XRP Ledger or USDC on Stellar, and new wallets get 3 free trial calls in total, not per endpoint (a Base wallet holding at least 0.01 USDC or an activated XRP Ledger account; one trial per wallet).";
+    "and Lumi Market Ideas (signals for 51 coins, scan, levels, current paper-trade ideas; paper-trade analysis, not investment advice) for AI agents. No API key: most calls cost $0.003-$0.02 with x402 in USDC on Base, XRP/RLUSD/USDC on the XRP Ledger or USDC on Stellar, and new wallets get 3 free trial calls in total, not per endpoint (a Base wallet holding at least 0.01 USDC or an activated XRP Ledger account; one trial per wallet).";
   const rowOf = (p: ReturnType<typeof priceTable>[number]) => {
     const usd = p.price_base_usdc ?? p.price_rlusd ?? p.price_usdc;
     return `<tr><td><code>${esc(`${p.method} ${p.path}`)}</code></td><td>${usd ? `$${esc(String(usd))}` : ""}</td><td>${esc(p.price_xrp)} XRP</td><td>${esc(p.summary)}</td></tr>`;
@@ -1114,7 +1114,7 @@ ${quickHtml}
 <h2>What you can buy</h2>
 <div class="tbl"><table><thead><tr><th>Endpoint</th><th>USD</th><th>XRP</th><th>What you get</th></tr></thead><tbody>
 ${rows}</tbody></table></div>
-<p class="note">${esc(MARKET_IDEAS_NAME)} (${esc(MARKET_IDEAS_NOTICE)}) signals: ${coins.length} coins, computed live (1h refreshed about every 13 minutes): ${esc(coins.map((c) => c.symbol).join(", "))}. Levels, slate and trades: ${esc(siteOnly(coins).map((c) => c.symbol).join(", "))}. Every response carries <code>as_of</code>, <code>data_age_seconds</code>, <code>next_update</code> and <code>stale_after</code> (ISO UTC). You only pay when you get data: not charged on bad input (4xx before any quote) or stale data (503 "Not charged." past <code>stale_after</code>).</p>
+<p class="note">${esc(MARKET_IDEAS_NAME)} (${esc(MARKET_IDEAS_NOTICE)}) signals: ${coins.length} coins, computed live (1h refreshed about every 13 minutes): ${esc(coins.map((c) => c.symbol).join(", "))}. Levels and slate: ${esc(siteOnly(coins).map((c) => c.symbol).join(", "))}. Every response carries <code>as_of</code>, <code>data_age_seconds</code>, <code>next_update</code> and <code>stale_after</code> (ISO UTC). You only pay when you get data: not charged on bad input (4xx before any quote) or stale data (503 "Not charged." past <code>stale_after</code>).</p>
 <h2 id="monitoring">For x402 sellers: monitoring</h2>
 <div class="tbl"><table><thead><tr><th>Plan</th><th>USD</th><th>What you get</th></tr></thead><tbody>
 ${planPriceTable(base).filter((p) => p.path.startsWith("/v1/monitor")).map((p) => `<tr><td><code>GET ${esc(p.path)}</code></td><td>$${esc(p.price_usd)}${p.per ? " per endpoint" : ""}${p.term_days ? ` / ${p.term_days} days` : " one-off"}${p.legacy ? " (legacy, grandfathered)" : ""}</td><td>${esc(p.summary)}</td></tr>`).join("\n")}

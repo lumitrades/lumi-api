@@ -210,8 +210,8 @@ describe("Base payment with the official @x402/fetch client", () => {
   it("maps facilitator outcomes like the XRPL path (re-quote, retryable 503, 409 unknown)", async () => {
     const run = async (evm: FakeFacilitator) => {
       const s = setup({ evm });
-      const { header } = await signBase(await (await s.get("/v1/trades")).json());
-      return { r: await s.get("/v1/trades", { "PAYMENT-SIGNATURE": header }), evm };
+      const { header } = await signBase(await (await s.get("/v1/slate")).json());
+      return { r: await s.get("/v1/slate", { "PAYMENT-SIGNATURE": header }), evm };
     };
     let x = await run(evmFacilitator({ verify: () => jsonResponse(400, { isValid: false, invalidReason: "insufficient_funds" }) }));
     expect(x.r.status).toBe(402);

@@ -19,7 +19,7 @@ import {
   coinList, resolveCoin, signalView, liveSignalView, levelsView, slateView, marketView, DISCLAIMER, SOURCE, type CoinRef,
 } from "./views";
 import { staleInputs, hasContent, fileMeta, withMeta, isoTimestamps, metaFrom, nextHalfHour } from "./freshness";
-import { briefView, yenView, sentimentView, eventsView, tradesView } from "./products";
+import { briefView, yenView, sentimentView, eventsView } from "./products";
 import { institutionalView } from "./institutional";
 import { handleMcp, isOwnerKey, MCP_CORS, type McpDeps } from "./mcp";
 import { createSanctionsScreen, type KVLike, type SanctionsDoc } from "./sanctions";
@@ -154,13 +154,12 @@ const SCAN_MIN = 40;
 const NEEDS: Record<PaidRoute, DataFile[]> = {
   signal: ["signals", "prices"],
   levels: ["analysis", "prices"],
-  slate: ["trades"],
+  slate: ["ideas"], // data/ideas.json: current (pending/open) paper-trade ideas only, no outcomes
   market: ["analysis", "signals", "prices", "context"],
-  brief: ["prices", "context", "analysis", "signals", "trades"],
+  brief: ["prices", "context", "analysis", "signals", "ideas"],
   yen: ["context", "analysis", "prices"],
   sentiment: ["context", "prices", "signals"],
   events: ["analysis"],
-  trades: ["trades"],
   institutional: ["institutional_brief"],
   vendor_report: [], // trust-layer data (D1), checked in prepare()
   scan: [], // live_signals (D1), checked in prepare()
@@ -185,7 +184,6 @@ const FIXED: Record<string, PaidRoute> = {
   "/v1/macro/yen": "yen",
   "/v1/sentiment": "sentiment",
   "/v1/events": "events",
-  "/v1/trades": "trades",
   "/v1/institutional": "institutional",
   "/v1/scan": "scan",
   "/v1/funding": "funding",
@@ -543,7 +541,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     return body;
   }
 
-  /** Lumi's site coins (coins.json): full coverage including levels, slate and trades. */
+  /** Lumi's site coins (coins.json): full coverage including levels and slate. */
   async function siteCoins(): Promise<CoinRef[]> {
     try {
       return coinList(await data.get("coins"));
@@ -986,7 +984,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           timestamp: new Date().toISOString(),
           source: SOURCE,
           count: list.length,
-          coverage: `${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}) signal: every coin (computed live from public 1h/1d exchange candles, refreshed about every 13 minutes). levels, slate and trades: Lumi's watchlist and majors (group watchlist or majors).`,
+          coverage: `${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}) signal: every coin (computed live from public 1h/1d exchange candles, refreshed about every 13 minutes). levels and slate: Lumi's watchlist and majors (group watchlist or majors).`,
           coins: list.map((c) => ({
             ...c,
             signal: `${base}/v1/signal/${c.symbol}`,
@@ -1310,7 +1308,7 @@ function buildBody(route: PaidRoute, coin: CoinRef | undefined, d: Record<string
     case "levels":
       return levelsView(coin!, d.analysis, d.prices);
     case "slate":
-      return slateView(d.trades, coins);
+      return slateView(d.ideas, coins);
     case "market":
       return marketView(d.analysis, d.signals, d.prices, d.context, coins);
     case "brief":
@@ -1321,8 +1319,6 @@ function buildBody(route: PaidRoute, coin: CoinRef | undefined, d: Record<string
       return sentimentView(d.context, d.prices, d.signals, coins);
     case "events":
       return eventsView(d.events, d.analysis, coins, now);
-    case "trades":
-      return tradesView(d.trades, coins);
     case "institutional":
       return institutionalView(d.institutional_brief);
     case "events_48h":
@@ -1395,7 +1391,7 @@ export function sitemapXml(base: string): string {
 }
 
 /**
- * Lumi Market Ideas paths (signal, lite, levels, scan, slate, trades) carry X-Lumi-Product-Line and X-Lumi-Notice on
+ * Lumi Market Ideas paths (signal, lite, levels, scan, slate) carry X-Lumi-Product-Line and X-Lumi-Notice on
  * every response (200, 402, 4xx, 503). Additive headers only; status and body are unchanged.
  */
 export function withProductLine(request: Request, res: Response): Response {

@@ -13,7 +13,7 @@ const H = 3_600_000;
 export function fileTimestamp(file: DataFile, d: Json): string | null {
   const v =
     file === "prices" ? d?.updated_utc
-    : file === "trades" ? (d?.tracked_utc ?? d?.evaluated_utc)
+    : file === "ideas" ? (d?.as_of ?? d?.slate?.as_of)
     : file === "analysis" ? d?.as_of
     : d?.generated_utc;
   return typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : null;
@@ -28,7 +28,7 @@ export function maxAgeMs(file: DataFile, baseHours: number): number | null {
     case "prices":
     case "signals":
     case "context":
-    case "trades":
+    case "ideas":
       return baseHours * H;
     case "analysis":
     case "events":
@@ -84,8 +84,6 @@ export function hasContent(route: string, body: Json): boolean {
       return typeof body.fear_greed?.value === "number";
     case "events":
       return (body.upcoming_timed?.length ?? 0) + (body.recent_24h?.length ?? 0) + (body.upcoming_by_date?.length ?? 0) > 0;
-    case "trades":
-      return Array.isArray(body.trades) && body.trades.length > 0;
     case "institutional":
       return (body.items?.length ?? 0) + (body.no_notable_news?.length ?? 0) > 0 && (body.big_picture?.length ?? 0) > 0 && !!body.markdown;
     case "vendor_report":

@@ -11,7 +11,7 @@ function setup() {
   const app = createApp(ENV, { fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW });
   return (path: string, headers: Record<string, string> = {}) => app.fetch(new Request(BASE + path, { headers }));
 }
-const IDEAS = ["/v1/signal/XRP", "/v1/lite/XRP", "/v1/scan", "/v1/slate", "/v1/trades", "/v1/levels/XRP"];
+const IDEAS = ["/v1/signal/XRP", "/v1/lite/XRP", "/v1/scan", "/v1/slate", "/v1/levels/XRP"];
 
 describe("Lumi Market Ideas is separated from the trust brand", () => {
   it("market-ideas responses carry the notice (body fields + headers), additively; 402s too", async () => {
@@ -73,8 +73,8 @@ describe("Lumi Market Ideas is separated from the trust brand", () => {
     expect(JSON.stringify(wk)).toContain(MARKET_IDEAS_NAME);
     const card = await (await get("/.well-known/agent-card.json")).json();
     expect(card.description).toContain(MARKET_IDEAS_NOTICE);
-    const ideaSkills = card.skills.filter((s: any) => ["signal", "lite", "scan", "levels", "slate", "trades"].includes(s.id));
-    expect(ideaSkills.length).toBe(6);
+    const ideaSkills = card.skills.filter((s: any) => ["signal", "lite", "scan", "levels", "slate"].includes(s.id));
+    expect(ideaSkills.length).toBe(5);
     for (const s of ideaSkills) expect(s.name, s.id).toMatch(/^Lumi Market Ideas: /);
     for (const r of MARKET_IDEAS_ROUTES) {
       const b = (BAZAAR_ROUTES as any)[r];
@@ -83,6 +83,6 @@ describe("Lumi Market Ideas is separated from the trust brand", () => {
       expect(b.description.length, r).toBeLessThanOrEqual(BAZAAR_MAX_DESCRIPTION);
     }
     for (const t of PAID_TOOLS.filter((t) => MARKET_IDEAS_ROUTES.includes(t.route))) expect(t.description, t.name).toContain(MARKET_IDEAS_NOTICE);
-    expect(PAID_TOOLS.filter((t) => MARKET_IDEAS_ROUTES.includes(t.route)).length).toBe(6);
+    expect(PAID_TOOLS.filter((t) => MARKET_IDEAS_ROUTES.includes(t.route)).length).toBe(5);
   });
 });
