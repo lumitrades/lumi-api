@@ -22,7 +22,7 @@ export const SERVICE_NAME = "Lumi Trades";
 /** The trust layer (pay-check, vendor reports, monitoring and feed plans) is listed under its own service name. */
 export const TRUST_SERVICE_NAME = "Lumi Trust";
 export const TRUST_ROUTES: PaidRoute[] = ["trust_check", "vendor_report"];
-/** Signal-style routes (signal, lite, scan, slate, trades, levels) are listed as their own line, apart from the trust layer. */
+/** Signal-style routes (signal, lite, scan, slate, levels) are listed as their own line, apart from the trust layer. */
 export const MARKET_IDEAS_SERVICE_NAME = MARKET_IDEAS_NAME;
 export const SERVICE_ICON = "https://lumitrades.io/assets/icon-512.png";
 export const ROUTE_TAGS: Record<PaidRoute, string[]> = {
@@ -34,7 +34,6 @@ export const ROUTE_TAGS: Record<PaidRoute, string[]> = {
   yen: ["macro", "forex", "yen-carry-trade", "japan", "bitcoin"],
   sentiment: ["sentiment", "fear-and-greed", "funding-rates", "open-interest", "crypto"],
   events: ["economic-calendar", "events", "macro", "bitcoin", "crypto"],
-  trades: ["paper-trading", "trade-history", "trade-ideas", "trading", "crypto"],
   institutional: ["regulation", "stablecoins", "tokenization", "policy", "crypto"],
   vendor_report: ["x402", "trust-score", "api-monitoring", "security", "due-diligence"],
   scan: ["crypto-screener", "trading-signals", "market-scan", "technical-analysis", "crypto"],
@@ -167,7 +166,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   brief: {
     description:
-      "Daily crypto market brief as JSON with a ready-to-use markdown field (or text/markdown with format=md): headline, BTC price and signal label, key levels, Fear & Greed, funding, top and bottom movers, yen watch, events in the next 48 hours, open paper trades and sourced news. Use when an agent needs a single daily summary of the crypto market to read or republish. Analytics only, not financial advice. Not charged on invalid format or stale data.",
+      "Daily crypto market brief as JSON with a ready-to-use markdown field (or text/markdown with format=md): headline, BTC price and signal label, key levels, Fear & Greed, funding, top and bottom movers, yen watch, events in the next 48 hours, current paper-trade ideas (pending/open only, no outcomes or P/L) and sourced news. Use when an agent needs a single daily summary of the crypto market to read or republish. Analytics only, not financial advice. Not charged on invalid format or stale data.",
     query: FORMAT_QUERY,
     example: {
       kind: "brief",
@@ -217,19 +216,6 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
       upcoming_by_date: [{ date: "2026-11-03", coin: "XLM", title: "Protocol 30 validator vote" }],
       ...FRESH("2026-10-22T11:05:00Z", "2026-10-24T11:05:00Z"),
       payment: pay("events"),
-    },
-  },
-  trades: {
-    description:
-      "Lumi Market Ideas. Lumi's paper-trade history as a raw list: id, coin, direction, entry, stop, targets, leverage, status and reasoning for each idea, published for evaluation; no performance is implied. Use when an agent needs the historical record of Lumi's trade ideas, for example to audit or backtest them. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on stale data.",
-    example: {
-      kind: "trades",
-      product_line: MARKET_IDEAS_NAME,
-      notice: MARKET_IDEAS_NOTICE,
-      count: 8,
-      trades: [{ id: "T007", coin: "BTC", direction: "long", entry: 82300, stop: 80800, targets: [84500, 86000], leverage: 3, reasoning: "Reclaim of 82k with funding flat." }],
-      ...FRESH("2026-10-22T11:22:28Z", "2026-10-22T23:22:28Z"),
-      payment: pay("trades"),
     },
   },
   institutional: {
@@ -446,7 +432,6 @@ const HEADLINES: Record<PaidRoute, (subject?: string) => string> = {
   yen: () => "Yen carry-trade risk watch for crypto (USD/JPY, Nikkei, BOJ)",
   sentiment: () => "Crypto sentiment (Fear & Greed, BTC funding, open interest)",
   events: () => "Crypto and macro events calendar (Fed, CPI, BOJ, upgrades)",
-  trades: () => "Crypto paper-trade history (entries, stops, targets, status)",
   institutional: () => "Daily institutional & policy brief for digital assets (regulators, banks, tokenization)",
   vendor_report: (v) => `x402 vendor trust report${v ? ` for ${v}` : ""} (uptime, latency, test-buys)`,
   scan: () => "Crypto market scan: buy/sell signals for 50 large-cap coins in one call",

@@ -8,7 +8,7 @@ No API key, no account: each paid tool call is one small payment, signed locally
 
 > Analytics and education only. Not financial advice. Trade ideas are hypothetical paper trades for illustration, not orders or signals to copy.
 >
-> **Lumi Market Ideas** (`lumi_signal`, `lumi_lite`, `lumi_scan`, `lumi_levels`, `lumi_slate`, `lumi_trades`): Paper-trade analysis, not investment advice. Lumi does not trade real money.
+> **Lumi Market Ideas** (`lumi_signal`, `lumi_lite`, `lumi_scan`, `lumi_levels`, `lumi_slate`): Paper-trade analysis, not investment advice. Lumi does not trade real money.
 
 **No install needed to browse:** the same tools are also served remotely at `https://api.lumitrades.io/mcp` (Streamable HTTP),
 for clients that take a remote MCP server URL. A remote connector has no wallet, so its paid tools return the price and how to pay;
@@ -42,7 +42,7 @@ use this package when you want paid tools to pay automatically from your own wal
 
 | Tool | Paid? | Price (USD) | What you get |
 |---|---|---|---|
-| `lumi_brief` | paid | $0.02 | Today's market brief (BTC, CoinMarketCap Fear & Greed, movers, key levels, yen, events, paper trades, news). `format: "md"` for markdown |
+| `lumi_brief` | paid | $0.02 | Today's market brief (BTC, CoinMarketCap Fear & Greed, movers, key levels, yen, events, current paper-trade ideas, news). `format: "md"` for markdown |
 | `lumi_market` | paid | $0.02 | BTC + macro backdrop and breadth |
 | `lumi_macro_yen` | paid | $0.01 | USD/JPY, Nikkei, carry-trade risk around 155, Japan events |
 | `lumi_sentiment` | paid | $0.005 | Fear & Greed, funding read, OI, dominance, breadth |
@@ -61,7 +61,6 @@ use this package when you want paid tools to pay automatically from your own wal
 | `lumi_scan` | paid | $0.02 | Whole-market screen: buy/sell label, score, 1h RSI, price and 24h change for 50 large-cap coins, strongest first |
 | `lumi_lite` | paid | $0.004 | Cheap headline read for one coin: label, score, 1h/4h/1d labels, price, 24h change |
 | `lumi_slate` | paid | $0.02 | Current paper-trade ideas |
-| `lumi_trades` | paid | $0.02 | Paper-trade ideas as a raw list (entry, stop, targets, status, reasoning) |
 
 How to pay, in order of preference: **1. USDC on Base** (gasless, `EVM_PRIVATE_KEY`), **2. the XRP Ledger** (`XRPL_SEED`):
 RLUSD or USDC at the same USD price, or XRP at the live XRP/USD rate (quoted per call, rounded up to 0.0001 XRP).

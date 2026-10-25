@@ -16,7 +16,7 @@ import { registerContribTools, checkLumiReceipt } from "./contrib.js";
 const VENDOR_LOOKUP_DESCRIPTION =
   "Free. Check an x402 seller before you pay it: pass url (the resource you are about to buy), domain, or payTo (the address in its 402 quote, case-insensitive). Lumi ingests the full CDP x402 Bazaar catalog daily and runs free, unpaid 402-quote checks of listings on a rotating schedule (valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response), labelled 'quote-verified, low confidence', plus Lumi's own test-buys confirmed on-chain, labelled 'purchase-verified' and counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated list, separately). Answer-only: tx evidence is in the paid trust check. Observations, not ratings; no match is not a negative signal. With no arguments: the curated XRPL vendor scores and catalog counts; vendor_id gives one curated vendor's summary (tx evidence is in the paid vendor report).";
 
-export const VERSION = "0.9.4";
+export const VERSION = "0.9.5";
 
 /** Paid tools: name -> API path builder + description (prices are read live from the API's 402 quote). */
 export const PAID_TOOLS = [
@@ -25,7 +25,7 @@ export const PAID_TOOLS = [
     path: (a) => `/v1/brief${a.format === "md" ? "?format=md" : ""}`,
     input: { format: z.enum(["json", "md"]).optional().describe("json (default) or md for ready-to-post markdown") },
     description:
-      "Today's crypto market brief from Lumi: BTC price/levels/signal, CoinMarketCap Fear & Greed, funding, top/bottom movers, key levels for 14 coins, yen watch, events in the next 48h, Lumi's active paper trades, sourced news. Paid: $0.02 per call (USDC on Base; or RLUSD, USDC or XRP at the live rate on the XRP Ledger).",
+      "Today's crypto market brief from Lumi: BTC price/levels/signal, CoinMarketCap Fear & Greed, funding, top/bottom movers, key levels for 14 coins, yen watch, events in the next 48h, Lumi's current paper-trade ideas (pending/open only, no outcomes or P/L), sourced news. Paid: $0.02 per call (USDC on Base; or RLUSD, USDC or XRP at the live rate on the XRP Ledger).",
   },
   {
     name: "lumi_signal",
@@ -54,7 +54,6 @@ export const PAID_TOOLS = [
   { name: "lumi_funding", path: () => "/v1/funding", input: {}, description: "Perpetual funding rates for every Lumi coin listed on OKX (rate, 8h-normalised, annualised, next funding time, plain-English read), BTC read, median, most positive/negative. Refreshed every 15 minutes. Paid: $0.003 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
   { name: "lumi_fear_greed", path: () => "/v1/fear-greed", input: {}, description: "CoinMarketCap Fear & Greed now, yesterday, last week and last month, change vs each, yearly high/low and a 30-day series. Refreshed every 30 minutes. Paid: $0.003 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
   { name: "lumi_events_48h", path: () => "/v1/events/next48h", input: {}, description: "What is scheduled in the next 48 hours: macro releases and decisions with UTC + US Central times, why each matters and its source, plus dated coin catalysts. Paid: $0.003 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
-  { name: "lumi_trades", path: () => "/v1/trades", input: {}, description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Lumi's paper-trade ideas as a raw list: each idea with entry, stop, targets, leverage, status and reasoning. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
   {
     name: "lumi_institutional_brief",
     path: (a) => `/v1/institutional${a.format === "md" ? "?format=md" : ""}`,
@@ -100,7 +99,7 @@ const DISCLAIMER = "Lumi Trades data: analytics and education only, not financia
 const TRUST_DISCLAIMER = "Automated observations by Lumi, not a rating, endorsement or guarantee. Not financial advice.";
 const MARKET_IDEAS_NAME = "Lumi Market Ideas";
 const MARKET_IDEAS_NOTICE = "Paper-trade analysis, not investment advice. Lumi does not trade real money.";
-const MARKET_IDEAS_TOOLS = new Set(["lumi_signal", "lumi_lite", "lumi_scan", "lumi_slate", "lumi_trades", "lumi_levels"]);
+const MARKET_IDEAS_TOOLS = new Set(["lumi_signal", "lumi_lite", "lumi_scan", "lumi_slate", "lumi_levels"]);
 const text = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] });
 
 export function buildServer(client, opts = {}) {
@@ -144,7 +143,7 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: free samples of every paid product",
       description:
-        "Free. A truncated, clearly labelled SAMPLE of each paid product (signal, lite, scan, levels, slate, market, brief, yen, sentiment, funding, fear_greed, events, events_48h, trades, institutional brief, trust_check, vendor report) with its USD price and full URL, so you can judge it before paying. Lists are cut to 2 entries; up to 10 minutes old. Pass route to get one product.",
+        "Free. A truncated, clearly labelled SAMPLE of each paid product (signal, lite, scan, levels, slate, market, brief, yen, sentiment, funding, fear_greed, events, events_48h, institutional brief, trust_check, vendor report) with its USD price and full URL, so you can judge it before paying. Lists are cut to 2 entries; up to 10 minutes old. Pass route to get one product.",
       inputSchema: { route: z.string().regex(/^[a-z_]{1,32}$/).optional().describe("Optional product route, e.g. institutional or signal") },
     },
     async ({ route }) => {

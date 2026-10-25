@@ -34,7 +34,7 @@ const cat = JSON.parse((await call("lumi_catalog")).text);
 console.log("catalog:", cat.wallet, cat.caps, cat.endpoints.length, "endpoints");
 console.log("quote /v1/brief:", (await call("lumi_quote", { path: "/v1/brief" })).text.replace(/\s+/g, " ").slice(0, 300));
 const out = {};
-for (const [name, args] of [["lumi_sentiment"], ["lumi_macro_yen"], ["lumi_events"], ["lumi_trades"], ["lumi_brief", { format: "md" }]]) {
+for (const [name, args] of [["lumi_sentiment"], ["lumi_macro_yen"], ["lumi_events"], ["lumi_slate"], ["lumi_brief", { format: "md" }]]) {
   const r = await call(name, args ?? {});
   let tx = null;
   try { tx = JSON.parse(r.text).mcp_receipt?.tx; } catch { tx = (r.text.match(/"tx":"([0-9A-F]{64})"/) || [])[1]; }

@@ -5,7 +5,7 @@ import { carryRisk, fundingRead } from "../src/products";
 
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", PRIVATE_NAMES: "Canaryname" };
 const BASE = "http://lumi.test";
-const NEW = ["/v1/brief", "/v1/macro/yen", "/v1/sentiment", "/v1/events", "/v1/trades"];
+const NEW = ["/v1/brief", "/v1/macro/yen", "/v1/sentiment", "/v1/events"];
 
 function setup(opts: { override?: Record<string, unknown>; now?: number; fac?: FakeFacilitator } = {}) {
   const fac = opts.fac ?? happyFacilitator();
@@ -30,7 +30,6 @@ describe("new endpoints: 402 terms", () => {
     ["/v1/macro/yen", "7500", "0.01"],
     ["/v1/sentiment", "3800", "0.005"],
     ["/v1/events", "3800", "0.005"],
-    ["/v1/trades", "10000", "0.02"],
   ])("%s quotes %s drops / %s stable", async (path, drops, stable) => {
     const { get } = setup();
     const r = await get(path);
@@ -100,15 +99,36 @@ describe("new endpoints: payloads", () => {
     expect(JSON.stringify(b)).not.toMatch(/canaryname/i);
   });
 
-  it("trades: full raw history, no aggregate win/loss stats, no private fields", async () => {
-    const b = await (await paid("/v1/trades")).json();
-    const t = fixture("trades");
-    expect(b.trades).toHaveLength(t.trades.length);
-    expect(b.count).toBe(t.trades.length);
-    expect(b).not.toHaveProperty("track_record");
-    expect(JSON.stringify(b)).not.toMatch(/win_rate|equity_curve|cumulative_pnl/);
-    for (const x of b.trades) expect(x).not.toHaveProperty("source");
-    expect(JSON.stringify(b)).not.toMatch(/user-specified|canaryname/i);
+  it("/v1/trades is gone (404, not quoted); slate + brief carry current ideas only, no outcomes or P/L", async () => {
+    const { get } = setup();
+    const r = await get("/v1/trades");
+    expect(r.status).toBe(404);
+    expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
+    const ids = fixture("ideas").ideas.map((t: any) => t.id);
+    const slate = await (await paid("/v1/slate")).json();
+    expect(slate.ideas.map((t: any) => t.id)).toEqual(ids);
+    for (const t of slate.ideas) expect(["open", "pending"]).toContain(t.status);
+    const brief = await (await paid("/v1/brief")).json();
+    expect(brief.paper_trades.active.map((t: any) => t.id)).toEqual(ids);
+    for (const b of [slate, brief]) {
+      const s = JSON.stringify(b);
+      expect(s).not.toMatch(/"(pnl_pct|unrealized_pnl_pct|mark_price|exit_price|closed_at|targets_hit|missed_it|cancel_reason|track_record|win_rate|stats)":/);
+      expect(s).not.toMatch(/"status":"(stopped|cancelled|closed|win|loss|target|expired)"/);
+    }
+    expect(brief.markdown).toContain("current paper-trade ideas");
+    expect(brief.markdown).not.toMatch(/, now [+-]?\d/);
+  });
+
+  it("slate/brief never pass closed ideas or P/L through even if upstream ideas.json had them", async () => {
+    const ideas = fixture("ideas");
+    const leaky = { ...ideas, ideas: [...ideas.ideas.map((t: any) => ({ ...t, unrealized_pnl_pct: 3.1, mark_price: 9 })), { ...ideas.ideas[0], id: "TX", status: "stopped", pnl_pct: -5, exit_price: 1 }] };
+    const fac = happyFacilitator();
+    const { get } = setup({ fac, override: { ideas: leaky } });
+    for (const path of ["/v1/slate", "/v1/brief"]) {
+      const req = (await (await get(path)).json()).accepts[0];
+      const s = await (await get(path, { "PAYMENT-SIGNATURE": paymentHeaderFor(req) })).text();
+      expect(s).not.toMatch(/pnl|mark_price|exit_price|"TX"|stopped/);
+    }
   });
 });
 
@@ -147,10 +167,9 @@ describe("you only pay when you get data", () => {
     const cases: [string, Record<string, unknown>][] = [
       ["/v1/sentiment", { context: { ...ctx, fear_greed: { error: "down" } } }],
       ["/v1/macro/yen", { context: { ...ctx, yen: { usd_jpy: { error: "x" }, nikkei: { error: "y" } } } }],
-      ["/v1/trades", { trades: { ...fixture("trades"), trades: [] } }],
       ["/v1/market", { prices: {} }],
       ["/v1/events", { events: null, analysis: { ...fixture("analysis"), backdrop: {}, coins: {} } }],
-      ["/v1/slate", { trades: null }],
+      ["/v1/slate", { ideas: null }],
     ];
     for (const [path, override] of cases) {
       const fac = happyFacilitator();

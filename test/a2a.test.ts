@@ -47,7 +47,7 @@ describe("A2A agent card", () => {
       { url: `${BASE}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "1.0" },
       { url: `${BASE}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "0.3" },
     ]);
-    expect(card.skills.map((s: any) => s.id)).toEqual(["trust_check", "vendor_trust", "vendor_report", "catalog", "coins", "seller_monitoring", "trust_feed", "samples", "quote", "institutional", "brief", "scan", "lite", "signal", "levels", "slate", "market", "macro_yen", "funding", "fear_greed", "events_48h", "sentiment", "events", "trades"]);
+    expect(card.skills.map((s: any) => s.id)).toEqual(["trust_check", "vendor_trust", "vendor_report", "catalog", "coins", "seller_monitoring", "trust_feed", "samples", "quote", "institutional", "brief", "scan", "lite", "signal", "levels", "slate", "market", "macro_yen", "funding", "fear_greed", "events_48h", "sentiment", "events"]);
     expect(card.iconUrl).toBe("https://lumitrades.io/assets/icon-512.png");
     for (const s of card.skills) expect(s).toMatchObject({ id: expect.any(String), name: expect.any(String), description: expect.any(String), tags: expect.any(Array) });
     const x402 = card.capabilities.extensions.find((e: any) => e.uri === "https://x402.org");

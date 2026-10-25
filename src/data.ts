@@ -4,7 +4,7 @@
  * briefly unreachable, so a paid call is never settled against missing data.
  */
 
-export type DataFile = "coins" | "prices" | "signals" | "analysis" | "trades" | "context" | "events" | "brief" | "institutional_brief";
+export type DataFile = "coins" | "prices" | "signals" | "analysis" | "ideas" | "context" | "events" | "brief" | "institutional_brief";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type Json = any;

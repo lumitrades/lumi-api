@@ -13,12 +13,12 @@ export const MARKET_IDEAS_NOTICE = "Paper-trade analysis, not investment advice.
 /** One-line label used at the start of descriptions. */
 export const MARKET_IDEAS_LABEL = `${MARKET_IDEAS_NAME}: ${MARKET_IDEAS_NOTICE}`;
 
-/** Paid routes in Lumi Market Ideas (signal, lite, scan, slate, trades and levels). */
-export const MARKET_IDEAS_ROUTES: PaidRoute[] = ["signal", "lite", "scan", "slate", "trades", "levels"];
+/** Paid routes in Lumi Market Ideas (signal, lite, scan, slate and levels). */
+export const MARKET_IDEAS_ROUTES: PaidRoute[] = ["signal", "lite", "scan", "slate", "levels"];
 /** Response `kind` values of the Market Ideas routes. */
-export const MARKET_IDEAS_KINDS = ["signal", "signal_lite", "scan", "slate", "trades", "levels"];
+export const MARKET_IDEAS_KINDS = ["signal", "signal_lite", "scan", "slate", "levels"];
 /** MCP tools of the Market Ideas routes. */
-export const MARKET_IDEAS_TOOLS = ["lumi_signal", "lumi_lite", "lumi_scan", "lumi_slate", "lumi_trades", "lumi_levels"];
+export const MARKET_IDEAS_TOOLS = ["lumi_signal", "lumi_lite", "lumi_scan", "lumi_slate", "lumi_levels"];
 /** Trust-branded paid routes (Lumi Trust). */
 export const TRUST_LINE_ROUTES: PaidRoute[] = ["trust_check", "vendor_report"];
 
@@ -48,7 +48,7 @@ export const OPENAPI_TAGS = [
 ];
 
 /** Paths served by the Market Ideas routes (concrete or template). */
-export const MARKET_IDEAS_PATH_RE = /^\/v1\/(?:(?:signal|lite|levels)\/[^/]+|scan|slate|trades)$/;
+export const MARKET_IDEAS_PATH_RE = /^\/v1\/(?:(?:signal|lite|levels)\/[^/]+|scan|slate)$/;
 export const HEADER_PRODUCT_LINE = "X-Lumi-Product-Line";
 export const HEADER_NOTICE = "X-Lumi-Notice";
 export const MARKET_IDEAS_HEADERS: Record<string, string> = { [HEADER_PRODUCT_LINE]: MARKET_IDEAS_NAME, [HEADER_NOTICE]: MARKET_IDEAS_NOTICE };

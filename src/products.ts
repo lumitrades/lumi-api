@@ -1,10 +1,9 @@
 /**
  * Composite products built only from data Lumi already publishes on lumitrades.io/data:
- *   /v1/brief      daily market brief (JSON + markdown): BTC, CoinMarketCap Fear & Greed, movers, key levels, yen, events, trades, news
+ *   /v1/brief      daily market brief (JSON + markdown): BTC, CoinMarketCap Fear & Greed, movers, key levels, yen, events, current paper-trade ideas, news
  *   /v1/macro/yen  USD/JPY + Nikkei 225 and a rule-based carry-trade risk read around the 155 line
  *   /v1/sentiment  Fear & Greed (CoinMarketCap) + BTC perp funding/OI + market-wide breadth
  *   /v1/events     sourced, dated macro/crypto events and per-coin catalysts
- *   /v1/trades     paper-trade history (raw list; no aggregate win/loss stats)
  * Rules: whitelist fields, omit anything that is missing (never invent), run through the privacy filter (envelope -> sanitize),
  * keep the disclaimer.
  */
@@ -12,7 +11,7 @@
 import type { Json } from "./data";
 import { isSignedObject } from "./signed";
 import {
-  DISCLAIMER, FALLBACK_COINS, envelope, levelsBlock, num, priceBlock, tradeView, yenNote, type CoinRef,
+  DISCLAIMER, FALLBACK_COINS, envelope, levelsBlock, num, priceBlock, activeIdeas, yenNote, type CoinRef,
 } from "./views";
 
 /** Lumi's carry-trade line in the sand for USD/JPY (newsletter + analysis: "watching ~155"). */
@@ -292,27 +291,6 @@ export function eventsView(events: Json, analysis: Json, coins: CoinRef[], now: 
   }));
 }
 
-// ---------------------------------------------------------------- trades (paper-trade history)
-
-/**
- * The raw paper-trade list only. Aggregate win/loss statistics (win rate, P&L sums, best/worst, equity curve) are
- * deliberately not published while the slate is still being built.
- */
-export function tradesView(trades: Json, coins: CoinRef[]) {
-  const all: Json[] = Array.isArray(trades?.trades) ? trades.trades : [];
-  if (!all.length) return null;
-  const history = [...all]
-    .sort((a, b) => String(b.opened_at ?? "").localeCompare(String(a.opened_at ?? "")))
-    .map((t) => tradeView(t, coins));
-  return envelope("trades", compact({
-    count: all.length,
-    rules: trades?.slate?.rules ?? null,
-    trades: history,
-    note: "Paper trades only, no real money. Each idea is listed with its own entry, stop, targets, leverage and status.",
-    evaluated_utc: trades?.tracked_utc ?? trades?.evaluated_utc ?? null,
-  }));
-}
-
 // ---------------------------------------------------------------- brief
 
 function movers(prices: Json, coins: CoinRef[]) {
@@ -346,13 +324,13 @@ function keyLevels(analysis: Json, prices: Json, coins: CoinRef[]) {
 const fresh = (date: unknown, now: number, days = 2) =>
   typeof date === "string" && !Number.isNaN(Date.parse(date)) && now - Date.parse(date) <= days * DAY;
 
-export function briefView(d: { prices: Json; context: Json; analysis: Json; signals: Json; trades: Json; events?: Json; brief?: Json }, coins: CoinRef[], now: number) {
+export function briefView(d: { prices: Json; context: Json; analysis: Json; signals: Json; ideas: Json; events?: Json; brief?: Json }, coins: CoinRef[], now: number) {
   const btc = priceBlock(d.prices, "bitcoin");
   const backdrop = d.analysis?.backdrop ?? d.analysis?.coins?.bitcoin ?? null;
   const btcLv = levelsBlock(backdrop);
   const usdjpy = quoteBlock(freshQuote(d.context?.yen?.usd_jpy, now));
   const nikkei = quoteBlock(freshQuote(d.context?.yen?.nikkei, now));
-  const tr: Json[] = Array.isArray(d.trades?.trades) ? d.trades.trades : [];
+  const tr: Json[] = activeIdeas(d.ideas);
   const nl = d.brief?.newsletter && fresh(d.brief.newsletter.date, now) ? d.brief.newsletter : null;
   const news = Array.isArray(d.brief?.news?.items) ? d.brief.news.items.filter((n: Json) => fresh(n.date, now) && n.source_url) : [];
   const nowIso = new Date(now).toISOString();
@@ -390,12 +368,12 @@ export function briefView(d: { prices: Json; context: Json; analysis: Json; sign
     events_next_48h: evs.map((e) => ({ at_utc: e.at_utc, at_ct: e.at_ct, title: e.title, why: e.why, source: e.source, url: e.url })),
     coming_up: cats,
     paper_trades: {
-      active: tr.filter((t) => t.status === "open" || t.status === "pending").map((t) =>
-        compact({ id: t.id, coin: sym(coins, t.coin), direction: t.direction, leverage: t.leverage, status: t.status, entry: t.entry, stop: t.stop, targets: t.targets, unrealized_pnl_pct: num(t.unrealized_pnl_pct) })),
+      active: tr.map((t) =>
+        compact({ id: t.id, coin: sym(coins, t.coin), direction: t.direction, leverage: t.leverage, status: t.status, entry: t.entry, entry_zone: t.entry_zone, stop: t.stop, targets: t.targets, timeframe: t.timeframe, expiry: t.expiry ?? t.fill_by })),
     },
     what_happened: nl?.what_happened ?? null,
     news: news.map((n: Json) => ({ date: n.date, headline: n.headline, summary: n.summary, coins: n.coins, source: n.source_name, url: n.source_url })),
-    sources_as_of: { prices: d.prices?.updated_utc, context: d.context?.generated_utc, analysis: d.analysis?.as_of, trades: d.trades?.tracked_utc ?? d.trades?.evaluated_utc, newsletter: nl?.date },
+    sources_as_of: { prices: d.prices?.updated_utc, context: d.context?.generated_utc, analysis: d.analysis?.as_of, ideas: d.ideas?.as_of, newsletter: nl?.date },
   });
   const env = envelope("brief", body as Record<string, unknown>);
   return { ...env, markdown: briefMarkdown(env as Json) };
@@ -467,9 +445,9 @@ export function briefMarkdown(b: Json): string {
   }
   const pt = b.paper_trades;
   if (pt) {
-    L.push("", "## Lumi's paper trades");
+    L.push("", "## Lumi's current paper-trade ideas");
     for (const t of pt.active ?? []) {
-      L.push(`- ${t.id} ${t.coin} ${t.direction}${t.leverage ? ` ${t.leverage}x` : ""} (${t.status})${t.entry !== undefined ? `: entry ${t.entry}` : ""}${t.stop !== undefined ? `, stop ${t.stop}` : ""}${t.targets ? `, targets ${t.targets.join(" / ")}` : ""}${t.unrealized_pnl_pct !== undefined ? `, now ${pct(t.unrealized_pnl_pct)}` : ""}`);
+      L.push(`- ${t.id} ${t.coin} ${t.direction}${t.leverage ? ` ${t.leverage}x` : ""} (${t.status})${t.entry !== undefined ? `: entry ${t.entry}` : ""}${t.stop !== undefined ? `, stop ${t.stop}` : ""}${t.targets ? `, targets ${t.targets.join(" / ")}` : ""}`);
     }
   }
   L.push("", `_Source: Lumi Trades (lumitrades.io), ${b.timestamp}. ${DISCLAIMER}_`, "");
