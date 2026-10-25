@@ -1219,7 +1219,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (!m) return json(404, { error: "not_found", hint: `See ${base}/ for the endpoint list.` });
     const route = m[1] as PaidRoute;
 
-    // An unfilled path template (/v1/signal/{coin}, /v1/signal/:coin, /v1/trust/vendors/%7Bid%7D/report, ...):
+    // An unfilled path template (/v1/trust/vendors/%7Bid%7D/report, /v1/trust/vendors/:id/report, ...):
     // - the literal OpenAPI template ({coin} / {id}) without a payment header: the normal 402 price quote for the route (same
     //   accepts/prices/payTo as a concrete value), because discovery crawlers (x402scan / @agentcash/discovery, Bazaar) request
     //   the template URL verbatim and only list routes that answer 402; the quote carries a note to fill the placeholder;
@@ -1244,12 +1244,12 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           resourceUrl: `${base}${path}`,
           bazaar: bazaarExtension(route, isReport ? "printmoneylab" : "xrp", undefined, config.evm?.prices[route]),
           service: serviceMeta(route),
-          note: `Replace ${rawArg} with ${isReport ? "a vendor id, e.g. printmoneylab (GET /v1/trust/vendors, free)" : "a coin, e.g. xrp (GET /v1/coins, free)"} and request that URL for a fresh quote before paying: ${example}. A payment sent to this placeholder URL is refused and not charged.`,
+          note: `Replace ${rawArg} with ${isReport ? "a vendor id, e.g. printmoneylab (GET /v1/trust/vendors, free)" : "a real value"} and request that URL for a fresh quote before paying: ${example}. A payment sent to this placeholder URL is refused and not charged.`,
         }, "PAYMENT-SIGNATURE header is required");
       }
       return json(400, {
         error: "path_template_not_filled",
-        detail: `Replace ${rawArg} with a real value. ${isReport ? "Vendor ids: GET /v1/trust/vendors (free)." : "Coins: GET /v1/coins (free)."}`,
+        detail: `Replace ${rawArg} with a real value. ${isReport ? "Vendor ids: GET /v1/trust/vendors (free)." : "See /openapi.json."}`,
         example,
         openapi: `${base}/openapi.json`,
         note: "Not charged.",

@@ -2,7 +2,7 @@
  * Coinbase AgentKit (>= 0.10.4) buying a Lumi read with USDC on Base, by direct URL.
  *
  *   npm i @coinbase/agentkit viem
- *   EVM_PRIVATE_KEY=0x... npx tsx examples/agentkit-direct-url.ts /v1/signal/XRP
+ *   EVM_PRIVATE_KEY=0x... npx tsx examples/agentkit-direct-url.ts /v1/sentiment
  *   LUMI_DRY_RUN=1 EVM_PRIVATE_KEY=0x... npx tsx examples/agentkit-direct-url.ts   # quote only, pays nothing
  *
  * Why direct URL: AgentKit 0.10.4's `discover_x402_services` drops x402 v2 resources whose
@@ -24,7 +24,7 @@ process.on("unhandledRejection", (e) => {
   throw e;
 });
 
-const url = `https://api.lumitrades.io${process.argv[2] ?? "/v1/signal/XRP"}`;
+const url = `https://api.lumitrades.io${process.argv[2] ?? "/v1/sentiment"}`;
 const MAX_USDC_ATOMIC = 50_000n; // refuse anything above $0.05 (the Institutional Brief is $0.10: raise this to buy it)
 
 const walletProvider = new ViemWalletProvider(

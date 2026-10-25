@@ -8,7 +8,7 @@
  *      issuer that issues the same 40-hex currency code, and points the API at it with
  *      RLUSD_ISSUER / USDC_ISSUER. That exercises the exact same IOU code path in the API, SDK
  *      and T54 facilitator. With STANDIN=0 it uses the official issuer (fund the payer yourself).
- *   1. GET /v1/slate -> 402 with accepts[0] XRP, accepts[1] RLUSD, accepts[2] USDC
+ *   1. GET /v1/market -> 402 with accepts[0] XRP, accepts[1] RLUSD, accepts[2] USDC
  *   2. sign the stablecoin option with x402-xrpl, retry -> 200 + data + receipt
  *   3. replay -> refused
  *   4. confirm on ledger (delivered RLUSD) and write demo/testnet-rlusd-*.json
@@ -104,7 +104,7 @@ async function main() {
       0,
     );
     server = started.server;
-    const target = `${started.url}/v1/slate`;
+    const target = `${started.url}/v1/market`;
 
     hr(`1. GET ${target} (no payment)`);
     const r402 = await fetch(target);

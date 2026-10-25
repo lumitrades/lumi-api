@@ -1,7 +1,6 @@
 # Smithery configuration for the Lumi Trades MCP server (stdio, published on npm as lumi-trades-mcp).
 # The server lives in ./mcp; this config simply launches the published npm package.
-# Tool groups: Lumi Trades seller checks (x402), market data, and Lumi Trades market readings (signal, lite, scan, levels, slate):
-# Market readings are rule-based, not investment advice. Lumi does not trade real money.
+# Tool groups: Lumi Trades seller checks (x402) and market data. Information only, not investment advice.
 startCommand:
   type: stdio
   configSchema:

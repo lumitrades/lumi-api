@@ -1,16 +1,16 @@
 # Lumi API
 
-**Pay-per-call crypto market reads for AI agents, settled in XRP, RLUSD or USDC on the XRP Ledger, or in USDC on Base, via [x402](https://xrpl.org/docs/agents/agentic-payments-x402) v2. Discoverable over x402, OpenAPI, MCP and A2A.**
+**x402 seller checks and pay-per-call crypto market data for AI agents, settled in XRP, RLUSD or USDC on the XRP Ledger, or in USDC on Base, via [x402](https://xrpl.org/docs/agents/agentic-payments-x402) v2. Discoverable over x402, OpenAPI, MCP and A2A.**
 
-Lumi Trades ([lumitrades.io](https://lumitrades.io)) publishes three separate product lines: **Lumi Trades seller checks** (x402 seller pay-checks and vendor observations, below), **market data** (a BTC/macro backdrop, a daily market brief, a yen carry-trade watch, a sentiment snapshot and an events calendar, funding and Fear & Greed, plus a daily Institutional & Policy Brief that maps what central banks, regulators, banks and tokenization firms are doing to XRP, XLM, XDC, QNT, AXL and HBAR) and **Lumi Trades market readings** (indicator signals, the all-coins scan, support/resistance levels, a public slate of current paper-trade ideas (pending/open only; the trade history is private); information only, not investment advice, and Lumi does not trade real money). Lumi API puts those reads behind HTTP 402. An agent calls an endpoint, gets a price in XRP (or a stablecoin, on the XRP Ledger or on Base), signs one small payment, retries, and receives JSON. XRPL is the home network and stays first in every quote; Base USDC is the bridge for EVM agents that already speak standard x402. There are no API keys, accounts or invoices to reconcile. The payment *is* the authentication, and every call leaves an auditable on-ledger record.
+Lumi Trades ([lumitrades.io](https://lumitrades.io)) publishes two product lines: **Lumi Trades seller checks** (x402 seller pay-checks and vendor observations, below) and **market data** (a BTC/macro backdrop, a yen macro watch, a sentiment snapshot, an events calendar, perpetual funding rates and Fear & Greed, plus a daily Institutional & Policy Brief that maps what central banks, regulators, banks and tokenization firms are doing to the networks Lumi tracks). Lumi API puts those reads behind HTTP 402. An agent calls an endpoint, gets a price in XRP (or a stablecoin, on the XRP Ledger or on Base), signs one small payment, retries, and receives JSON. XRPL is the home network and stays first in every quote; Base USDC is the bridge for EVM agents that already speak standard x402. There are no API keys, accounts or invoices to reconcile. The payment *is* the authentication, and every call leaves an auditable on-ledger record.
 
-> Analytics and education only. Not financial advice and not a recommendation to buy, sell or hold. Readings are mechanical, not forecasts.
+> Analytics and education only. Not financial advice and not a recommendation to buy, sell or hold.
 >
-> **Lumi Trades market readings** (`/v1/signal/{coin}`, `/v1/lite/{coin}`, `/v1/scan`, `/v1/levels/{coin}`, `/v1/slate`): Information only, not investment advice. Lumi does not trade real money. Their responses carry `product_line: "Lumi Trades market readings"` and `notice` fields plus `X-Lumi-Product-Line` / `X-Lumi-Notice` headers (additive; prices and shapes unchanged).
+> **Retired 2026-10-25:** the per-coin readings and watchlist routes (`/v1/signal/{coin}`, `/v1/lite/{coin}`, `/v1/levels/{coin}`, `/v1/scan`, `/v1/slate`), the daily market brief (`/v1/brief`) and `/v1/coins` now answer `410 Gone` with a pointer to the free `/v1/check`. They never quote or charge, even when a payment header is sent. Monitor ($9) and Monitor Plus ($29) are no longer sold; terms bought before then run to their end. The Watch tiers are unchanged.
 
 ## Quickstart
 
-Free first: [`/v1/trust/vendors`](https://api.lumitrades.io/v1/trust/vendors) (x402 vendor trust observations), [`/v1/samples`](https://api.lumitrades.io/v1/samples) (truncated samples of every paid product), [`/v1/coins`](https://api.lumitrades.io/v1/coins),
+Free first: [`/v1/trust/vendors`](https://api.lumitrades.io/v1/trust/vendors) (x402 vendor trust observations), [`/v1/samples`](https://api.lumitrades.io/v1/samples) (truncated samples of every paid product), [`/v1/check`](https://api.lumitrades.io/v1/check?url=https://api.example.com/v1/data) (free cached pay-check),
 [`/llms.txt`](https://api.lumitrades.io/llms.txt). Open [api.lumitrades.io](https://api.lumitrades.io/) in a browser for the human quickstart.
 
 **USDC on Base, official x402 fetch SDK** ([examples/base-x402-fetch.ts](examples/base-x402-fetch.ts)):
@@ -23,7 +23,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`) });
-const res = await wrapFetchWithPayment(fetch, client)("https://api.lumitrades.io/v1/signal/XRP"); // $0.01, gasless
+const res = await wrapFetchWithPayment(fetch, client)("https://api.lumitrades.io/v1/sentiment"); // $0.005, gasless
 console.log(await res.json());
 ```
 
@@ -43,9 +43,9 @@ const walletProvider = new ViemWalletProvider(createWalletClient({
 const agentkit = await AgentKit.from({ walletProvider, actionProviders: [x402ActionProvider()] });
 const act = (n: string) => agentkit.getActions().find((a) => a.name.endsWith(n))!;
 
-const url = "https://api.lumitrades.io/v1/signal/XRP";
+const url = "https://api.lumitrades.io/v1/sentiment";
 const quote = JSON.parse(await act("make_http_request").invoke({ url }));          // 402 terms
-const o = quote.acceptablePaymentOptions.find((x: any) => x.network === "eip155:8453"); // 10000 = $0.01 USDC
+const o = quote.acceptablePaymentOptions.find((x: any) => x.network === "eip155:8453"); // 5000 = $0.005 USDC
 const paid = JSON.parse(await act("retry_http_request_with_x402").invoke({
   url, method: "GET",
   selectedPaymentOption: { scheme: o.scheme, network: o.network, asset: o.asset, amount: o.amount, payTo: o.payTo },
@@ -74,8 +74,8 @@ console.log(paid.data);
 | free | `GET /skill.md` (also `/llms.txt`) | – | Agent guide: what's offered, prices, how to pay, example code |
 | free | `GET /.well-known/x402` | – | x402 discovery manifest ([draft-hawkins-x402-dns-discovery](https://datatracker.ietf.org/doc/draft-hawkins-x402-dns-discovery/) shape) |
 | free | `GET /openapi.json` | – | OpenAPI 3.1 with `x-payment-info` per paid route (x402scan-style discovery) |
-| free | `GET /v1/coins` | – | Supported coins |
-| free | `GET /v1/samples` | – | Truncated, labelled SAMPLE of every paid product (lists cut to 2, signal shows one timeframe, institutional = headline + big picture + 2 items + sources); cached 10 min |
+| free | `GET /v1/check?url=…` | – | Free cached pay-check for an x402 URL (allow / check_first / warn / block) |
+| free | `GET /v1/samples` | – | Truncated, labelled SAMPLE of every paid product (lists cut to 2, institutional = headline + big picture + 2 items + sources); cached 10 min |
 | free | `POST /mcp` | – | Remote MCP server (Streamable HTTP): free tools for everyone; paid tools explain the price and how to pay |
 | free | `GET /.well-known/agent-card.json` (also `/.well-known/agent.json`) | – | A2A agent card (A2A 1.0, with 0.3 compatibility fields): skills mirroring the endpoints, MCP URL, x402 payment networks |
 | free | `POST /a2a` | – | A2A JSON-RPC (`SendMessage` 1.0, `message/send` 0.3): free skills answer inline; paid skills return the live x402 terms |
@@ -90,22 +90,13 @@ console.log(paid.data);
 
 | | Endpoint | Price | Returns |
 |---|---|---|---|
-| **paid** | `GET /v1/market` | **0.01 XRP** or **0.02 RLUSD / USDC** | BTC backdrop (support/resistance, momentum/trend bias), macro (yen/USDJPY note, total cap, dominance, fear & greed, BTC perp funding/OI), breadth |
-| **paid** | `GET /v1/brief` | **0.015 XRP** or **0.02 RLUSD / USDC** | Today's market brief (what the newsletter and Shorts say): BTC price/levels/momentum bias, CoinMarketCap Fear & Greed, funding, top/bottom movers, key levels for all 13 coins, yen watch, events in the next 48h, current paper-trade ideas (pending/open only, no outcomes or P/L), sourced news. JSON with a `markdown` field; `?format=md` returns `text/markdown` |
-| **paid** | `GET /v1/macro/yen` | **0.0075 XRP** or **0.01 RLUSD / USDC** | USD/JPY + Nikkei 225 (price, 1d/5d change, ranges), rule-based carry-trade risk (`low`/`watch`/`elevated`) around the 155 line with reasons, Lumi's yen note, Japan events (CPI, BOJ), sources |
-| **paid** | `GET /v1/sentiment` | **0.0038 XRP** or **0.005 RLUSD / USDC** | CoinMarketCap Fear & Greed (value, band, change), BTC perp funding + plain-English read + OI (OKX), total cap/volume/dominance, breadth and signal-label counts |
+| **paid** | `GET /v1/market` | **0.01 XRP** or **0.02 RLUSD / USDC** | BTC price and 24h change, macro (USD/JPY note, total cap, dominance, Fear & Greed, BTC perp funding/OI), dated catalysts with sources, 24h up/down breadth |
+| **paid** | `GET /v1/macro/yen` | **0.0075 XRP** or **0.01 RLUSD / USDC** | USD/JPY + Nikkei 225 (price, 1d/5d change, ranges), rule-based macro risk level (`low`/`watch`/`elevated`) against a 155 USD/JPY reference with reasons, Lumi's yen note, Japan events (CPI, BOJ), sources |
+| **paid** | `GET /v1/sentiment` | **0.0038 XRP** or **0.005 RLUSD / USDC** | CoinMarketCap Fear & Greed (value, band, change), BTC perp funding + plain-English read + OI (OKX), total cap/volume/dominance, 24h up/down breadth |
 | **paid** | `GET /v1/events` | **0.0038 XRP** or **0.005 RLUSD / USDC** | Sourced upcoming macro/crypto events: timed releases (UTC + US Central, why it matters) and dated per-coin catalysts (Fed, BOJ, CPI, upgrades, conferences) |
-| **paid** | `GET /v1/institutional` | **$0.10**: 0.10 RLUSD / USDC (XRPL, Base or Stellar) or the XRP equivalent (default 0.077 XRP, live-priced) | **Institutional & Policy Brief** (daily): sourced analysis of what BIS, IMF, US Treasury/OCC, Fed, SEC, CFTC, JPMorgan (Kinexys), SBI, Cross River, Securitize, R3 and others are doing, mapped to XRP, XLM, XDC, QNT, AXL and HBAR. Each item: date, source URL, why it matters, coins, impact, confidence and `link_type` (`confirmed` / `indirect_alignment` = Lumi's analysis / `context`). Plus big picture, per-token map, connections, no-news notes, what to watch. JSON with `markdown`; `?format=md` returns `text/markdown`. Not sold if older than 36 h |
+| **paid** | `GET /v1/institutional` | **$0.10**: 0.10 RLUSD / USDC (XRPL, Base or Stellar) or the XRP equivalent (default 0.077 XRP, live-priced) | **Institutional & Policy Brief** (daily): sourced analysis of what BIS, IMF, US Treasury/OCC, Fed, SEC, CFTC, JPMorgan (Kinexys), SBI, Cross River, Securitize, R3 and others are doing, mapped to XRP, XLM, XDC, QNT, AXL and HBAR. Each item: date, source URL, why it matters, coins, confidence and `link_type` (`confirmed` / `indirect_alignment` = Lumi's analysis / `context`). Plus big picture, per-token map, connections, no-news notes, what to watch. JSON with `markdown`; `?format=md` returns `text/markdown`. Not sold if older than 36 h |
 
-**Lumi Trades market readings (paid).** Information only, not investment advice. Lumi does not trade real money. Also `/v1/lite/{coin}` and `/v1/scan` (see `/openapi.json`, tag "Lumi Trades market readings").
-
-| | Endpoint | Price | Returns |
-|---|---|---|---|
-| **paid** | `GET /v1/signal/{coin}` | **0.005 XRP** or **0.01 RLUSD / USDC** | Momentum/trend bias (positive/neutral/negative) + score, 1h/4h/1d bias, indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume) |
-| **paid** | `GET /v1/levels/{coin}` | **0.005 XRP** or **0.01 RLUSD / USDC** | Chart reference zones, short bias note, commentary, catalysts, sources |
-| **paid** | `GET /v1/slate` | **0.01 XRP** or **0.02 RLUSD / USDC** | Current watchlist as momentum/trend bias (conviction, timeframe, expiry; no entries, stops, targets or leverage), coins with no current idea |
-
-Pricing rationale (Oct 2026, XRP ≈ $1.33): single data feeds on the XRPL AI Hub sell for 0.001-0.012 RLUSD (AskSurf, Heurist Mesh, KR Crypto) and composite reads for ~0.02-0.025 (Strale Fear & Greed via Monid, invinoveritas). Lumi's quick reads sit at $0.003-$0.005, single feeds at $0.01 and the multi-source brief at $0.02 (v1.0). The daily Institutional & Policy Brief is $0.10 (lowered from $0.25 on Oct 23 2026, and now included in the free trial): exactly 0.10 RLUSD / USDC (XRPL, Base or Stellar); the XRP default is **0.077 XRP** (0.10 / 1.30), repriced from the live rate when `XRP_PRICING=live`.
+Pricing rationale (Oct 2026, XRP ≈ $1.33): single data feeds on the XRPL AI Hub sell for 0.001-0.012 RLUSD (AskSurf, Heurist Mesh, KR Crypto) and composite reads for ~0.02-0.025 (Strale Fear & Greed via Monid, invinoveritas). Lumi's quick reads sit at $0.005, single feeds at $0.01 and the multi-source backdrop at $0.02. The daily Institutional & Policy Brief is $0.10 (lowered from $0.25 on Oct 23 2026, and now included in the free trial): exactly 0.10 RLUSD / USDC (XRPL, Base or Stellar); the XRP default is **0.077 XRP** (0.10 / 1.30), repriced from the live rate when `XRP_PRICING=live`.
 
 ### You only pay when you get data
 
@@ -118,7 +109,6 @@ Other x402 vendors have taken payment and then returned an upstream error or an 
 
 Fields that are unavailable are omitted, never guessed. Tests: `test/products.test.ts` ("you only pay when you get data").
 
-`{coin}`: `XRP XLM HBAR XDC AXL ZBCN BTC ETH DOGE ADA LINK SUI SHX`. Tickers or CoinGecko ids work, case-insensitive.
 Every RLUSD / USDC price above is also payable as **USDC on Base** (same amount). Prices are configurable (`PRICE_*_XRP`, `PRICE_*_RLUSD`, `PRICE_*_USDC` in `wrangler.toml`; Base follows `PRICE_*_USDC` unless `PRICE_*_BASE_USDC` is set).
 
 ### Accepted assets
@@ -140,13 +130,13 @@ To pay in a stablecoin with `x402Fetch`, pass a `paymentRequirementsSelector` th
 
 Every paid response includes `timestamp`, `source: "lumitrades.io"`, a `payment` block (network, tx hash, payer, explorer link) and a `disclaimer`.
 
-**You are never charged for a failed request.** Unknown coins return 404 and upstream outages return 503 *before* any payment is requested. Data is only served after a validated `tesSUCCESS` settlement.
+**You are never charged for a failed request.** Unknown vendors return 404 and upstream outages return 503 *before* any payment is requested. Data is only served after a validated `tesSUCCESS` settlement.
 
 ## How agents pay (x402 v2, `exact` scheme on XRPL)
 
 ```
 Agent                          Lumi API (Worker)                 T54 facilitator         XRP Ledger
-  | GET /v1/signal/XRP              |                                  |                      |
+  | GET /v1/market                  |                                  |                      |
   |-------------------------------->|                                  |                      |
   | 402 + PAYMENT-REQUIRED          |  (stateless HMAC invoice id)     |                      |
   |<--------------------------------|                                  |                      |
@@ -167,7 +157,7 @@ Agent                          Lumi API (Worker)                 T54 facilitator
    ```json
    { "scheme": "exact", "network": "xrpl:0", "asset": "XRP", "amount": "20000",
      "payTo": "rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM", "maxTimeoutSeconds": 300,
-     "extra": { "invoiceId": "lumi1.signal:XRP.<exp>.<nonce>.<mac>", "sourceTag": 804681468 } }
+     "extra": { "invoiceId": "lumi1.market.<exp>.<nonce>.<mac>", "sourceTag": 804681468 } }
    ```
 2. **Pay.** The agent signs (but does not submit) an XRPL `Payment` for exactly `amount` drops to `payTo`, bound to the invoice (Memo + `InvoiceID`), and retries with `PAYMENT-SIGNATURE`.
 3. **Settle.** Lumi API checks the invoice, then has the facilitator verify and submit the blob. On a validated `tesSUCCESS` it returns the data and a `PAYMENT-RESPONSE` receipt `{ success, transaction, network, payer }`.
@@ -179,7 +169,7 @@ import { Wallet } from "xrpl";
 import { x402Fetch } from "x402-xrpl";
 
 const fetchPaid = x402Fetch({ wallet: Wallet.fromSeed(process.env.XRPL_SEED!), network: "xrpl:0", maxValue: "100000" });
-const res = await fetchPaid("https://api.lumitrades.io/v1/signal/XRP");
+const res = await fetchPaid("https://api.lumitrades.io/v1/sentiment");
 console.log(await res.json());
 ```
 
@@ -197,9 +187,9 @@ See `examples/agent-client.ts`, `examples/agent_client.py` and the live `/skill.
 The last `accepts[]` entry is a standard x402 v2 EVM requirement, so the official x402 clients work unchanged and skip the XRPL options:
 
 ```json
-{ "scheme": "exact", "network": "eip155:8453", "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "amount": "10000",
+{ "scheme": "exact", "network": "eip155:8453", "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "amount": "5000",
   "payTo": "0x5E617bac19912e6d212CB303ae84655E9E203532", "maxTimeoutSeconds": 300,
-  "extra": { "name": "USD Coin", "version": "2", "invoiceId": "lumi1.signal:XRP.<exp>.<nonce>.<mac>", "symbol": "USDC", "decimals": 6 } }
+  "extra": { "name": "USD Coin", "version": "2", "invoiceId": "lumi1.sentiment.<exp>.<nonce>.<mac>", "symbol": "USDC", "decimals": 6 } }
 ```
 
 The agent signs an EIP-3009 `transferWithAuthorization` (no gas, no ETH needed) and retries with
@@ -215,14 +205,14 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`) });
-const res = await wrapFetchWithPayment(fetch, client)("https://api.lumitrades.io/v1/brief");
+const res = await wrapFetchWithPayment(fetch, client)("https://api.lumitrades.io/v1/market");
 console.log(await res.json());
 ```
 
 Why CDP first (since v0.8): payments settled through Coinbase's CDP facilitator get the endpoint listed in the
 [x402 Bazaar](https://docs.cdp.coinbase.com/x402/bazaar), the discovery index that x402 clients and agent wallets search. Every paid 402
 carries an `extensions.bazaar` block (input schema, path/query parameters, a sample JSON output and its JSON Schema, and a `routeTemplate`
-such as `/v1/signal/:coin` so all coins list as one resource) plus a `resource.description` of at most 500 characters. The Worker signs a
+such as `/v1/trust/vendors/:id/report` so all vendors list as one resource) plus a `resource.description` of at most 500 characters. The Worker signs a
 short-lived (120 s) Ed25519 JWT per facilitator request with Web Crypto; the CDP key is a Worker secret, never in the repo.
 
 Fallback: if CDP fails for a facilitator-side reason (network error, 401/403/404, 408/429/5xx, malformed reply, or a rejection about the
@@ -277,7 +267,7 @@ npm run demo:testnet
 The demo does the following:
 1. creates two throwaway **testnet** wallets via the XRPL faucet (payer and receiver) on first run, stored only in `.testnet/wallets.json`, which is git-ignored and mode 600
 2. starts Lumi API in-process with testnet config and the T54 testnet facilitator
-3. sends `GET /v1/signal/XRP` and gets **402** with the requirements
+3. sends a paid `GET` and gets **402** with the requirements
 4. signs the Payment with the `x402-xrpl` SDK, retries, and gets **200** with data and a `PAYMENT-RESPONSE` receipt
 5. replays the same `PAYMENT-SIGNATURE` and gets **402 `invoice_already_used`**
 6. runs the one-line agent flow `x402Fetch(/v1/market)` and gets **200**
@@ -285,7 +275,7 @@ The demo does the following:
 
 To run it against the Workers runtime instead: `npm run dev` in one shell, then `LUMI_API_URL=http://127.0.0.1:8787 npm run demo:testnet`.
 
-Recorded runs (Oct 22 2026), all validated `tesSUCCESS` on XRPL Testnet (the first five at the launch prices of 0.02/0.05 XRP, the last two at the current 0.005/0.01 XRP):
+Recorded runs (Oct 22 2026; historical: the per-coin and watchlist routes used here were retired on 2026-10-25), all validated `tesSUCCESS` on XRPL Testnet (the first five at the launch prices of 0.02/0.05 XRP, the last two at the current 0.005/0.01 XRP):
 
 | Run | Endpoint | Amount | Tx |
 |---|---|---|---|
@@ -297,7 +287,7 @@ Recorded runs (Oct 22 2026), all validated `tesSUCCESS` on XRPL Testnet (the fir
 | Node (current prices) | `/v1/signal/XRP` | 0.005 XRP | [70B12A01…FB2A6E](https://testnet.xrpl.org/transactions/70B12A01E8D8E51E5E9755C858AC94DCB5360BE996C96A6242DF92B994FB2A6E) |
 | Node (current prices) | `/v1/market` (x402Fetch) | 0.01 XRP | [4510B9AE…2E7C97](https://testnet.xrpl.org/transactions/4510B9AE3D4B2751D55CB54634DAA4B6C6148809A9E609EE53574C97562E7C97) |
 
-Stablecoin runs (`npm run demo:testnet:stablecoin`, `DEMO_ASSET=RLUSD|USDC`), Oct 22 2026, through the T54 testnet facilitator. Both validated `tesSUCCESS`, and replay was refused:
+Stablecoin runs (`npm run demo:testnet:stablecoin`, `DEMO_ASSET=RLUSD|USDC`), Oct 22 2026 (historical route), through the T54 testnet facilitator. Both validated `tesSUCCESS`, and replay was refused:
 
 | Asset | Endpoint | Price | Tx |
 |---|---|---|---|
@@ -313,6 +303,8 @@ Settle latency was about 6 to 7 s per paid call, including XRPL validation. Full
 > **DEMO:** both wallets belong to Lumi. This shows the live flow working and is **not** organic usage. Exclude it from usage metrics.
 
 `npm run demo:buyer:create` generates a demo-buyer wallet. The seed goes to a mode-600 file outside the repo and the script prints only the address. `DEMO_CONFIRM=yes npm run demo:mainnet` makes one capped XRP x402 call to `api.lumitrades.io` and logs the transaction.
+
+Historical (the route below was retired on 2026-10-25):
 
 | Date | From (demo buyer) | Endpoint | Amount | Tx |
 |---|---|---|---|---|
@@ -330,7 +322,7 @@ Settle latency was about 6 to 7 s per paid call, including XRPL validation. Full
 4. Trust layer: `npx wrangler d1 create lumi_trust` (put the id in `wrangler.toml`), then
    `npx wrangler d1 migrations apply lumi_trust --remote`. The `*/30 * * * *` Cron Trigger runs the free probes.
 5. `npm run deploy`. Wrangler creates the `api.lumitrades.io` DNS record and certificate, because `custom_domain = true`.
-6. Smoke test: `curl https://api.lumitrades.io/health` and `curl -i https://api.lumitrades.io/v1/signal/XRP` (expect 402).
+6. Smoke test: `curl https://api.lumitrades.io/health` and `curl -i https://api.lumitrades.io/v1/market` (expect 402).
 
 ### Mainnet configuration
 
@@ -357,9 +349,9 @@ The server never holds a private key. The payer signs, the facilitator submits, 
 ## Data inputs
 
 All paid data comes from Lumi's own published JSON files under `https://lumitrades.io/data/` (for example
-[`https://lumitrades.io/data/prices.json`](https://lumitrades.io/data/prices.json); the folder itself has no index page): `prices`, `signals`, `analysis`, `trades`, `context`
+[`https://lumitrades.io/data/prices.json`](https://lumitrades.io/data/prices.json); the folder itself has no index page): `prices`, `analysis` (catalysts and sources only), `context`
 (total cap, dominance, CoinMarketCap Fear & Greed, OKX BTC funding/OI, and USD/JPY + Nikkei from Yahoo Finance) and, since v0.2,
-`events.json` + `brief.json` (generated by the site's `scripts/brief.py` from the newsletter and the Shorts' sourced news/event notes).
+`events.json` (sourced event notes).
 Since v0.5, `/v1/institutional` reads `institutional_brief.json`, written once a day by Lumi's research routine and published with the
 site's `scripts/publish.sh`. Required: `generated_utc` (ISO 8601 UTC, the freshness clock: older than 36 h = 503 "Not charged."),
 `date`, `big_picture[]` (≥1), and `items[]` and/or `no_notable_news[]`. Items need `entity`, `headline` and an http(s) `source_url`
@@ -432,8 +424,8 @@ logs to `notes/trust_testbuys.log`, and posts each result to `POST /v1/trust/obs
 and never printed.
 
 **Who jumps the queue (free and paid checks are identical).** Any Lumi check of an exact listing, free
-(`GET /v1/trust/vendors?url=…`, the `/v1/trust/check` free trial) or paid (`/v1/trust/check`), sends the same signal: if the verdict
-finds one of the objective signals in `BUY_SIGNALS` (from Lumi's own records and public data only; `pay_to_mismatch`
+(`GET /v1/trust/vendors?url=…`, the `/v1/trust/check` free trial) or paid (`/v1/trust/check`), has the same effect: if the verdict
+finds one of the objective findings in `BUY_SIGNALS` (from Lumi's own records and public data only; `pay_to_mismatch`
 is excluded because it depends on the payTo the caller enters, so who ran the check never matters) and the listing is a Base seller (host) Lumi has never conclusively test-bought, it is added to the buy queue
 (`GET /v1/trust/catalog/buy-queue`), which `catalog_buys.ts --daily` puts first on the next day's Base list. Limits, the same for both:
 one slot per seller per 30 days (`PRIORITY_SELLER_DAYS`; repeat checks add nothing), at most `TRUST_PRIORITY_DAILY_CAP` sellers per UTC day (default 5,
@@ -465,9 +457,9 @@ The Worker serves a remote MCP endpoint (Streamable HTTP, stateless, JSON respon
 plus the legacy `initialize` handshake for `2024-11-05` .. `2025-11-25` clients). Paste the URL into any client that takes a remote MCP
 server URL (e.g. a Grok, Claude or ChatGPT connector, or `npx @modelcontextprotocol/inspector`).
 
-- Same tool names and descriptions as the stdio package below: free `lumi_catalog`, `lumi_coins`, `lumi_samples`, `lumi_quote`, `lumi_verdict`, `lumi_vendor_scores`; paid Lumi Trades seller checks `lumi_trust_check`, `lumi_vendor_report`;
-  paid market data `lumi_brief`, `lumi_market`, `lumi_macro_yen`, `lumi_sentiment`, `lumi_events`, `lumi_institutional_brief`; paid **Lumi Trades market readings** `lumi_signal`, `lumi_lite`, `lumi_scan`, `lumi_levels`, `lumi_slate`
-  (titled "Lumi Trades market readings: …"; information only, not investment advice; Lumi does not trade real money).
+- Same tool names and descriptions as the stdio package below: free `lumi_catalog`, `lumi_samples`, `lumi_quote`, `lumi_verdict`, `lumi_vendor_scores`; paid Lumi Trades seller checks `lumi_trust_check`, `lumi_vendor_report`;
+  paid market data `lumi_market`, `lumi_macro_yen`, `lumi_sentiment`, `lumi_events`, `lumi_institutional_brief`. The retired tools
+  (`lumi_signal`, `lumi_lite`, `lumi_scan`, `lumi_levels`, `lumi_slate`, `lumi_brief`, `lumi_coins`) are no longer listed and answer that they were retired.
 - A remote connector has no wallet, so a paid tool returns a normal tool result with the price and the two ways to pay: x402 at the
   REST endpoint, or the `lumi-trades-mcp` npm package with your own XRPL wallet. Nothing is charged.
 - The freshness rule still applies: stale or missing data is a tool error ("Not charged."), never a quote or data.
@@ -480,10 +472,10 @@ server URL (e.g. a Grok, Claude or ChatGPT connector, or `npx @modelcontextproto
 
 - **Agent card:** `https://api.lumitrades.io/.well-known/agent-card.json` (alias `/.well-known/agent.json`). A2A 1.0 shape
   (`supportedInterfaces`, `capabilities`, `skills`, `provider`) plus the 0.3 fields (`url`, `preferredTransport`, `protocolVersion`).
-  Skills mirror the endpoints (free `catalog`, `coins`, `quote`, `vendor_trust`; paid `brief`, `signal`, `levels`, `slate`, `market`, `macro_yen`,
+  Skills mirror the endpoints (free `catalog`, `quote`, `vendor_trust`; paid `market`, `macro_yen`,
   `sentiment`, `events`, `vendor_report`, `institutional`). The x402 networks and prices and the MCP URL are in `capabilities.extensions`.
 - **JSON-RPC endpoint:** `POST https://api.lumitrades.io/a2a`, stateless. `SendMessage` (1.0) and `message/send` (0.3) take text such as
-  "signal XRP" or a data part `{ "skill": "signal", "coin": "XRP" }` and reply with a direct Message. Free skills answer inline; paid skills
+  "market" or a data part `{ "skill": "market" }` and reply with a direct Message. Free skills answer inline; paid skills
   answer with the live x402 terms (every network option) and the REST URL to pay at, and nothing is charged over A2A. No tasks, streaming
   or push notifications (those methods return the spec errors).
 
@@ -503,8 +495,8 @@ src/
   cdp.ts            Coinbase CDP facilitator auth: per-request Ed25519 JWT (Web Crypto), EXTENSION-RESPONSES decoding
   bazaar.ts         x402 Bazaar discovery metadata per paid route (description, input/output schema, example, routeTemplate)
   invoice-guard.ts  Durable Object: atomic one-time invoice redemption
-  views.ts          whitelisted response shapes (signal, levels, slate, market)
-  products.ts       brief, macro/yen, sentiment, events (+ markdown brief, carry-trade + funding rules)
+  views.ts          whitelisted response shapes (market)
+  products.ts       macro/yen, sentiment, events (+ yen risk and funding rules)
   institutional.ts  daily Institutional & Policy Brief (/v1/institutional): field whitelist, link types, per-token map, markdown
   freshness.ts      "you only pay when you get data": input presence/freshness + content checks before any quote
   sanitize.ts       privacy filter
@@ -529,12 +521,12 @@ demo/               recorded testnet transcripts
 2. **Stablecoin pricing.** Done: RLUSD and Circle USDC are in `accepts[]` next to XRP, priced in USD cents (see *Accepted assets*). Since v0.4 the same price is also payable in USDC on Base, with XRPL kept first.
 3. **Prepaid credits through payment channels.** Agents that call often open an XRPL PayChannel once and stream signed claims, which brings per-call cost and latency well below one on-ledger Payment per call. Candidates are the `upto`/`paychan` x402 schemes.
 4. **Usage metrics dashboard.** Public stats from on-ledger data (payments to `PAY_TO` with `SourceTag 804681468`: calls, unique payer agents, XRP volume per endpoint) plus Workers Analytics Engine. These metrics become the grant KPIs.
-5. **More products.** Done: daily brief, yen carry-trade watch, sentiment, events, and an MCP server wrapper (`mcp/`). Next: historical signal series, a backtest API, webhook/stream subscriptions.
+5. **More products.** Done: yen macro watch, sentiment, events, and an MCP server wrapper (`mcp/`). Next: live pay-checks and webhook/stream subscriptions.
 6. **Hardening.** Facilitator failover or self-hosted verification, rate limits, and a Bazaar `extensions` input/output schema in the 402.
 
 ## Disclaimer
 
-Lumi API provides analytics for information and education only. It is not financial advice. Lumi Trades market readings are information only, not investment advice; Lumi does not trade real money. Lumi Trades seller checks results are automated observations, not a rating, endorsement or guarantee. Trade ideas are hypothetical paper trades for illustration, not orders or recommendations. Crypto is volatile and leverage can magnify losses. Do your own research.
+Lumi API provides analytics for information and education only. It is not financial advice. Lumi Trades seller checks results are automated observations, not a rating, endorsement or guarantee. Crypto is volatile. Do your own research.
 
 ## License
 

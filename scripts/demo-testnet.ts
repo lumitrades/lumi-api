@@ -101,7 +101,7 @@ async function main() {
 
   try {
     // ---------------------------------------------------------------- 1. 402
-    const target = `${base}/v1/signal/XRP`;
+    const target = `${base}/v1/sentiment`;
     hr(`1. GET ${target} (no payment)`);
     const r402 = await fetch(target);
     const challengeHeader = r402.headers.get("PAYMENT-REQUIRED");
