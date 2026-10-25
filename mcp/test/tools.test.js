@@ -20,20 +20,21 @@ async function listTools() {
   return tools;
 }
 
-test("0.9.5: versions agree across package.json, server.json and the server", () => {
-  assert.equal(VERSION, "0.9.5");
+test("0.9.6: versions agree across package.json, server.json and the server", () => {
+  assert.equal(VERSION, "0.9.6");
   assert.equal(pkg.version, VERSION);
   assert.equal(srv.version, VERSION);
   assert.equal(srv.packages[0].version, VERSION);
   assert.ok(srv.description.length <= 100);
   assert.match(srv.title, /^Lumi/);
-  assert.match(srv.description, /^Lumi/);
+  assert.match(srv.description, /x402 sellers/);
 });
 
 test("coin counts are current (51 coins, 14 for levels; no Solana)", () => {
   assert.doesNotMatch(pkg.description, /12 more coins/);
   assert.match(pkg.description, /51 coins/);
-  assert.match(pkg.description, /Stellar USDC/);
+  assert.match(pkg.description, /Lumi Check/);
+  assert.match(pkg.description, /XRPL, Base and Stellar/);
   assert.doesNotMatch(pkg.description + srv.description, /solana/i);
   // npm cuts descriptions at 255 characters (0.9.0 ended mid-word at "fundi"): keep it one complete sentence pair under that
   assert.ok(pkg.description.length <= 255, `description is ${pkg.description.length} chars`);

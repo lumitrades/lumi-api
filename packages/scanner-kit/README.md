@@ -2,7 +2,7 @@
 
 `npm install lumi-check` (Node >= 20). CLI: `npx lumi-check` or, once installed, `lumi-scan`.
 
-A thin client for checking an x402 seller **before you pay** and, if you choose, contributing **signed,
+A thin client for checking an x402 seller **before you pay** (a free, signed allow/warn/block verdict backed by Lumi's own paid test-buys on XRPL, Base and Stellar) and, if you choose, contributing **signed,
 on-ledger-verifiable delivery receipts** to Lumi ("Tested by Lumi"). Scoring, verification, the catalog and anti-fraud
 stay on Lumi's server.
 

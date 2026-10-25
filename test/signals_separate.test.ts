@@ -78,7 +78,7 @@ describe("Lumi Market Ideas is separated from the trust brand", () => {
     for (const s of ideaSkills) expect(s.name, s.id).toMatch(/^Lumi Market Ideas: /);
     for (const r of MARKET_IDEAS_ROUTES) {
       const b = (BAZAAR_ROUTES as any)[r];
-      expect(b.description, r).toMatch(/^Lumi Market Ideas\./);
+      expect(b.description, r).toMatch(/^Lumi Market Ideas \(educational, not financial advice\)\./);
       expect(b.description, r).toContain("not investment advice");
       expect(b.description.length, r).toBeLessThanOrEqual(BAZAAR_MAX_DESCRIPTION);
     }
