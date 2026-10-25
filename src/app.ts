@@ -10,7 +10,7 @@ import { loadConfig, verdictPaid, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STEL
 import { STELLAR_HORIZON } from "./trust/verify";
 import { DataSource, type DataFile } from "./data";
 import { D1TrialStore, MemoryTrialStore, SIWX_HEADER, SIWX_KEY, TRIAL_LIMITS, trialHint, wantsTrial, decodeSiwx, siwxChallenge, trialEligible, trialIpHash, usdcBalance, verifySiwx, trialChains, xrplTrialAccount, type TrialStore } from "./trial";
-import { makeReplayGuard, json, requirePayment, paymentRequiredResponse, staleRefusal, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, assetLabel, isEvmRequirement, isStellarRequirement, type PaywallDeps, type PaymentRequirements, type Quote, type Settlement } from "./x402";
+import { makeReplayGuard, json, oversizePaymentHeader, requirePayment, paymentRequiredResponse, staleRefusal, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, assetLabel, isEvmRequirement, isStellarRequirement, type PaywallDeps, type PaymentRequirements, type Quote, type Settlement } from "./x402";
 import { PAID_ENDPOINTS, endpointFor } from "./catalog";
 import { bazaarExtension, resourceDescription, serviceMeta } from "./bazaar";
 import { indexDoc, indexHtml, openApi, skillMd, wellKnownX402, VERSION } from "./docs";
@@ -1519,6 +1519,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     badge: (request: Request) => badges.handle(request, config.publicBaseUrl || "https://api.lumitrades.io"),
     async fetch(request: Request, ctx?: WaitUntil): Promise<Response> {
       try {
+        // Oversize payment headers (PAYMENT-SIGNATURE, X-PAYMENT, SIGN-IN-WITH-X) are refused before any decoding, pricing or D1 work.
+        const tooLarge = oversizePaymentHeader(request);
+        if (tooLarge) return tooLarge;
         // Badge paths first: no pricer (its memo can write D1), no rate limiter, no other D1 work.
         if (request.method === "GET" || request.method === "HEAD") {
           const b = await badges.handle(request, config.publicBaseUrl || "https://api.lumitrades.io");

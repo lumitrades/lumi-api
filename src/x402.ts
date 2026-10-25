@@ -29,6 +29,32 @@ export const HEADER_PAYMENT_RESPONSE = "PAYMENT-RESPONSE";
 /** Legacy/alias header name used in some x402 docs. */
 export const HEADER_X_PAYMENT = "X-PAYMENT";
 
+/**
+ * Size cap for inbound payment headers, checked before any base64/JSON/schema decoding (Dependabot #29: zod via
+ * @x402/core is reachable on an unbounded header). The largest real header in our tests and fixtures is ~5 KB
+ * (Base EIP-3009 with extensions); XRPL and Stellar are under 1 KB; SIGN-IN-WITH-X ~1 KB. 16 KB leaves >3x headroom.
+ */
+export const MAX_PAYMENT_HEADER_BYTES = 16 * 1024;
+/** Every inbound header the API decodes as a payment or payment-auth payload. */
+export const PAYMENT_HEADERS = [HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, "SIGN-IN-WITH-X"] as const;
+
+/** 431 JSON (nothing decoded, nothing charged) when any payment header is over the cap; null otherwise. */
+export function oversizePaymentHeader(request: Request): Response | null {
+  for (const name of PAYMENT_HEADERS) {
+    const v = request.headers.get(name);
+    if (v !== null && v.length > MAX_PAYMENT_HEADER_BYTES) {
+      return json(431, {
+        error: "payment_header_too_large",
+        header: name,
+        max_bytes: MAX_PAYMENT_HEADER_BYTES,
+        detail: `The ${name} header is over ${MAX_PAYMENT_HEADER_BYTES} bytes and was not read. A normal x402 payment header is a few KB.`,
+        note: "Not charged.",
+      });
+    }
+  }
+  return null;
+}
+
 export interface PaymentRequirements {
   scheme: string;
   network: string;
@@ -445,6 +471,7 @@ export async function paymentRequiredResponse(cfg: Config, quote: Quote, error: 
 }
 
 function decodePaymentPayload(header: string): PaymentPayload | null {
+  if (header.length > MAX_PAYMENT_HEADER_BYTES) return null;
   try {
     const obj = JSON.parse(b64decodeUtf8(header));
     if (!obj || typeof obj !== "object" || typeof obj.accepted !== "object" || obj.accepted === null) return null;
@@ -550,6 +577,8 @@ export async function requirePayment(
     const client = clientLabel(request.headers.get("user-agent"));
     deps = { ...deps, onSale: (sale) => onSale({ ...sale, client: sale.client ?? client }) };
   }
+  const tooLarge = oversizePaymentHeader(request);
+  if (tooLarge) return tooLarge;
   const header = request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT);
   const store = deps.idempotency;
   if (!header) return requirePaymentOnce(request, cfg, deps, quote, serve);
@@ -629,6 +658,8 @@ async function requirePaymentOnce(
   serve: (settlement: Settlement, paid: PaymentRequirements) => Promise<Response> | Response,
 ): Promise<Response> {
   let quote = quote0;
+  const tooLarge = oversizePaymentHeader(request);
+  if (tooLarge) return tooLarge;
   const header = request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT);
   if (!header) return paymentRequiredResponse(cfg, quote, "PAYMENT-SIGNATURE header is required");
   const staleNow = staleRefusal(quote);

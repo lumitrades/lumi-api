@@ -135,6 +135,8 @@ export interface SiwxPayload {
 }
 
 export function decodeSiwx(header: string): SiwxPayload | null {
+  // Same cap as the payment headers (x402.ts MAX_PAYMENT_HEADER_BYTES); the app rejects oversize ones with 431 before this.
+  if (header.length > 16 * 1024) return null;
   try {
     const bin = atob(header.trim().replace(/-/g, "+").replace(/_/g, "/"));
     const p = JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0))));
