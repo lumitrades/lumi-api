@@ -232,8 +232,14 @@ function decodeB64Json(h: string): any {
 
 // ---------------------------------------------------------------- scoring
 
+export const NOT_SCORED_REASON =
+  "Not scored: Lumi has no conclusive paid test-buy of this vendor yet. Free probes (402 quote checks) alone never produce a score; a score appears after Lumi's first conclusive test-buy.";
+
 export interface ScoreResult {
+  /** null until Lumi has at least one conclusive paid test-buy (status "not_scored"). */
   value: number | null;
+  status: "scored" | "not_scored";
+  reason?: string;
   confidence: "low" | "medium" | "high";
   components: Record<string, unknown>;
   samples: { paid_test_buys: number; delivered: number; inconclusive_test_buys?: number; paid_test_buys_90d?: number; probes: number; probes_ok: number; verified_reports_counted: number };
@@ -282,10 +288,14 @@ export function scoreVendor(probes: ProbeSummary, obs: ObservationRow[], reports
   let num = 0;
   let den = 0;
   for (const [k, v] of parts) if (v != null) { num += WEIGHTS[k] * v; den += WEIGHTS[k]; }
-  const value = den ? Math.round((100 * num) / den) : null;
+  // "Not scored" until proof: without a conclusive paid test-buy there is no score, however many probes passed.
+  const scored = dc.conclusive > 0 && den > 0;
+  const value = scored ? Math.round((100 * num) / den) : null;
   const confidence = confidenceOf(paid90 ?? paid, probes.n);
   return {
     value,
+    status: scored ? "scored" : "not_scored",
+    ...(scored ? {} : { reason: NOT_SCORED_REASON }),
     confidence,
     components: {
       delivery: { value: round(delivery), weight: WEIGHTS.delivery, delivered, paid_test_buys: paid, inconclusive: dc.inconclusive, meaning: "share of Lumi's paid test-buys whose response contained data; inconclusive buys (Lumi-side, no response recorded) are excluded" },
@@ -567,6 +577,8 @@ export function createTrust(deps: TrustDeps): Trust {
           status: reach.status,
           ...(reach.note ? { status_note: reach.note } : {}),
           score: g.score.value,
+          score_status: g.score.status,
+          ...(g.score.reason ? { score_reason: g.score.reason } : {}),
           confidence: g.score.confidence,
           samples: g.score.samples,
           last_paid_observation: last ? obsLatestFreeView(last) : null,
@@ -636,7 +648,7 @@ export function createTrust(deps: TrustDeps): Trust {
       ...(reach.note ? { status_note: reach.note } : {}),
       pay_to: v.pay_to,
       endpoints: v.endpoints.map((e) => ({ url: e.url, method: e.method, listed_price: e.listed_price, listed_asset: e.listed_asset, daily_test_buy: !!e.test_buy, test_buy: !!e.test_buy, test_buy_schedule: e.test_buy ? TEST_BUY_SCHEDULE : null })),
-      score: { value: g.score.value, confidence: g.score.confidence, components: g.score.components, samples: g.score.samples },
+      score: { value: g.score.value, status: g.score.status, ...(g.score.reason ? { reason: g.score.reason } : {}), confidence: g.score.confidence, components: g.score.components, samples: g.score.samples },
       observations: g.obs.slice(0, 10).map(obsFreeView),
       observations_total: g.obs.length,
       evidence: `Answer-only. The latest test-buy's tx hash is free in last_paid_observation on ${base}/v1/trust/vendors. All other tx hashes, explorer links, latency stats, signed receipts and the full 90-day history are in the paid report: ${base}/v1/trust/vendors/${v.id}/report ($0.02).`,
@@ -785,7 +797,7 @@ export function createTrust(deps: TrustDeps): Trust {
           : confidence === "medium"
           ? "Medium confidence: fewer than 20 paid test-buys in the last 90 days."
           : "High confidence by Lumi's sample-size rule (20+ paid test-buys in the last 90 days and 10+ probes in the last 30 days).",
-      score: { value: g.score.value, confidence, window_days: WINDOW_DAYS, components: g.score.components, samples: g.score.samples },
+      score: { value: g.score.value, status: g.score.status, ...(g.score.reason ? { reason: g.score.reason } : {}), confidence, window_days: WINDOW_DAYS, components: g.score.components, samples: g.score.samples },
       coverage: {
         first_probe_at: probes.length ? iso(probes[probes.length - 1].ts) : null,
         last_probe_at: probes.length ? iso(probes[0].ts) : null,

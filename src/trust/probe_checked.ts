@@ -180,7 +180,21 @@ export interface SellerProbeResult {
   endpoints_quoting: number;
   median_latency_ms: number | null;
   rules_version: string;
+  /** Normalised origin+path of every endpoint this run probed (no query string). Lets a check tell "the probe failed on the
+   * endpoint Lumi test-bought" apart from "the probe hit some other endpoint on the same domain". */
+  probed_endpoints?: string[];
 }
+
+/** origin + path, lower-case host, no query/fragment, no trailing slash. null when not an http(s) URL. */
+export function normEndpoint(u: string): string | null {
+  try {
+    const x = new URL(u);
+    if (x.protocol !== "https:" && x.protocol !== "http:") return null;
+    const path = x.pathname.replace(/\/+$/, "");
+    return `${x.protocol}//${x.host.toLowerCase().replace(/^www\./, "")}${path}`.slice(0, 300);
+  } catch { return null; }
+}
+export const PROBE_MAX_ENDPOINTS_RECORDED = 10;
 
 const med = (xs: number[]) => {
   if (!xs.length) return null;
@@ -238,6 +252,7 @@ export function rollupSeller(i: SellerProbeInput): SellerProbeResult {
     endpoints_quoting: quoting.length,
     median_latency_ms: med(lat),
     rules_version: PROBE_RULES_VERSION,
+    probed_endpoints: [...new Set(eps.map((e) => normEndpoint(e.endpoint)).filter((x): x is string => !!x))].slice(0, PROBE_MAX_ENDPOINTS_RECORDED),
   };
 }
 
@@ -274,6 +289,8 @@ export function probePublicView(r: SellerProbeResult, checked_at: number) {
 export interface ProbeRow {
   seller: string; checked_at: number; outcome: SellerProbeResult["outcome"]; checks: string; notes: string;
   endpoints_checked: number; endpoints_quoting: number; median_latency_ms: number | null; score_weight: number; rules_version: string;
+  /** JSON array of normalised probed endpoints (migration 0029); null on rows written before it. */
+  probed_endpoints?: string | null;
 }
 export interface ProbeStore { get(seller: string): Promise<ProbeRow | null>; put(rows: ProbeRow[]): Promise<number>; count(): Promise<number> }
 export const PROBE_MAX_ROWS_PER_LOAD = 2000;
@@ -284,7 +301,8 @@ const SELLER_RE = /^(?=.{3,253}$)(?!0x[0-9a-f]{40}$)([a-z0-9](?:[a-z0-9-]{0,61}[
 
 export function toRow(r: SellerProbeResult, checked_at: number): ProbeRow {
   return { seller: r.seller, checked_at, outcome: r.outcome, checks: JSON.stringify(r.checks), notes: JSON.stringify(r.notes), endpoints_checked: r.endpoints_checked,
-    endpoints_quoting: r.endpoints_quoting, median_latency_ms: r.median_latency_ms, score_weight: Math.min(r.score_weight, PROBE_MAX_WEIGHT), rules_version: r.rules_version };
+    endpoints_quoting: r.endpoints_quoting, median_latency_ms: r.median_latency_ms, score_weight: Math.min(r.score_weight, PROBE_MAX_WEIGHT), rules_version: r.rules_version,
+    probed_endpoints: JSON.stringify(r.probed_endpoints ?? []) };
 }
 
 /** Validate one uploaded row. Rejects anything that looks like an address, amount or free text beyond the fixed notes. */
@@ -303,17 +321,48 @@ export function parseProbeRow(x: any): ProbeRow | string {
   if (!Number.isFinite(ts) || ts <= 0) return "invalid_checked_at";
   const w = Number(x.score_weight);
   if (!Number.isFinite(w) || w < 0 || w > PROBE_MAX_WEIGHT) return "invalid_score_weight";
+  let probed: string[] | null = null;
+  if (x.probed_endpoints != null) {
+    const arr = typeof x.probed_endpoints === "string" ? safeJson(x.probed_endpoints) : x.probed_endpoints;
+    if (!Array.isArray(arr) || arr.length > PROBE_MAX_ENDPOINTS_RECORDED || arr.some((u) => typeof u !== "string" || normEndpoint(u) !== u)) return "invalid_probed_endpoints";
+    probed = arr;
+  }
   return { seller, checked_at: ts, outcome: x.outcome, checks: JSON.stringify(checks), notes: JSON.stringify(notes), endpoints_checked: int(x.endpoints_checked) ?? 0,
-    endpoints_quoting: int(x.endpoints_quoting) ?? 0, median_latency_ms: int(x.median_latency_ms), score_weight: w, rules_version: String(x.rules_version ?? PROBE_RULES_VERSION).slice(0, 40) };
+    endpoints_quoting: int(x.endpoints_quoting) ?? 0, median_latency_ms: int(x.median_latency_ms), score_weight: w, rules_version: String(x.rules_version ?? PROBE_RULES_VERSION).slice(0, 40),
+    probed_endpoints: probed ? JSON.stringify(probed) : null };
 }
 function safeJson(s: string) { try { return JSON.parse(s); } catch { return null; } }
 
-export function probeRowPublic(row: ProbeRow | null, deliveredTestBuys: number) {
+export type ProbeScope = "bought_endpoint" | "other_endpoint" | "endpoint_not_recorded";
+export const PROBE_SCOPE_TEXT: Record<ProbeScope, string> = {
+  bought_endpoint: "The free probe failed on the same endpoint Lumi test-bought. That is newer than the last delivered test-buy, so the label is check_first until a probe or test-buy succeeds again.",
+  other_endpoint: "The free probe failed on a different endpoint of this domain, not the one Lumi test-bought. It says nothing about the bought endpoint; the label rests on Lumi's paid test-buys.",
+  endpoint_not_recorded: "This probe run did not record which endpoint it hit (older run). Lumi's paid test-buys of the bought endpoint delivered, so the label rests on them; the next probe run checks the bought endpoint first.",
+};
+
+/**
+ * Where did a failed free probe land, relative to the endpoints Lumi test-bought with delivery? Only meaningful when the probe
+ * failed and there is at least one delivered test-buy; otherwise null. Pure.
+ */
+export function probeScope(row: ProbeRow | null, boughtEndpoints: string[], deliveredTestBuys: number): ProbeScope | null {
+  if (!row || row.outcome !== "fail" || deliveredTestBuys <= 0) return null;
+  const probed = row.probed_endpoints ? (safeJson(row.probed_endpoints) as string[] | null) : null;
+  if (!Array.isArray(probed) || !probed.length) return "endpoint_not_recorded";
+  const bought = new Set(boughtEndpoints.map(normEndpoint).filter(Boolean));
+  return probed.some((u) => bought.has(normEndpoint(u))) ? "bought_endpoint" : "other_endpoint";
+}
+
+export function probeRowPublic(row: ProbeRow | null, deliveredTestBuys: number, scope: ProbeScope | null = null) {
   if (!row) return null;
   const res: SellerProbeResult = { seller: row.seller, label: deliveredTestBuys > 0 ? "test-bought" : PROBE_LABEL, verified: false, score_weight: row.score_weight,
     checks: safeJson(row.checks) ?? {}, passed: 0, failed: 0, outcome: row.outcome, notes: safeJson(row.notes) ?? [], endpoints_checked: row.endpoints_checked,
     endpoints_quoting: row.endpoints_quoting, median_latency_ms: row.median_latency_ms, rules_version: row.rules_version };
-  return probePublicView(res, row.checked_at);
+  const probed = row.probed_endpoints ? safeJson(row.probed_endpoints) : null;
+  return {
+    ...probePublicView(res, row.checked_at),
+    endpoints_probed: Array.isArray(probed) ? probed : null,
+    ...(scope ? { failure_scope: scope, failure_scope_note: PROBE_SCOPE_TEXT[scope] } : {}),
+  };
 }
 
 export class MemoryProbeStore implements ProbeStore {
@@ -331,14 +380,15 @@ export class D1ProbeStore implements ProbeStore {
   async put(rows: ProbeRow[]) {
     // Write only when something changed, or the stored row is older than 20 h (keeps daily writes ~= changed sellers).
     const stmts = rows.map((r) => this.db.prepare(
-      `INSERT INTO probe_checked (seller, checked_at, outcome, checks, notes, endpoints_checked, endpoints_quoting, median_latency_ms, score_weight, rules_version)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+      `INSERT INTO probe_checked (seller, checked_at, outcome, checks, notes, endpoints_checked, endpoints_quoting, median_latency_ms, score_weight, rules_version, probed_endpoints)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
        ON CONFLICT(seller) DO UPDATE SET checked_at = excluded.checked_at, outcome = excluded.outcome, checks = excluded.checks, notes = excluded.notes,
          endpoints_checked = excluded.endpoints_checked, endpoints_quoting = excluded.endpoints_quoting, median_latency_ms = excluded.median_latency_ms,
-         score_weight = excluded.score_weight, rules_version = excluded.rules_version
+         score_weight = excluded.score_weight, rules_version = excluded.rules_version, probed_endpoints = excluded.probed_endpoints
        WHERE probe_checked.outcome <> excluded.outcome OR probe_checked.checks <> excluded.checks OR probe_checked.notes <> excluded.notes
+         OR COALESCE(probe_checked.probed_endpoints, '') <> COALESCE(excluded.probed_endpoints, '')
          OR probe_checked.checked_at < excluded.checked_at - 72000000`,
-    ).bind(r.seller, r.checked_at, r.outcome, r.checks, r.notes, r.endpoints_checked, r.endpoints_quoting, r.median_latency_ms, r.score_weight, r.rules_version));
+    ).bind(r.seller, r.checked_at, r.outcome, r.checks, r.notes, r.endpoints_checked, r.endpoints_quoting, r.median_latency_ms, r.score_weight, r.rules_version, r.probed_endpoints ?? null));
     let n = 0;
     for (let i = 0; i < stmts.length; i += 100) for (const x of (await this.db.batch(stmts.slice(i, i + 100))) as { meta?: { changes?: number } }[]) n += x.meta?.changes ?? 0;
     return n;

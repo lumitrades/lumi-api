@@ -1166,3 +1166,33 @@ ${evm ? `<h2>Quickstart: USDC on Base (x402 fetch SDK)</h2>${pre(baseSnippet)}
 <footer><div class="wrap"><small>${esc(DISCLAIMER)} Source: Lumi Trades (lumitrades.io). API v${VERSION}.</small></div></footer>
 </body></html>`;
 }
+
+/**
+ * Human page for a browser that opens a vendor report link without paying (Accept ranks text/html first, no payment header).
+ * Explains the paid x402 call and links the docs; agents (JSON / any other Accept) still get the normal 402 quote.
+ */
+export function vendorReportHtml(cfg: Config, base: string, id: string, name: string | null): string {
+  const usd = String(Number(usdPrice(cfg, "vendor_report") ?? "0.02"));
+  const url = `${base}/v1/trust/vendors/${encodeURIComponent(id)}/report`;
+  const free = `${base}/v1/trust/vendors/${encodeURIComponent(id)}`;
+  const who = name ? `${esc(name)} (<code>${esc(id)}</code>)` : `<code>${esc(id)}</code>`;
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lumi vendor report: ${esc(name ?? id)} ($${esc(usd)} x402 call)</title>
+<meta name="robots" content="noindex">
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:42rem;margin:2rem auto;padding:0 1rem;color:#111}code,pre{background:#f3f3f3;border-radius:4px;padding:.1rem .3rem}pre{padding:.75rem;overflow:auto}a{color:#0645ad}</style>
+</head><body>
+<h1>Vendor report: ${who}</h1>
+<p>This URL is a <strong>paid API call</strong>: $${esc(usd)} per request, paid with <a href="https://x402.org">x402</a> on XRPL, Base or Stellar. A browser visit is not charged and gets this page instead.</p>
+<p>The paid report adds Lumi's full test-buy history for this vendor (each paid test-buy with its transaction, HTTP status and whether data came back), probe history and the score breakdown, as a signed JSON document.</p>
+<h2>How to call it</h2>
+<ol><li>Request <code>${esc(url)}</code> from an x402 client (Accept: application/json). The server answers <code>402 Payment Required</code> with the price and payTo.</li>
+<li>Sign the payment and repeat the request with the <code>PAYMENT-SIGNATURE</code> header. The report comes back with a payment receipt.</li></ol>
+<h2>Free alternatives</h2>
+<ul><li>Vendor summary (free): <a href="${esc(free)}">${esc(free)}</a></li>
+<li>Free pre-payment check for any x402 URL: <a href="${esc(base)}/v1/check">${esc(base)}/v1/check?url=...</a></li></ul>
+<p>Docs: <a href="${esc(base)}/">${esc(base)}/</a> (quickstart), <a href="${esc(base)}/openapi.json">OpenAPI</a>, <a href="${esc(base)}/v1/trust/methodology">methodology</a>.</p>
+<p><small>Paying Lumi never changes a vendor's score or label.</small></p>
+</body></html>
+`;
+}

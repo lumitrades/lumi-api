@@ -4,6 +4,9 @@
 Inputs (env PC_DIR, default /tmp/pc):
   catalog.json   read-only D1 SELECT of the live Bazaar catalog
   buys.json      read-only D1 SELECT domain, pay_to, network, delivered from catalog_buys
+  bought_endpoints.json  optional, read-only D1 SELECT DISTINCT resource FROM catalog_buys WHERE data_returned = 1
+                 (a list of URLs or the wrangler [{results:[{resource}]}] shape). Curated test_buy endpoints are read
+                 from src/vendors.ts. Test-bought endpoints are always the probe target for their host.
   x402scan_resources_live.json, x402scan_onchain_sellers_base_30d.json  public x402scan listings
   ACTIVITY_CSV   seller_income csv: ONLY the all_domains / payto_addresses columns are read (no income fields)
 Output: targets.json
@@ -70,13 +73,33 @@ for b in buys:
 
 onchain = json.load(open(f"{PC}/x402scan_onchain_sellers_base_30d.json"))
 
+# Test-bought endpoints first: a probe of some other endpoint on a test-bought host says nothing about what Lumi bought.
+import re
+bought = []
+try:
+    raw = json.load(open(f"{PC}/bought_endpoints.json"))
+    rows = raw[0]["results"] if isinstance(raw, list) and raw and isinstance(raw[0], dict) and "results" in raw[0] else raw
+    bought += [{"url": (r["resource"] if isinstance(r, dict) else r), "method": "GET"} for r in rows]
+except FileNotFoundError:
+    pass
+src_vendors = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "vendors.ts")).read()
+for m in re.finditer(r'\{\s*url:\s*"([^"]+)",\s*method:\s*"(GET|POST)"[^}]*?test_buy:\s*true', src_vendors):
+    bought.append({"url": m.group(1), "method": m.group(2)})
+for b in bought:
+    try:
+        h = urlparse(b["url"]).hostname.lower().removeprefix("www.")
+    except Exception:
+        continue
+    if h in hosts:
+        hosts[h]["cands"].append({"url": b["url"], "method": b["method"], "src": "test_bought"})
+
 out = []
 for h, i in hosts.items():
     if not h or reg(h) in SELF: continue
     c = i["cands"]
-    # one endpoint per host: prefer a Bazaar Base GET listing, then any GET, then POST
+    # one endpoint per host: a Lumi test-bought endpoint first, then a Bazaar Base GET listing, then any GET, then POST
     def rank(x):
-        return (0 if x["src"] == "bazaar" and x.get("base") else 1, 0 if x["method"] == "GET" else 1, 0 if x.get("prod_valid") == 1 else 1, -(len(x.get("last") or "")), x["url"])
+        return (0 if x["src"] == "test_bought" else 1, 0 if x["src"] == "bazaar" and x.get("base") else 1, 0 if x["method"] == "GET" else 1, 0 if x.get("prod_valid") == 1 else 1, -(len(x.get("last") or "")), x["url"])
     pick = sorted(c, key=rank)[0] if c else None
     out.append({"host": h, "reg": i["reg"], "sources": sorted(i["sources"]), "pay_tos": sorted(i["pay_tos"]), "base_listed": i["base_listed"],
                 "target": pick, "wellknown": bool({"bazaar", "activity"} & i["sources"]),

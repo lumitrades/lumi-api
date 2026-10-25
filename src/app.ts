@@ -13,7 +13,7 @@ import { D1TrialStore, MemoryTrialStore, SIWX_HEADER, SIWX_KEY, TRIAL_LIMITS, tr
 import { makeReplayGuard, json, oversizePaymentHeader, requirePayment, paymentRequiredResponse, staleRefusal, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, assetLabel, isEvmRequirement, isStellarRequirement, type PaywallDeps, type PaymentRequirements, type Quote, type Settlement } from "./x402";
 import { PAID_ENDPOINTS, endpointFor } from "./catalog";
 import { bazaarExtension, resourceDescription, serviceMeta } from "./bazaar";
-import { indexDoc, indexHtml, openApi, skillMd, wellKnownX402, VERSION } from "./docs";
+import { indexDoc, indexHtml, openApi, skillMd, wellKnownX402, vendorReportHtml, VERSION } from "./docs";
 import { agentCard, handleA2a, A2A_CORS } from "./a2a";
 import {
   coinList, resolveCoin, marketView, DISCLAIMER, SOURCE, type CoinRef,
@@ -55,7 +55,7 @@ import { D1IdempotencyStore, MemoryIdempotencyStore, type IdempotencyStore } fro
 import { labelFor, LABELS, DEFINITION, FAILED_RULE, testBuyEvidence, thresholdsDoc, verdictThresholds, VERDICT_KIND, VERDICT_RULES_VERSION, DISPUTE_URL, CHECK_NOTE } from "./trust/verdict";
 import { createReviewGate, D1ReviewStore, MemoryReviewStore, appealUntil, type ReviewStore } from "./trust/reviews";
 import { relationshipConfig, relationshipFor, relationshipTag } from "./trust/relationship";
-import { D1ProbeStore, MemoryProbeStore, parseProbeRow, probeRowPublic, PROBE_MAX_ROWS_PER_LOAD, type ProbeStore } from "./trust/probe_checked";
+import { D1ProbeStore, MemoryProbeStore, parseProbeRow, probeRowPublic, probeScope, PROBE_MAX_ROWS_PER_LOAD, type ProbeStore } from "./trust/probe_checked";
 import { registrableDomain } from "./trust/catalog";
 import { createActivity, activityPublic, activityOwnerView, activityFlags, qualifyOrganicPayers, D1ActivityStore, MemoryActivityStore, type ActivityStore } from "./trust/activity";
 import { CONTACT_EMAIL } from "./trust/index";
@@ -418,8 +418,17 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     return trust.vendorScore(ids[0]);
   }
   const scoreView = (s: Awaited<ReturnType<typeof liveScore>>, tier: unknown) => s
-    ? { scored: true, vendor_id: s.vendor_id, value: s.score.value, confidence: s.score.confidence, tier: tier ?? null, paid_test_buys: s.score.samples.paid_test_buys }
-    : { scored: false, value: null, confidence: null, tier: tier ?? null, note: "Numeric scores exist for curated vendors only; the tier comes from the catalog." };
+    ? {
+        scored: s.score.value != null,
+        status: s.score.status,
+        ...(s.score.reason ? { reason: s.score.reason } : {}),
+        vendor_id: s.vendor_id,
+        value: s.score.value,
+        confidence: s.score.confidence,
+        tier: tier ?? null,
+        paid_test_buys: s.score.samples.paid_test_buys,
+      }
+    : { scored: false, status: "not_scored" as const, value: null, confidence: null, tier: tier ?? null, note: "Numeric scores exist for curated vendors only, and only after a conclusive Lumi test-buy; the tier comes from the catalog." };
 
   async function checkVerdict(input: { url: string; payTo?: string; amountUsd?: number; network?: string }, base: string, free: boolean) {
     const exact = (await trust.lookup({ url: input.url } as LookupQuery, base, free ? { free: true } : undefined)) as any;
@@ -440,6 +449,16 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     ...VENDORS.filter((v) => [...(exact?.curated ?? []), ...(dom?.curated ?? [])].some((c: any) => c?.id === v.id)).flatMap((v) => [...v.pay_to.xrpl, ...(v.pay_to.evm ?? [])]),
   ].filter(Boolean);
 
+  /** Endpoints Lumi test-bought with delivery for this seller: delivered purchases on record plus curated test_buy endpoints. */
+  const boughtEndpoints = (exact: any, dom: any): string[] => {
+    const curatedIds = new Set([...(exact?.curated ?? []), ...(dom?.curated ?? [])].map((c: any) => c?.id));
+    const fromBuys = [exact?.catalog?.entries?.[0], dom?.catalog?.entries?.[0], ...(exact?.curated ?? []), ...(dom?.curated ?? [])]
+      .flatMap((e: any) => (Array.isArray(e?.purchases) ? e.purchases : []))
+      .filter((b: any) => b?.data_returned !== false && typeof b?.endpoint === "string").map((b: any) => String(b.endpoint));
+    const fromCurated = VENDORS.filter((v) => curatedIds.has(v.id)).flatMap((v) => v.endpoints.filter((e: any) => e.test_buy).map((e) => e.url));
+    return [...new Set([...fromBuys, ...fromCurated])];
+  };
+
   async function finishCheck(v: Record<string, any>, exact: any, dom: any, host: string | null) {
     const commercial = ((exact?.commercial_relationship ?? dom?.commercial_relationship ?? null) as unknown[] | null);
     const relationship = relationshipFor(host, commercial, relCfg);
@@ -454,8 +473,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const tests = testBuyEvidence(exact, dom);
     const reg = host ? registrableDomain(host) : null;
     const probeRow = reg ? await probeStore.get(reg).catch(() => null) : null;
-    const lab = labelFor({ check: { decision: String(v.verdict), reasons: v.reasons ?? [] }, tests, now: now(), th: verdictTh, probe: probeRow });
-    v.free_checks = probeRowPublic(probeRow, tests.last_delivered_at ? 1 : 0);
+    const scope = probeScope(probeRow, boughtEndpoints(exact, dom), tests.last_delivered_at ? 1 : 0);
+    const lab = labelFor({ check: { decision: String(v.verdict), reasons: v.reasons ?? [] }, tests, now: now(), th: verdictTh, probe: probeRow, probeScope: scope });
+    v.free_checks = probeRowPublic(probeRow, tests.last_delivered_at ? 1 : 0, scope);
     v.label = lab.label;
     v.label_text = LABELS[lab.label];
     v.relationship = relationship;
@@ -533,7 +553,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const payload = {
       subject: s ? { vendor_id: s.vendor_id, name: s.name } : { key: key.slice(0, 200) },
       earned: d.earned, reason: d.reason,
-      score: s ? { value: s.score.value, confidence: s.score.confidence, paid_test_buys: s.score.samples.paid_test_buys } : null,
+      score: s ? { value: s.score.value, status: s.score.status, ...(s.score.reason ? { reason: s.score.reason } : {}), confidence: s.score.confidence, paid_test_buys: s.score.samples.paid_test_buys } : null,
       threshold: { min_score: th.minScore, min_paid_test_buys: th.minPaidTests, latest_test_buy: "delivered" },
       live_report: live,
       embed: d.earned ? `<a href="${live}"><img src="${base}/v1/badge/${encodeURIComponent(s?.vendor_id ?? key)}.svg" alt="Tested by Lumi (live score)"></a>` : null,
@@ -791,6 +811,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       retest: gate.retest,
       seller_replies: replies,
       score: score.value,
+      score_status: score.status,
       observed_onchain_payments: act,
       free_checks: check.free_checks ?? null,
       relationship,
@@ -1225,6 +1246,16 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     //   the template URL verbatim and only list routes that answer 402; the quote carries a note to fill the placeholder;
     // - any other placeholder style (:coin, <coin>, ${coin}, ...), or any template with a payment header: 400, never charged.
     const rawArg = m[2] !== undefined ? safeDecode(m[2]) : undefined;
+    // A person opening a vendor report link in a browser (Accept ranks text/html first, GET, no payment header): a small page
+    // explaining the $0.02 x402 call, with links to the free summary and the docs. Agents (JSON or */* Accept) still get the 402.
+    if (route === "vendor_report" && request.method === "GET" && rawArg !== undefined && !PATH_TEMPLATE_RE.test(rawArg)
+      && prefersHtml(request.headers.get("accept")) && !(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT))) {
+      const v = VENDORS.find((x) => x.id === rawArg.toLowerCase()) ?? null;
+      return new Response(vendorReportHtml(config, base, v?.id ?? rawArg.slice(0, 64), v?.name ?? null), {
+        status: 200,
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300", Vary: "Accept", "X-Robots-Tag": "noindex" },
+      });
+    }
     if (rawArg !== undefined && PATH_TEMPLATE_RE.test(rawArg)) {
       const isReport = route === "vendor_report";
       const example = isReport ? `${base}/v1/trust/vendors/printmoneylab/report` : `${base}/v1/${route}/xrp`;

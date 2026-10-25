@@ -27,7 +27,7 @@ export const DECISION_TO_LABEL: Record<string, Label> = { block: "checks_failed"
 
 export const VERDICT_KIND = "lumi_verdict";
 /** Bump when the mapping, thresholds or wording change, so signed responses say which rules produced them. */
-export const VERDICT_RULES_VERSION = "2026-10-25.4";
+export const VERDICT_RULES_VERSION = "2026-10-25.5";
 export const DISPUTE_URL = "https://lumitrades.io/contact/";
 export const DEFINITION =
   "This is a summary of Lumi's own dated observations of this endpoint, not a rating of the business or a statement about its honesty. checks_failed means that, in the window shown, at least two of Lumi's paid test-buys on different days paid and got no usable data, a confirming re-buy failed too, no later buy succeeded and a person at Lumi reviewed it (or the quote paid an unlisted address, an address that is not the seller's, a higher price than listed, or an address on the OFAC SDN list). no_data means Lumi has too little evidence and is not a negative finding. Sellers can reply or ask for a re-test at hello@lumitrades.io, https://lumitrades.io/contact/ or /v1/trust/replies; an open re-test request pauses checks_failed for up to 72 hours while Lumi re-buys. Paying Lumi never changes this result.";
@@ -127,6 +127,7 @@ export const WORDING: Record<string, (t: TestBuyEvidence, th: VerdictThresholds)
   not_quote_checked: () => "Listed in the x402 Bazaar, but Lumi has not checked it yet. This is not a negative finding.",
   lumi_itself: () => "This is Lumi's own API; Lumi does not rate itself.",
   // checks_passed
+  probe_failed_on_bought_endpoint: (t) => `Lumi's paid test-buy on ${day(t.last_delivered_at)} delivered, but a newer free probe of that same endpoint did not get a valid x402 payment request. Check again before paying; this clears when a probe or test-buy succeeds.`,
   delivered_recently: (t) => `Lumi's paid test-buy on ${day(t.last_delivered_at)} delivered, and the listing and quote checks agree.`,
   generic_block: () => "Lumi's check found a concrete mismatch; see the evidence link.",
   generic_warn: () => "Lumi's check does not have enough evidence yet; see the evidence link.",
@@ -181,7 +182,7 @@ export function testBuyEvidence(exact: any, dom: any): TestBuyEvidence {
 export interface LabelResult { label: Label; reason_code: string; reason: string }
 
 /** The whole mapping from the shared check result (+ Lumi's own test-buy dates) to a label. Nothing else is an input. */
-export function labelFor(o: { check: CheckLike; tests: TestBuyEvidence; now: number; th: VerdictThresholds; probe?: { outcome: string } | null }): LabelResult {
+export function labelFor(o: { check: CheckLike; tests: TestBuyEvidence; now: number; th: VerdictThresholds; probe?: { outcome: string; checked_at?: number } | null; probeScope?: string | null }): LabelResult {
   const { check, tests, th } = o;
   const codes = new Set(check.reasons.map((r) => r.code));
   const say = (label: Label, code: string): LabelResult => ({ label, reason_code: code, reason: (WORDING[code] ?? WORDING[label === "checks_failed" ? "generic_block" : "generic_warn"])(tests, th) });
@@ -195,6 +196,10 @@ export function labelFor(o: { check: CheckLike; tests: TestBuyEvidence; now: num
   if (!tests.last_delivered_at) return say("check_first", o.probe?.outcome === "pass" ? "probe_checked_only" : "untested");
   if ((o.now - Date.parse(tests.last_delivered_at)) / 86_400_000 > EVIDENCE_AGE.noDataAfterDays) return say("no_data", "old_evidence");
   if (!((o.now - Date.parse(tests.last_delivered_at)) / 86_400_000 <= th.payMaxAgeDays)) return say("check_first", "stale_test");
+  // A free probe that failed on the very endpoint Lumi test-bought, and is newer than the last delivered buy, is a warning
+  // (check_first), never checks_failed: a probe counts for at most 0.25 of a test-buy. A failure on another endpoint of the
+  // same domain is explained in free_checks.failure_scope and does not change the label.
+  if (o.probeScope === "bought_endpoint" && o.probe?.outcome === "fail" && (o.probe.checked_at == null || o.probe.checked_at > Date.parse(tests.last_delivered_at))) return say("check_first", "probe_failed_on_bought_endpoint");
   return say("checks_passed", "delivered_recently");
 }
 
@@ -207,8 +212,10 @@ export function thresholdsDoc(th: VerdictThresholds) {
     definition: DEFINITION,
     checks_failed: `Immediate only for facts about the quote itself: the payTo you were quoted is not the seller's, the amount is over 1.5x the listing, the seller's live quote paid an unlisted address (reviewed by a person first), or an OFAC SDN hit. From test-buys only after failed paid buys on at least ${FAILED_RULE.minFailedDays} different UTC days within ${FAILED_RULE.windowDays} days, no success since, a further failed confirming re-buy, and review by a person at Lumi.`,
     check_first: `Not enough positive evidence yet: a warning signal from the check, a failed test-buy that has not met the bar above, a pending review or re-test (paused up to ${APPEAL_PAUSE_HOURS} h), or no Lumi test-buy delivered within ${th.payMaxAgeDays} days.`,
-    checks_passed: `The check found no warning and a Lumi paid test-buy delivered within ${th.payMaxAgeDays} days.`,
-    no_data: `Lumi has no observations (or has not checked this listing yet), its newest test-buy evidence is more than ${EVIDENCE_AGE.noDataAfterDays} days old, or it is Lumi itself. Not a negative signal.`,
+    checks_passed: `The check found no warning, a Lumi paid test-buy delivered within ${th.payMaxAgeDays} days, and no newer free probe of that same bought endpoint failed.`,
+    no_data: `Lumi has no observations (or has not checked this listing yet), its newest test-buy evidence is more than ${EVIDENCE_AGE.noDataAfterDays} days old, or it is Lumi itself. Not a negative finding.`,
+    not_scored: "A vendor score (0-100) exists only after at least one conclusive Lumi paid test-buy. Until then the score is null with status not_scored and a plain reason, and the label is check_first (untested, or probe_checked_only when the free probe passed). Free probes never produce a score on their own; with a test-buy they count for at most 0.25 of one.",
+    probe_scope: "When a free probe fails on a seller Lumi has test-bought with delivery, free_checks.failure_scope says where: bought_endpoint (the same endpoint; newer than the last delivered buy makes the label check_first), other_endpoint (a different endpoint of the domain; label unchanged, explained) or endpoint_not_recorded (older run; label unchanged, explained). Probes test the bought endpoint first.",
     evidence_age: EVIDENCE_AGE,
     failed_rule: FAILED_RULE,
     appeal_pause_hours: APPEAL_PAUSE_HOURS,
