@@ -132,7 +132,7 @@ function fnv(s: string): string {
 /** Circle USDC on Stellar mainnet (SEP-41 contract, 7 decimals). */
 const STELLAR_USDC_SAC = "CCW67TSZV3SSS2HXMBQ5JFGCKJNXKZM7UQUWUZPUTHXSTZLEO7SJMI75";
 
-function optUsd(a: any): number | null {
+export function optUsd(a: any): number | null {
   const amt = a?.amount ?? a?.maxAmountRequired;
   if (amt == null) return null;
   const asset = String(a.asset ?? "");
@@ -396,7 +396,7 @@ export class MemoryCatalogStore implements CatalogStore {
       .sort((a, b) => (b.calls_30d ?? 0) - (a.calls_30d ?? 0))
       .slice(0, limit);
   }
-  async saveDomain(row: DomainRow) { this.domains.set(row.domain, row); }
+  async saveDomain(row: DomainRow) { const p = this.domains.get(row.domain); this.domains.set(row.domain, { ...row, registered_at: row.registered_at ?? p?.registered_at ?? null }); } // a failed lookup never erases a known date
   async domainInfo(ds: string[]) { return ds.map((d) => this.domains.get(d)).filter((x): x is DomainRow => !!x); }
   async computeStats(now: number): Promise<CatalogStats> {
     const r = this.rows;
@@ -573,7 +573,7 @@ export class D1CatalogStore implements CatalogStore {
   }
   async saveDomain(r: DomainRow) {
     await this.db
-      .prepare("INSERT INTO domains (domain, registered_at, checked_at, error) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(domain) DO UPDATE SET registered_at = excluded.registered_at, checked_at = excluded.checked_at, error = excluded.error")
+      .prepare("INSERT INTO domains (domain, registered_at, checked_at, error) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(domain) DO UPDATE SET registered_at = COALESCE(excluded.registered_at, domains.registered_at), checked_at = excluded.checked_at, error = excluded.error")
       .bind(r.domain, r.registered_at, r.checked_at, r.error)
       .run();
   }
@@ -768,8 +768,8 @@ export function catalogView(row: CatalogRow, buys: BuyRow[], dom: DomainRow | un
           median_latency_ms: median(lat),
         },
     domain_age: dom
-      ? { registrable_domain: dom.domain, registered_at: iso(dom.registered_at), age_days: dom.registered_at ? Math.floor((now - dom.registered_at) / DAY) : null, note: dom.error }
-      : null,
+      ? { registrable_domain: dom.domain, registered_at: iso(dom.registered_at), age_days: dom.registered_at ? Math.floor((now - dom.registered_at) / DAY) : null, note: dom.registered_at ? null : "domain age unavailable" }
+      : row.reg_domain ? { registrable_domain: row.reg_domain, registered_at: null, age_days: null, note: "domain age unavailable" } : null,
     purchases: buys.length
       ? buys.slice(0, 5).map((b) => ({
           at: iso(b.ts), network: b.network, tx_hash: b.tx_hash, explorer: explorerFor(b.network, b.tx_hash), amount: b.amount, asset: b.asset,
