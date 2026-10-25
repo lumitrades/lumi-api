@@ -9,10 +9,10 @@ const KEY = "k".repeat(20) + "0123456789abcdef0123456789abcdef";
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", OWNER_MCP_KEY: KEY };
 const BASE = "http://lumi.test";
 
-function setup(now = NOW) {
+function setup(now = NOW, env: Record<string, string> = {}) {
   const fac = happyFacilitator();
   const logs: any[] = [];
-  const app = createApp(ENV, { fetch: makeFetch(fac), log: (e) => logs.push(e), now: () => now });
+  const app = createApp({ ...ENV, ...env } as any, { fetch: makeFetch(fac), log: (e) => logs.push(e), now: () => now });
   let n = 0;
   const rpc = async (method: string, params: unknown = {}, opts: { path?: string; headers?: Record<string, string> } = {}) => {
     const r = await app.fetch(
@@ -102,8 +102,8 @@ describe("remote MCP: tools", () => {
     expect(names).toHaveLength(24);
   });
 
-  it("lumi_verdict is free by default and answers with a label (same core as /v1/check)", async () => {
-    const { call } = setup();
+  it("lumi_verdict answers with a label when the verdict is free (VERDICT_PRICING=free)", async () => {
+    const { call } = setup(NOW, { VERDICT_PRICING: "free" });
     const r = JSON.parse(textOf((await call("lumi_verdict", { url: "https://unknown-seller.example/v1/x" })).body));
     expect(r.kind).toBe("lumi_verdict");
     expect(r.label).toBe("no_data");
@@ -112,12 +112,22 @@ describe("remote MCP: tools", () => {
     expect(bad.body.result.isError).toBe(true);
   });
 
+  it("lumi_verdict returns the $0.01 x402 terms by default (paid)", async () => {
+    const { call } = setup();
+    const r = await call("lumi_verdict", { url: "https://unknown-seller.example/v1/x" });
+    expect(r.body.result.isError).toBeFalsy();
+    const q = JSON.parse(textOf(r.body));
+    const usdc = q.accepts.find((a: any) => a.network.startsWith("eip155:"));
+    if (usdc) expect(usdc.amount).toBe("10000");
+    expect(JSON.stringify(q)).toMatch(/0\.01/);
+  });
+
   it("free tools work without a key", async () => {
     const { call } = setup();
     const coins = JSON.parse(textOf((await call("lumi_coins")).body));
     expect(coins).toHaveLength(50);
     const cat = JSON.parse(textOf((await call("lumi_catalog")).body));
-    expect(cat.endpoints).toHaveLength(16);
+    expect(cat.endpoints).toHaveLength(17);
     expect(cat.access).toMatch(/^public/);
     const q = JSON.parse(textOf((await call("lumi_quote", { path: "/v1/brief" })).body));
     expect(q.status).toBe(402);

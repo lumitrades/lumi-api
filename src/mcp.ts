@@ -221,9 +221,9 @@ function toolList() {
     },
     {
       name: "lumi_verdict",
-      title: "Lumi: one-label pre-payment check (free)",
+      title: "Lumi: one-label pre-payment check ($0.01)",
       description:
-        "Free (rate-limited). Before paying an x402 URL or seller domain: one label from the same data and signing key as /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Paying Lumi never changes a result. Observations, not a guarantee.",
+        "GET /v1/verdict costs $0.01 per call over x402 (this tool returns the price terms; the free signed /v1/check has the same data). Before paying an x402 URL or seller domain: one label from the same data and signing key as /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Paying Lumi never changes a result. Observations, not a guarantee.",
       inputSchema: {
         type: "object",
         properties: {
@@ -263,11 +263,11 @@ function toolList() {
 }
 
 const INSTRUCTIONS =
-  "Lumi Trades (lumitrades.io), three groups. Lumi Trust: lumi_verdict (free one-label pre-payment check: checks_passed / check_first / checks_failed / no_data), lumi_trust_check (paid, full coded reasons), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
+  "Lumi Trades (lumitrades.io), three groups. Lumi Trust: lumi_verdict (one-label pre-payment check, $0.01 on the API: checks_passed / check_first / checks_failed / no_data), lumi_trust_check (paid, full coded reasons), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
   "Market data: daily brief, BTC/macro backdrop, yen carry-trade watch, sentiment, funding rates, Fear & Greed, events and the next 48h, and a daily policy brief " +
   "(BIS, IMF, US regulators, major banks and tokenization firms mapped to XRP, XLM, XDC, QNT, AXL, HBAR). " +
   `${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}): live signals for 51 coins (lumi_signal, cheap lumi_lite, or all at once with lumi_scan), lumi_levels support/resistance, lumi_slate current paper-trade ideas. ` +
-  "Free: lumi_catalog, lumi_coins, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_verdict, lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d, Audit $99, free tier and 14-day trial) and lumi_trust_feed (free 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d); lumi_vendor_report is the paid full history for one vendor ($0.02). " +
+  "Free: lumi_catalog, lumi_coins, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_verdict (returns the $0.01 x402 terms for /v1/verdict; the free signed GET /v1/check has the same data), lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d, Audit $99, free tier and 14-day trial) and lumi_trust_feed (free 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d); lumi_vendor_report is the paid full history for one vendor ($0.02). " +
   "Paid tools cost $0.003 to $0.10 per call (the daily policy brief is $0.10, everything else $0.02 or less) via x402; paid in XRP, RLUSD or USDC on the XRP Ledger or USDC on Base or Stellar; " + TRIAL_SHORT + "; without access they return the price and how to pay. " +
   PAID_TOOLS_NOTE + " Analytics and education only, not financial advice. Cite 'Lumi Trades (lumitrades.io)'.";
 

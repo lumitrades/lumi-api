@@ -57,6 +57,7 @@ describe("free endpoints", () => {
       ["/v1/brief", "0.015"], ["/v1/macro/yen", "0.0075"], ["/v1/sentiment", "0.0038"], ["/v1/events", "0.0038"],
       ["/v1/funding", "0.0023"], ["/v1/fear-greed", "0.0023"], ["/v1/events/next48h", "0.0023"],
       ["/v1/institutional", "0.077"], ["/v1/trust/check", "0.003"], ["/v1/trust/vendors/{id}/report", "0.015"],
+      ["/v1/verdict", "0.0075"],
     ]);
     expect(index.guarantee).toMatch(/only pay when you get data/i);
     expect((await get("/health")).status).toBe(200);
@@ -67,7 +68,7 @@ describe("free endpoints", () => {
     expect(skill).toContain("/v1/brief");
     const wk = await (await get("/.well-known/x402")).json();
     expect(wk).toMatchObject({ x402Version: 2, kind: "resource-server" });
-    expect(wk.resources).toHaveLength(25); // /v1/trades removed Oct 24 2026; + Watch, Watch Plus, Watch Pro (per-endpoint plans)
+    expect(wk.resources).toHaveLength(26); // /v1/trades removed Oct 24 2026; + Watch, Watch Plus, Watch Pro (per-endpoint plans); + /v1/verdict ($0.01, Oct 25 2026)
     expect(wk.resources.filter((r: any) => r.plan).map((r: any) => r.url)).toEqual(["watch", "watch_plus", "watch_pro", "audit", "monitor", "monitor_plus"].map((p) => `${BASE}/v1/monitor/subscribe/${p}`).concat([`${BASE}/v1/feed/subscribe/feed`, `${BASE}/v1/feed/subscribe/feed_pro`, `${BASE}/v1/feed/credits`]));
     expect(wk.resources.map((r: any) => r.url)).toContain(`${BASE}/v1/macro/yen`);
     const oa = await (await get("/openapi.json")).json();

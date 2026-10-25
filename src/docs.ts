@@ -958,7 +958,7 @@ Scores are observations with sample sizes, not ratings; few samples are marked l
 - **Paid pay-check ($0.004 per call):** \`GET ${base}/v1/trust/check?url=<resource>[&payTo=<address>][&amount=<USD>]\`: one verdict, \`allow\`, \`warn\` or \`block\`,
   with coded reasons (\`pay_to_mismatch\`, \`price_above_listing\`, \`paid_no_data\`, \`not_observed\`, \`unreliable_quotes\`, \`slow\`, \`young_domain\` ...), a confidence label,
   and links to the free lookup and (for curated vendors) the $0.02 report. A bad or missing \`url\` gets 400 before any quote. MCP: \`lumi_trust_check\`. A2A: \`trust_check\`.
-- **Pre-payment check, one label (${cfg.verdictPaid ? "paid, at most $0.004" : "free, rate-limited"}):** \`GET ${base}/v1/verdict?url=<resource or seller domain>[&payTo=<address>][&amount=<USD>]\`.
+- **Pre-payment check, one label (${cfg.verdictPaid ? "paid, $0.01 per call" : "free, rate-limited"}):** \`GET ${base}/v1/verdict?url=<resource or seller domain>[&payTo=<address>][&amount=<USD>]\`.
   Same data and signing key as \`/v1/check\` (embedded signed \`check_receipt\`), signed as \`lumi_verdict\`. Labels: \`checks_passed\` "Delivered in recent checks",
   \`check_first\` "Check first", \`checks_failed\` "Recent checks failed", \`no_data\` "Not enough data" (not a negative signal). Mapping from the older
   \`decision\`: allow -> checks_passed, warn -> check_first, block -> checks_failed, unknown -> no_data. Every answer carries \`as_of\`, \`evidence_window\`,

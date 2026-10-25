@@ -68,7 +68,7 @@ export interface Env {
   /** Tested-by-Lumi badge thresholds. Defaults (approved): score 80 and 3 conclusive paid Lumi test-buys. */
   BADGE_MIN_SCORE?: string;
   BADGE_MIN_PAID_TESTS?: string;
-  /** /v1/verdict pricing: "free" (alias of /v1/check) or "paid" (x402 at DEFAULT_PRICES.verdict, <= $0.004). Default VERDICT_PRICING below. */
+  /** /v1/verdict pricing: "free" (alias of /v1/check) or "paid" (x402 at DEFAULT_PRICES.verdict, $0.01; owner approved 2026-10-25). Default VERDICT_PRICING below. */
   VERDICT_PRICING?: string;
   /** Label thresholds (src/trust/verdict.ts VERDICT_DEFAULTS): checks_passed needs a delivered test-buy within N days (default 30);
    * observed on-chain payments: fewest payer groups shown (default 5, never lower), concentration flag at top-payer share >= N%
@@ -225,15 +225,16 @@ export const DEFAULT_PRICES: Record<PaidRoute, { xrp: string; usd: string }> = {
   funding: { xrp: "0.0023", usd: "0.003" },
   fear_greed: { xrp: "0.0023", usd: "0.003" },
   events_48h: { xrp: "0.0023", usd: "0.003" },
-  // GET /v1/verdict when VERDICT_PRICING = "paid": $0.004 (legal review M3 cap: at or below $0.004; test/verdict.test.ts checks it).
-  verdict: { xrp: "0.003", usd: "0.004" },
+  // GET /v1/verdict: $0.01 per call (owner approved 2026-10-25: "Ship the verdict at $0.01 a call"; supersedes the legal review
+  // M3 suggestion of <= $0.004). VERDICT_MAX_USD caps env overrides; test/verdict.test.ts checks it.
+  verdict: { xrp: "0.0075", usd: "0.01" },
 };
 /**
  * ONE-LINE SWITCH (legal review M3): "free" = GET /v1/verdict is a free, rate-limited alias of /v1/check (no 402, not listed
  * as a paid resource); "paid" = sold over x402 at DEFAULT_PRICES.verdict. Env VERDICT_PRICING overrides per deployment.
  */
-export const VERDICT_PRICING: "free" | "paid" = "free";
-export const VERDICT_MAX_USD = 0.004;
+export const VERDICT_PRICING: "free" | "paid" = "paid";
+export const VERDICT_MAX_USD = 0.01;
 export const verdictPaid = (env: { VERDICT_PRICING?: string } = {}) => ((env.VERDICT_PRICING ?? "").trim().toLowerCase() || VERDICT_PRICING) === "paid";
 export const PAID_ROUTES = Object.keys(DEFAULT_PRICES) as PaidRoute[];
 
@@ -547,7 +548,7 @@ export function loadConfig(env: Env): Config {
     pricesDrops: Object.fromEntries(
       PAID_ROUTES.map((r) => {
         const x = (env as Record<string, string | undefined>)[`PRICE_${r.toUpperCase()}_XRP`] || DEFAULT_PRICES[r].xrp;
-        // M3 cap: a fixed XRP verdict price above the default (~$0.004) falls back to the default.
+        // M3 cap: a fixed XRP verdict price above the default (~$0.01) falls back to the default.
         return [r, xrpToDrops(r === "verdict" && !(Number(x) <= Number(DEFAULT_PRICES.verdict.xrp)) ? DEFAULT_PRICES.verdict.xrp : x)];
       }),
     ) as Record<PaidRoute, string>,

@@ -19,6 +19,9 @@ export interface ActivityRow {
   payments_30d: number | null;
   total_usd_30d: number | null;
   top_payer_share: number | null;
+  /** PRIVATE: 0..1 share of paying volume from wallets funded by the seller itself or from the seller's own promo/prize credits
+   *  recycling into its calls (upstream funding-source grouping). Public views show only the `self_funded_loop` flag. */
+  self_funded_share: number | null;
   last_payment_at: number | null;
   window_end: number;
   source: string | null;
@@ -52,9 +55,15 @@ export function weeksAgo(lastMs: number | null, now: number): string | null {
   const w = Math.floor(Math.max(0, now - lastMs) / (7 * 86_400_000));
   return w === 0 ? "within the last week" : w >= 5 ? "more than 4 weeks ago" : `${w}–${w + 1} weeks ago`;
 }
+export type ActivityFlag = "self_funded_loop";
+export const SELF_FUNDED_NOTE = "Much of this seller's paying volume comes from wallets the seller funded or from its own promotional credits or prizes, so these payments do not show independent demand.";
 export type ActivityPublic =
-  | { name: string; definition: string; shown: false; note: string; as_of: string }
-  | { name: string; definition: string; shown: true; payer_groups_30d: string | null; payments_30d: string | null; last_payment: string | null; concentrated: boolean | null; as_of: string; stale?: true };
+  | { name: string; definition: string; shown: false; note: string; as_of: string; flags?: ActivityFlag[]; flag_note?: string }
+  | { name: string; definition: string; shown: true; payer_groups_30d: string | null; payments_30d: string | null; last_payment: string | null; concentrated: boolean | null; as_of: string; stale?: true; flags: ActivityFlag[]; flag_note?: string };
+/** Flags only (never the share itself): self_funded_loop when the self-funded share reaches th.selfFundedPct. */
+export function activityFlags(r: Pick<ActivityRow, "self_funded_share">, th: Pick<VerdictThresholds, "selfFundedPct">): ActivityFlag[] {
+  return r.self_funded_share != null && r.self_funded_share * 100 >= th.selfFundedPct ? ["self_funded_loop"] : [];
+}
 const HOST_RE = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,62}$/;
 const PAYTO_RE = /^(?:0x[0-9a-f]{40}|r[1-9a-hj-np-z]{24,34}|g[a-z2-7]{55}|[1-9a-hj-np-z]{32,44})$/;
 
@@ -84,12 +93,17 @@ export function parseActivityRow(x: any, now: number): ActivityRow | string {
   const ts = (v: unknown) => (v == null || v === "" ? null : typeof v === "number" ? v : Date.parse(String(v)));
   const payers = int(x.payer_groups_30d ?? x.payers_30d), payments = int(x.payments_30d), total = real(x.total_usd_30d, 1e9), share = real(x.top_payer_share, 1);
   const last = ts(x.last_payment_at), end = ts(x.window_end);
-  for (const [k, v] of Object.entries({ payers_30d: payers, payments_30d: payments, total_usd_30d: total, top_payer_share: share, last_payment_at: last })) if (Number.isNaN(v)) return `${k} is invalid`;
+  // Self-funded share: given directly, as seller-funded wallet share + own promo/prize credit share, or as 1 - outside share.
+  const sfw = real(x.seller_funded_share, 1), scr = real(x.seller_credit_share, 1), outside = real(x.outside_share, 1);
+  const selfShare = x.self_funded_share != null && x.self_funded_share !== "" ? real(x.self_funded_share, 1)
+    : sfw != null || scr != null ? (Number.isNaN(sfw) || Number.isNaN(scr) ? NaN : Math.min(1, (sfw ?? 0) + (scr ?? 0)))
+    : outside == null ? null : Number.isNaN(outside) ? NaN : 1 - outside;
+  for (const [k, v] of Object.entries({ payers_30d: payers, payments_30d: payments, total_usd_30d: total, top_payer_share: share, self_funded_share: selfShare, last_payment_at: last })) if (Number.isNaN(v)) return `${k} is invalid`;
   if (end == null || !Number.isFinite(end)) return "window_end is required (ISO date or ms)";
   if (end > now + 2 * 86_400_000) return "window_end is in the future";
   if (last != null && last > end + 86_400_000) return "last_payment_at is after window_end";
   const source = typeof x.source === "string" ? x.source.slice(0, 200) : null;
-  const row = { seller, domains, pay_to, payers_30d: payers, payments_30d: payments, total_usd_30d: total, top_payer_share: share, last_payment_at: last, window_end: end, source };
+  const row = { seller, domains, pay_to, payers_30d: payers, payments_30d: payments, total_usd_30d: total, top_payer_share: share, self_funded_share: selfShare, last_payment_at: last, window_end: end, source };
   return { ...row, fp: fp(JSON.stringify(row)), kfp: fp(JSON.stringify([domains, pay_to])), updated_at: now };
 }
 
@@ -111,8 +125,12 @@ export function activityPublic(r: ActivityRow | null, now: number, th: VerdictTh
   if (!r) return null;
   const as_of = new Date(r.window_end).toISOString().slice(0, 10);
   const base = { name: ACTIVITY_NAME, definition: ACTIVITY_DEFINITION };
+  // Self-funded loop: a flag only (never the share). Shown even below the payer-group minimum, since it is about the
+  // seller's own wallets and credits, not about outside payers.
+  const flags = activityFlags(r, th);
+  const fl = flags.length ? { flags, flag_note: SELF_FUNDED_NOTE } : {};
   // M8: nothing (counts, concentration, recency) below the minimum number of independent payer groups.
-  if (r.payers_30d == null || r.payers_30d < Math.max(5, th.activityMinPayerGroups)) return { ...base, shown: false, note: ACTIVITY_TOO_FEW, as_of };
+  if (r.payers_30d == null || r.payers_30d < Math.max(5, th.activityMinPayerGroups)) return { ...base, shown: false, note: ACTIVITY_TOO_FEW, as_of, ...fl };
   const stale = now - r.window_end > th.activityMaxAgeDays * 86_400_000;
   return {
     ...base,
@@ -120,14 +138,17 @@ export function activityPublic(r: ActivityRow | null, now: number, th: VerdictTh
     payer_groups_30d: activityBand(r.payers_30d),
     payments_30d: activityBand(r.payments_30d),
     last_payment: weeksAgo(r.last_payment_at, now),
-    concentrated: r.top_payer_share == null ? null : r.top_payer_share * 100 >= th.concentrationPct,
+    // A self-funded loop is never reported as not concentrated.
+    concentrated: flags.length ? true : r.top_payer_share == null ? null : r.top_payer_share * 100 >= th.concentrationPct,
     as_of,
+    flags,
+    ...(flags.length ? { flag_note: SELF_FUNDED_NOTE } : {}),
     ...(stale ? { stale: true as const } : {}),
   };
 }
 
 export function activityOwnerView(r: ActivityRow, now: number, th: VerdictThresholds) {
-  return { public: activityPublic(r, now, th), payer_groups_30d: r.payers_30d, payments_30d: r.payments_30d, last_payment_at: r.last_payment_at == null ? null : new Date(r.last_payment_at).toISOString(), seller: r.seller, domains: r.domains, pay_to: r.pay_to, total_usd_30d: r.total_usd_30d, top_payer_share: r.top_payer_share, source: r.source, updated_at: new Date(r.updated_at).toISOString() };
+  return { public: activityPublic(r, now, th), payer_groups_30d: r.payers_30d, payments_30d: r.payments_30d, last_payment_at: r.last_payment_at == null ? null : new Date(r.last_payment_at).toISOString(), seller: r.seller, domains: r.domains, pay_to: r.pay_to, total_usd_30d: r.total_usd_30d, top_payer_share: r.top_payer_share, self_funded_share: r.self_funded_share, source: r.source, updated_at: new Date(r.updated_at).toISOString() };
 }
 
 /** Service: cached lookups (5 min per isolate) + change-only batched ingest. */
@@ -198,7 +219,7 @@ export class MemoryActivityStore implements ActivityStore {
 
 const fromDb = (r: any): ActivityRow => ({
   seller: r.seller, domains: String(r.domains ?? "").split(" ").filter(Boolean), pay_to: String(r.pay_to ?? "").split(" ").filter(Boolean),
-  payers_30d: r.payers_30d ?? null, payments_30d: r.payments_30d ?? null, total_usd_30d: r.total_usd_30d ?? null, top_payer_share: r.top_payer_share ?? null,
+  payers_30d: r.payers_30d ?? null, payments_30d: r.payments_30d ?? null, total_usd_30d: r.total_usd_30d ?? null, top_payer_share: r.top_payer_share ?? null, self_funded_share: r.self_funded_share ?? null,
   last_payment_at: r.last_payment_at ?? null, window_end: Number(r.window_end), source: r.source ?? null, fp: r.fp, kfp: r.kfp, updated_at: Number(r.updated_at),
 });
 
@@ -221,12 +242,12 @@ export class D1ActivityStore implements ActivityStore {
     return out;
   }
   async write(rows: ActivityRow[], rekey: ActivityRow[]) {
-    const up = "INSERT INTO seller_activity (seller, domains, pay_to, payers_30d, payments_30d, total_usd_30d, top_payer_share, last_payment_at, window_end, source, fp, kfp, updated_at) " +
-      "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) ON CONFLICT (seller) DO UPDATE SET domains = excluded.domains, pay_to = excluded.pay_to, " +
-      "payers_30d = excluded.payers_30d, payments_30d = excluded.payments_30d, total_usd_30d = excluded.total_usd_30d, top_payer_share = excluded.top_payer_share, " +
+    const up = "INSERT INTO seller_activity (seller, domains, pay_to, payers_30d, payments_30d, total_usd_30d, top_payer_share, self_funded_share, last_payment_at, window_end, source, fp, kfp, updated_at) " +
+      "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14) ON CONFLICT (seller) DO UPDATE SET domains = excluded.domains, pay_to = excluded.pay_to, " +
+      "payers_30d = excluded.payers_30d, payments_30d = excluded.payments_30d, total_usd_30d = excluded.total_usd_30d, top_payer_share = excluded.top_payer_share, self_funded_share = excluded.self_funded_share, " +
       "last_payment_at = excluded.last_payment_at, window_end = excluded.window_end, source = excluded.source, fp = excluded.fp, kfp = excluded.kfp, updated_at = excluded.updated_at";
     const stmts = [
-      ...rows.map((r) => this.db.prepare(up).bind(r.seller, r.domains.join(" "), r.pay_to.join(" "), r.payers_30d, r.payments_30d, r.total_usd_30d, r.top_payer_share, r.last_payment_at, r.window_end, r.source, r.fp, r.kfp, r.updated_at)),
+      ...rows.map((r) => this.db.prepare(up).bind(r.seller, r.domains.join(" "), r.pay_to.join(" "), r.payers_30d, r.payments_30d, r.total_usd_30d, r.top_payer_share, r.self_funded_share, r.last_payment_at, r.window_end, r.source, r.fp, r.kfp, r.updated_at)),
       ...rekey.flatMap((r) => [
         this.db.prepare("DELETE FROM seller_activity_keys WHERE seller = ?1").bind(r.seller),
         ...keysOf(r).map((k) => this.db.prepare("INSERT INTO seller_activity_keys (k, seller) VALUES (?1, ?2) ON CONFLICT (k) DO UPDATE SET seller = excluded.seller").bind(k, r.seller)),

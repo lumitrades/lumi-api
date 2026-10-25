@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS seller_activity (
   payments_30d INTEGER,                -- x402-sized (< $1) customer payments in the window
   total_usd_30d REAL,                  -- PRIVATE: x402-sized customer payment total (owner-only)
   top_payer_share REAL,                -- PRIVATE: 0..1 share of x402-sized value from the single largest payer (owner-only)
+  self_funded_share REAL,              -- PRIVATE: 0..1 share of paying volume from seller-funded wallets or the seller's own promo/prize credits (public: self_funded_loop flag only)
   last_payment_at INTEGER,             -- ms epoch of the latest x402-sized customer payment seen
   window_end INTEGER NOT NULL,         -- ms epoch the 30-day window ends (data as of)
   source TEXT,
