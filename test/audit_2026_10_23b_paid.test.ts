@@ -78,7 +78,7 @@ describe("M-3 trust check: a known XRPL payTo of the seller is not a mismatch", 
   const URL_ = "https://esgpulse.theaslangroupllc.com/api/esg/cruelty-free";
   const EVM = "0x50ab2018c06c6E4eAA9BA52057Eb55eD284912fc";
   const XRPL = "rMnHeutYALco8RYFVcmuU4BCgSzBpPEh32";
-  const exact = (purchases: any[] = []) => ({ catalog: { entries: [{ resource: URL_, domain: "esgpulse.theaslangroupllc.com", tier: "purchase-verified", listed_price_usd: "0.05", pay_to: [{ network: "eip155:8453", pay_to: EVM }, { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", pay_to: "985iFjbnGQ3dJcwXnfRCMSrH4Jnc3kW1N6msR64B5KX1" }], quote_checks: { last_valid_quote: true, last_quote_pays_listed_address: true, last_price_matches_listing: true, checks_recorded: 3, valid_quote_rate: 1 }, purchases }] } });
+  const exact = (purchases: any[] = []) => ({ catalog: { entries: [{ resource: URL_, domain: "esgpulse.theaslangroupllc.com", tier: "test-bought", listed_price_usd: "0.05", pay_to: [{ network: "eip155:8453", pay_to: EVM }, { network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp", pay_to: "985iFjbnGQ3dJcwXnfRCMSrH4Jnc3kW1N6msR64B5KX1" }], quote_checks: { last_valid_quote: true, last_quote_pays_listed_address: true, last_price_matches_listing: true, checks_recorded: 3, valid_quote_rate: 1 }, purchases }] } });
   const codes = (b: any) => b.reasons.map((r: any) => r.code);
 
   it("the operator's XRPL payTo (curated aslan-macropulse shares the listed EVM payTo) matches", () => {

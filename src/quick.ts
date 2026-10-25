@@ -141,7 +141,7 @@ interface Reason { code: string; severity: "block" | "warn" | "info"; detail: st
  * Verdict from Lumi's observations (CDP Bazaar listing + free quote checks + paid test-buys):
  * block = a concrete red flag (payTo or price differs from the listing, Lumi paid and got nothing);
  * warn = not enough evidence (unlisted, unchecked, failing quotes, young domain, slow);
- * allow = listed and its quotes check out (purchase-verified = Lumi paid and got data).
+ * allow = listed and its quotes check out (test-bought = Lumi paid and got data).
  */
 /** A purchase whose delivery is known (inconclusive = Lumi never recorded a response: never a reason to warn or block). */
 const conclusive = (p: Json) => p?.delivery !== "inconclusive" && p?.data_returned !== null && !(p?.data_returned === false && (p?.http_status == null || p?.http_status === 0));

@@ -27,7 +27,7 @@ export const DECISION_TO_LABEL: Record<string, Label> = { block: "checks_failed"
 
 export const VERDICT_KIND = "lumi_verdict";
 /** Bump when the mapping, thresholds or wording change, so signed responses say which rules produced them. */
-export const VERDICT_RULES_VERSION = "2026-10-25.3";
+export const VERDICT_RULES_VERSION = "2026-10-25.4";
 export const DISPUTE_URL = "https://lumitrades.io/contact/";
 export const DEFINITION =
   "This is a summary of Lumi's own dated observations of this endpoint, not a rating of the business or a statement about its honesty. checks_failed means that, in the window shown, at least two of Lumi's paid test-buys on different days paid and got no usable data, a confirming re-buy failed too, no later buy succeeded and a person at Lumi reviewed it (or the quote paid an unlisted address, an address that is not the seller's, a higher price than listed, or an address on the OFAC SDN list). no_data means Lumi has too little evidence and is not a negative signal. Sellers can reply or ask for a re-test at hello@lumitrades.io, https://lumitrades.io/contact/ or /v1/trust/replies; an open re-test request pauses checks_failed for up to 72 hours while Lumi re-buys. Paying Lumi never changes this result.";
@@ -213,6 +213,7 @@ export function thresholdsDoc(th: VerdictThresholds) {
     failed_rule: FAILED_RULE,
     appeal_pause_hours: APPEAL_PAUSE_HOURS,
     pay_max_age_days: th.payMaxAgeDays,
-    never_considered: "Whether the seller pays Lumi for anything (monitoring, reports), whether it is a competitor or customer of Lumi (disclosed in `relationship`, never used), whether you paid for this answer, and on-chain payment activity.",
+    never_considered: "Whether the seller pays Lumi for anything (monitoring, reports), whether it is a competitor or customer of Lumi (disclosed in `relationship`, never used), and whether you paid for this answer. Paying Lumi never changes a result.",
+    on_chain_payers: "Public on-chain payer activity can add a warning: if every payer Lumi sees at the seller's payTo is Lumi, a known test wallet or a wallet funded by the seller, the check adds a no_organic_payers warning, which can make the verdict check_first. It never produces checks_failed or checks_passed on its own.",
   };
 }

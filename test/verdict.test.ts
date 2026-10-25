@@ -223,7 +223,7 @@ describe("firewall: competitor, customer and paying (monitoring) status never ch
   it("function level: a monitoring subscription / payment to Lumi in the lookup doc changes nothing", () => {
     const now = T("2026-10-23T12:00:00Z");
     const entry = (purchases: any[], extra: any = {}) => ({
-      resource: R(9), domain: "api.s9.com", tier: "purchase-verified", listed_price_usd: "0.01",
+      resource: R(9), domain: "api.s9.com", tier: "test-bought", listed_price_usd: "0.01",
       pay_to: [{ pay_to: payTo(9), network: "eip155:8453" }],
       quote_checks: { last_checked_at: "2026-10-22T12:00:00Z", last_valid_quote: true, checks_recorded: 5, valid_quote_rate: 1, median_latency_ms: 300 },
       domain_age: { age_days: 400 }, purchases, ...extra,

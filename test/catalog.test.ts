@@ -130,7 +130,7 @@ describe("catalog pipeline", () => {
     expect(list.body.catalog.lookup).toContain("payTo");
   });
 
-  it("owner observation: verified on Base, from a Lumi buyer to a listed payTo -> purchase-verified", async () => {
+  it("owner observation: verified on Base, from a Lumi buyer to a listed payTo -> test-bought", async () => {
     const { app, store } = mkApp();
     await app.fetch(new Request(BASE + "/v1/trust/catalog/ingest?now=1", { method: "POST", headers: owner }));
     const body = { resource: "https://api.seller0.com/v1/thing/2", network: "eip155:8453", tx_hash: "0x" + "a".repeat(64), data_returned: true, http_status: 200, summary: "returned JSON with 3 fields", facilitator: "cdp" };
@@ -142,7 +142,7 @@ describe("catalog pipeline", () => {
     expect((await post(body)).status).toBe(200);
     expect(store.buys).toHaveLength(1);
     const look = await get(app, "/v1/trust/vendors?url=" + encodeURIComponent(body.resource));
-    expect(look.body.catalog.entries[0].tier).toBe("purchase-verified");
+    expect(look.body.catalog.entries[0].tier).toBe("test-bought");
     expect(look.body.catalog.entries[0].test_buys).toMatchObject({ count: 1, last_data_returned: true });
     expect(JSON.stringify(look.body)).not.toMatch(/0xa{64}|basescan|"tx_hash"|"explorer"/);
     const pop = await get(app, "/v1/trust/catalog?popular=1&max_usd=0.05");
@@ -271,7 +271,7 @@ describe("free catalog teaser (v1.0.1)", () => {
   });
 });
 
-describe("purchase-verified split by chain", () => {
+describe("test-bought split by chain", () => {
   it("counts Base catalog buys and curated XRPL buys separately; XRPL rows answer-only when free", async () => {
     const { app } = mkApp();
     await app.fetch(new Request(BASE + "/v1/trust/catalog/ingest?now=1", { method: "POST", headers: owner }));
@@ -282,10 +282,10 @@ describe("purchase-verified split by chain", () => {
     expect(split.xrpl.network).toBe("xrpl:0");
     expect(split.xrpl.test_buys).toBeGreaterThan(0);
     expect(split.xrpl.purchase_verified_endpoints).toBeGreaterThan(0);
-    expect(cat.body.summary.coverage).toMatch(/1 purchase-verified on Base \(USDC\).*separately, \d+ XRPL endpoints/);
+    expect(cat.body.summary.coverage).toMatch(/1 test-bought on Base \(USDC\).*separately, \d+ XRPL endpoints/);
     const look = await get(app, "/v1/trust/vendors?domain=asksurf.ai");
     const cur = look.body.curated[0];
-    expect(cur).toMatchObject({ id: "asksurf", network: "xrpl:0", tier: "purchase-verified (XRPL, curated list)" });
+    expect(cur).toMatchObject({ id: "asksurf", network: "xrpl:0", tier: "test-bought (XRPL, curated list)" });
     expect(cur.xrpl_test_buys.count).toBeGreaterThan(0);
     expect(cur.purchases).toBeUndefined();
     expect(JSON.stringify(look.body)).not.toMatch(/"tx_hash"|"explorer"/);

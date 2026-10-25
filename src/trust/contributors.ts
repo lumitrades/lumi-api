@@ -1201,7 +1201,7 @@ export function createContributors(deps: ContributorDeps) {
   }
   const badgeView = (b: { handle: string; verified: number; badges: string[] }) => ({
     handle: b.handle, badges: b.badges, verified_contributions: b.verified, window_days: CONTRIB_RETENTION_DAYS,
-    counts: "Verified receipts only: on-ledger payment checked, finding counted or confirmed, at most one per seller endpoint per UTC day. Held, disputed and contradicted receipts do not count.",
+    counts: "Checked receipts only: on-ledger payment checked, finding counted or confirmed, at most one per seller endpoint per UTC day. Held, disputed and contradicted receipts do not count.",
     note: "A badge is recognition only: no money, credits or perks, and it never changes any score.",
   });
 

@@ -122,7 +122,7 @@ describe("Stage C: /v1/trust/check", () => {
   });
 
   const entry = (over: any = {}) => ({
-    resource: "https://seller.test/v1/data", domain: "seller.test", tier: "quote-verified, low confidence", listed_price_usd: "0.01",
+    resource: "https://seller.test/v1/data", domain: "seller.test", tier: "quote-checked, low confidence", listed_price_usd: "0.01",
     pay_to: [{ pay_to: "0xAbC0000000000000000000000000000000000001", network: "eip155:8453" }],
     quote_checks: { last_checked_at: "2026-10-22T12:00:00Z", last_valid_quote: true, checks_recorded: 5, valid_quote_rate: 1, median_latency_ms: 300 },
     domain_age: { age_days: 400 },

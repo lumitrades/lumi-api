@@ -145,7 +145,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   slate: {
     description:
-      "Use when an agent needs Lumi Trades' current watchlist to compare with its own analysis: each pending or open idea as coin, momentum/trend bias (positive or negative), conviction, timeframe and expiry, plus coins with no current idea. No trade plans, outcomes or performance figures. Not charged on stale data. " + IDEAS_DISCLAIMER,
+      "Use when an agent needs Lumi Trades' current watchlist to compare with its own analysis: each pending or open item as coin, momentum/trend bias (positive or negative), conviction, timeframe and expiry, plus coins with no current idea. No trade plans, outcomes or performance figures. Not charged on stale data. " + IDEAS_DISCLAIMER,
     example: {
       kind: "slate",
       product_line: MARKET_IDEAS_NAME,

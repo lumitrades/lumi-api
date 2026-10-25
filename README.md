@@ -84,7 +84,7 @@ console.log(paid.data);
 
 | | Endpoint | Price | Returns |
 |---|---|---|---|
-| **paid** | `GET /v1/trust/vendors/{id}/report` | **0.015 XRP** or **0.02 RLUSD / USDC** (0.02 USDC on Base) | **x402 vendor report**: Lumi's full observation history for one vendor on the trust list: every free 402-quote check (90-day retention), every paid test-buy with amount, tx hash, explorer link and delivered yes/no, latency min/p50/p90/p95/max and 7-day trend, uptime % (24h/7d/30d/90d) and daily series, quoted-price history, verified agent reports, vendor replies, score components, sample sizes and confidence labels. Unknown vendor: 404; no observation in 48 h: 503 (both before any 402, never charged). Owner bearer key: free |
+| **paid** | `GET /v1/trust/vendors/{id}/report` | **0.015 XRP** or **0.02 RLUSD / USDC** (0.02 USDC on Base) | **x402 vendor report**: Lumi's full observation history for one vendor on the trust list: every free 402-quote check (90-day retention), every paid test-buy with amount, tx hash, explorer link and delivered yes/no, latency min/p50/p90/p95/max and 7-day trend, uptime % (24h/7d/30d/90d) and daily series, quoted-price history, agent reports, vendor replies, score components, sample sizes and confidence labels. Unknown vendor: 404; no observation in 48 h: 503 (both before any 402, never charged). Owner bearer key: free |
 
 **Market data (paid)**
 
@@ -102,7 +102,7 @@ console.log(paid.data);
 | | Endpoint | Price | Returns |
 |---|---|---|---|
 | **paid** | `GET /v1/signal/{coin}` | **0.005 XRP** or **0.01 RLUSD / USDC** | Momentum/trend bias (positive/neutral/negative) + score, 1h/4h/1d bias, indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume) |
-| **paid** | `GET /v1/levels/{coin}` | **0.005 XRP** or **0.01 RLUSD / USDC** | Support/resistance, short bias note, commentary, catalysts, sources |
+| **paid** | `GET /v1/levels/{coin}` | **0.005 XRP** or **0.01 RLUSD / USDC** | Chart reference zones, short bias note, commentary, catalysts, sources |
 | **paid** | `GET /v1/slate` | **0.01 XRP** or **0.02 RLUSD / USDC** | Current watchlist as momentum/trend bias (conviction, timeframe, expiry; no entries, stops, targets or leverage), coins with no current idea |
 
 Pricing rationale (Oct 2026, XRP ≈ $1.33): single data feeds on the XRPL AI Hub sell for 0.001-0.012 RLUSD (AskSurf, Heurist Mesh, KR Crypto) and composite reads for ~0.02-0.025 (Strale Fear & Greed via Monid, invinoveritas). Lumi's quick reads sit at $0.003-$0.005, single feeds at $0.01 and the multi-source brief at $0.02 (v1.0). The daily Institutional & Policy Brief is $0.10 (lowered from $0.25 on Oct 23 2026, and now included in the free trial): exactly 0.10 RLUSD / USDC (XRPL, Base or Stellar); the XRP default is **0.077 XRP** (0.10 / 1.30), repriced from the live rate when `XRP_PRICING=live`.
@@ -376,10 +376,10 @@ answered before they pay it. These are observations with timestamps, tx hashes a
 
 | Endpoint | What |
 |---|---|
-| `GET /v1/trust/vendors?url=…` / `?domain=…` / `?payTo=…` | Look up any x402 seller before paying: the full CDP x402 Bazaar catalog (ingested daily; live counts at `/v1/trust/catalog`) with free unpaid 402-quote checks on a rotating schedule (valid quote, price and payTo vs listing, latency, RDAP domain age) labelled **quote-verified, low confidence**, plus Lumi's on-chain-confirmed test-buys labelled **purchase-verified**. No match: `{observed:false, note}` (not a negative signal). Lumi itself: "self, not scored" |
+| `GET /v1/trust/vendors?url=…` / `?domain=…` / `?payTo=…` | Look up any x402 seller before paying: the full CDP x402 Bazaar catalog (ingested daily; live counts at `/v1/trust/catalog`) with free unpaid 402-quote checks on a rotating schedule (valid quote, price and payTo vs listing, latency, RDAP domain age) labelled **quote-checked, low confidence**, plus Lumi's on-chain-confirmed test-buys labelled **test-bought**. No match: `{observed:false, note}` (not a negative signal). Lumi itself: "self, not scored" |
 | `GET /v1/trust/catalog` | Browse the catalog (`?after=&limit=`, or `?popular=1&max_usd=0.05`) with counts by tier |
 | `GET /v1/trust/vendors` | Every allowlisted vendor (allowlist order, not ranked): score, confidence, sample sizes, last paid observation with evidence, latest probes |
-| `GET /v1/trust/vendors/{id}` | One vendor: listed endpoints and pay-to addresses, score components, up to 50 observations, latest probe per endpoint, verified agent reports, vendor replies |
+| `GET /v1/trust/vendors/{id}` | One vendor: listed endpoints and pay-to addresses, score components, up to 50 observations, latest probe per endpoint, agent reports, vendor replies |
 | `GET /v1/trust/methodology` | The full method below, as JSON |
 | `POST /v1/reports` | Agent report of a paid call (shown and scored only when verified) |
 | `POST /v1/tips` | Private tip to Lumi. Stored privately; never shown, published, or returned anywhere |

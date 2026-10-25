@@ -132,7 +132,7 @@ function reshape(route: PaidRoute, s: Record<string, any>): string[] {
   // Paper-trade samples never show live P/L or outcome-like status (the track record is not public in samples).
   if (route === "slate" || route === "brief") {
     const n = stripTradeOutcome(s);
-    if (n) omitted.push("paper-trade unrealized_pnl_pct, mark_price and status (not shown in free samples)");
+    if (n) omitted.push("watchlist unrealized_pnl_pct, mark_price and status (not shown in free samples)");
   }
   if (route === "levels") {
     for (const k of ["support", "resistance"]) if (Array.isArray(s[k]) && s[k].length > 1) { s[k] = s[k].slice(0, 1); omitted.push(`${k}[1..]`); }

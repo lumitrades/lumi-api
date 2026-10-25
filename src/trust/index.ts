@@ -291,7 +291,7 @@ export function scoreVendor(probes: ProbeSummary, obs: ObservationRow[], reports
       delivery: { value: round(delivery), weight: WEIGHTS.delivery, delivered, paid_test_buys: paid, inconclusive: dc.inconclusive, meaning: "share of Lumi's paid test-buys whose response contained data; inconclusive buys (Lumi-side, no response recorded) are excluded" },
       uptime: { value: round(uptime), weight: WEIGHTS.uptime, valid_quotes: probes.ok, probes: probes.n, meaning: "share of free probes that got a valid x402 402 quote with an XRPL option to a listed address" },
       latency: { value: round(latency), weight: WEIGHTS.latency, median_ms: med == null ? null : Math.round(med), samples: probes.latencies.length, meaning: "median time to a valid 402 quote; 500 ms or less = 1, 5 s or more = 0" },
-      agent_reports: { value: round(agentReports), weight: WEIGHTS.agent_reports, counted, meaning: "verified agent reports (on-ledger payment + payer signature), after a 24 h hold; excluded when there are none" },
+      agent_reports: { value: round(agentReports), weight: WEIGHTS.agent_reports, counted, meaning: "agent reports (on-ledger payment + payer signature), after a 24 h hold; excluded when there are none" },
     },
     samples: { paid_test_buys: paid, delivered, inconclusive_test_buys: dc.inconclusive, ...(paid90 != null ? { paid_test_buys_90d: paid90 } : {}), probes: probes.n, probes_ok: probes.ok, verified_reports_counted: counted },
   };
@@ -370,9 +370,9 @@ export function methodologyDoc(base: string) {
       quote_checks: "Catalogued http resources get free, unpaid requests in rotating slices every 30 minutes, fanned out over a queue; not every resource is checked every day (see counts.quote_checked_24h in the catalog summary for live coverage). Recorded: HTTP status, whether a readable x402 quote came back, whether it pays an address in the listing, quoted price vs listed price, latency, and the last 30 results. MCP listings are not probed. The registrable domain's registration date is read from RDAP about monthly (shared hosting hosts such as workers.dev are skipped). TLS certificate age is not measured.",
       tiers: {
         "catalogued, not yet checked": "Listed in the Bazaar; no quote check yet.",
-        "quote-verified, low confidence": "A valid x402 quote in the last 48 h. This shows the endpoint is up and asks for payment as listed; it says nothing about what a paid call returns.",
+        "quote-checked, low confidence": "A valid x402 quote in the last 48 h. This shows the endpoint is up and asks for payment as listed; it says nothing about what a paid call returns.",
         "quote-checked: no valid x402 quote at the last check": "The last free request did not return a readable 402 quote (e.g. it answered 200, 404, timed out, or quoted a different payTo). Often a parameter issue; not a judgment of the seller.",
-        "purchase-verified": "Lumi paid for one call from its own wallet. Bazaar catalog listings are bought in USDC on Base; the curated vendor list is bought on XRPL (see the curated list below). The two are counted separately (catalog summary purchase_verified_by_chain) and never added into one XRPL figure; the payment is confirmed on-chain before it is stored, with HTTP status, data returned yes/no and latency.",
+        "test-bought": "Lumi paid for one call from its own wallet. Bazaar catalog listings are bought in USDC on Base; the curated vendor list is bought on XRPL (see the curated list below). The two are counted separately (catalog summary purchase_verified_by_chain) and never added into one XRPL figure; the payment is confirmed on-chain before it is stored, with HTTP status, data returned yes/no and latency.",
         "self, not scored": "Lumi's own endpoints.",
       },
       no_match: "{observed:false, note}: Lumi has not seen this seller. No observation is not a negative signal.",
@@ -380,10 +380,10 @@ export function methodologyDoc(base: string) {
       free_evidence: {
         bazaar_quality: "Coinbase CDP Bazaar publishes per-listing quality fields (30-day call count, 30-day unique payers, last called). Lumi stores them at most every 20 h and shows them as bazaar_quality, attributed to Coinbase Bazaar and dated (as_of).",
         payto_census: "For payTo lookups and trust/check, Lumi reads the payTo's incoming payments: on XRPL the latest 200 ledger transactions (x402-style = SourceTag 804681468 or an InvoiceID); on Base the USDC Transfer logs into Bazaar-listed payTos, indexed forward from the index start date (no back history). Lumi's own wallets, known test wallets and the seller's payTos are excluded, payers are grouped by the account that funded them (a funder that funded 20+ indexed payers, e.g. an exchange, is not used for grouping), and payers funded by excluded wallets are dropped. Output: organic payer clusters, payments, last organic date. Free lookups show counts and dates only; tx hashes and samples are in the paid trust/check.",
-        third_party: "vet402 observatory test results (KIZUNA Creation, CC BY 4.0, https://vet402.com/observatory) are imported for catalogued resources and shown separately as third_party.vet402 with a link, licence and retrieval date. They are never added to Lumi's own purchase-verified counts.",
+        third_party: "vet402 observatory test results (KIZUNA Creation, CC BY 4.0, https://vet402.com/observatory) are imported for catalogued resources and shown separately as third_party.vet402 with a link, licence and retrieval date. They are never added to Lumi's own test-bought counts.",
         demand_driven_buys: "When a paid trust/check hits a listing with no Lumi purchase in 30 days and a warning signal, the listing is queued for Lumi's daily test-buy routine (same caps); nothing is bought during the check.",
       },
-      by_chain: `purchase-verified counts are split by chain. base_usdc: Bazaar catalog resources Lumi bought once each in USDC on Base (nearly all purchase-verified entries). xrpl: endpoints of the small curated vendor list that Lumi test-bought on XRPL in the last 30 days, with how many buys returned data; plus xrpl.bazaar_sweep, a dated one-off sweep of the XRPL-paying hosts in the CDP Bazaar catalog: ${XRPL_BAZAAR_SWEEP.statement}. Sweep buys merged into the trust dataset were re-verified on the XRPL ledger at merge time and carry signed receipts; a few sweep hosts that are not (yet) in the ingested Bazaar catalog or the curated list are not merged. Hosts listed after the sweep date are not covered by it.`,
+      by_chain: `test-bought counts are split by chain. base_usdc: Bazaar catalog resources Lumi bought once each in USDC on Base (nearly all test-bought entries). xrpl: endpoints of the small curated vendor list that Lumi test-bought on XRPL in the last 30 days, with how many buys returned data; plus xrpl.bazaar_sweep, a dated one-off sweep of the XRPL-paying hosts in the CDP Bazaar catalog: ${XRPL_BAZAAR_SWEEP.statement}. Sweep buys merged into the trust dataset were re-verified on the XRPL ledger at merge time and carry signed receipts; a few sweep hosts that are not (yet) in the ingested Bazaar catalog or the curated list are not merged. Hosts listed after the sweep date are not covered by it.`,
     },
     score: {
       range: "0-100, over the last 30 days",
@@ -392,7 +392,7 @@ export function methodologyDoc(base: string) {
       delivery: "delivered / paid test-buys",
       uptime: "valid 402 quotes / probes",
       latency: "1 - (median_ms - 500) / 4500, clipped to 0..1",
-      agent_reports: "positive / (positive + negative) verified reports; a negative report gets weight 1.5 when a Lumi test-buy within 6 h also returned no data; max 1 counted report per reporter per day and 5 per 30 days; 24 h hold before counting",
+      agent_reports: "positive / (positive + negative) checked agent reports; a negative report gets weight 1.5 when a Lumi test-buy within 6 h also returned no data; max 1 counted report per reporter per day and 5 per 30 days; 24 h hold before counting",
       confidence: "low when there are fewer than 5 paid test-buys in the last 90 days or fewer than 10 probes in the last 30 days; medium below 20 paid test-buys in 90 days; otherwise high (the score itself uses the last 30 days)",
       ordering: "vendors are listed in allowlist order, not ranked",
     },
@@ -822,7 +822,7 @@ export function createTrust(deps: TrustDeps): Trust {
         rows: probes.map((p) => [iso(p.ts), epIndex.get(p.endpoint) ?? -1, p.http_status, p.ok, p.price, p.asset, p.source_tag, p.latency_ms, p.error]),
       },
       agent_reports: {
-        about: "Verified reports only (on-ledger payment + payer signature). Unverified submissions are never shown.",
+        about: "Checked agent reports only (on-ledger payment + payer signature). Unverified submissions are never shown.",
         count: reports.length,
         delivered: reports.filter((r) => r.outcome === "delivered").length,
         other_outcomes: reports.filter((r) => r.outcome !== "delivered").length,

@@ -60,7 +60,7 @@ describe("H-1 guard: a buy with no HTTP response is inconclusive, never 'no data
 
 describe("H-1 trust/check verdict: inconclusive buys never warn or block", () => {
   const entry = (purchases: any[]) => ({
-    resource: RES, domain: "esgpulse.example", tier: "purchase-verified", listed_price_usd: "0.1",
+    resource: RES, domain: "esgpulse.example", tier: "test-bought", listed_price_usd: "0.1",
     pay_to: [{ pay_to: "rMnHeutYALco8RYFVcmuU4BCgSzBpPEh32", network: "xrpl:0" }],
     quote_checks: { last_checked_at: "2026-10-22T12:00:00Z", last_valid_quote: true, checks_recorded: 5, valid_quote_rate: 1, median_latency_ms: 300 },
     domain_age: { age_days: 400 }, purchases,

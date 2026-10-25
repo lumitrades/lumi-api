@@ -1,7 +1,7 @@
 /**
  * Free trust evidence (no purchases): XRPL payTo census, Base USDC forward index with funder clustering,
  * vet402 open data (CC BY 4.0, third-party) and the demand-driven test-buy queue.
- * Facts only, dated; never a judgement about anyone. Third-party data is never mixed into Lumi's own purchase-verified counts.
+ * Facts only, dated; never a judgement about anyone. Third-party data is never mixed into Lumi's own test-bought counts.
  */
 import type { D1Like } from "../config";
 import { rpc, rpcAny, assetOfIou, RIPPLE_EPOCH, TRANSFER_TOPIC, BASE_USDC, XRPL_ADDR_RE, EVM_ADDR_RE } from "./verify";
@@ -463,7 +463,7 @@ export function vet402View(r: Vet402Row, free: boolean) {
   return {
     source: VET402.source, license: VET402.license, license_url: VET402.license_url, link: VET402.link, methodology: VET402.methodology,
     cite: VET402.cite(d), retrieved_at: iso(r.retrieved_at),
-    note: "Third-party test results, shown as published by vet402. Not Lumi's measurement and not counted in Lumi's purchase-verified numbers.",
+    note: "Third-party test results, shown as published by vet402. Not Lumi's measurement and not counted in Lumi's test-bought numbers.",
     l0: r.l0_verdict ? { verdict: r.l0_verdict, probed_at: iso(r.l0_probed_at), listed: r.listed == null ? null : !!r.listed } : null,
     l1: r.l1_attempts ? {
       purchase_attempts: r.l1_attempts, settled: r.l1_settled, settled_with_2xx: r.l1_delivered, last_at: iso(r.l1_last_at), last_status: r.l1_last_status,

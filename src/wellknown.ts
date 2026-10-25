@@ -62,7 +62,7 @@ export function agentsJson(base: string) {
       flow("vendor_report", "x402 vendor report", "Full observation history for one curated vendor: quote checks, test-buys with tx hashes, uptime and latency.", "vendor_report"),
       flow("brief", "Daily crypto market brief", "BTC levels and read, sentiment, funding, movers, key levels, yen watch and next-48h events in one call.", "brief"),
       flow("signal", `${MARKET_IDEAS_NAME}: coin signal`, `Rule-based momentum/trend reading (positive/neutral/negative bias with score) for one of 50 coins with 1h/4h/1d bias and indicators. ${MARKET_IDEAS_NOTICE}`, "signal"),
-      flow("levels", `${MARKET_IDEAS_NAME}: coin levels`, `Support/resistance levels, a short bias note and commentary for one coin. ${MARKET_IDEAS_NOTICE}`, "levels"),
+      flow("levels", `${MARKET_IDEAS_NAME}: coin levels`, `Chart reference zones, a short bias note and commentary for one coin. ${MARKET_IDEAS_NOTICE}`, "levels"),
       flow("scan", `${MARKET_IDEAS_NAME}: all-coins scan`, `49 live momentum/trend readings in one call, highest score first. ${MARKET_IDEAS_NOTICE}`, "scan"),
       flow("institutional", "Institutional & policy brief", "Daily dated, sourced moves by regulators, central banks and banks mapped to XRP, XLM, XDC, QNT, AXL and HBAR.", "institutional"),
     ],

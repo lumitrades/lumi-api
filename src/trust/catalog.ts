@@ -1,8 +1,8 @@
 /**
  * x402 catalog: the CDP Bazaar discovery list ingested into D1, free rotating 402-quote checks of every entry
  * (rotating slices every 30 minutes, fanned out over a Cloudflare Queue so each invocation stays within Workers Free limits), and
- * Lumi's on-chain-confirmed test-buys. Labels are neutral: "catalogued", "quote-verified, low confidence",
- * "purchase-verified". Nothing here rates a seller as good or bad.
+ * Lumi's on-chain-confirmed test-buys. Labels are neutral: "catalogued", "quote-checked, low confidence",
+ * "test-bought". Nothing here rates a seller as good or bad.
  */
 import type { D1Like } from "../config";
 import { dataReturnedView, deliveryCounts, deliveryState, inconclusiveReason } from "./delivery";
@@ -46,16 +46,16 @@ const SOLANA_USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 export const LABELS = {
   catalogued: "catalogued, not yet checked",
-  quote_verified: "quote-verified, low confidence",
+  quote_verified: "quote-checked, low confidence",
   quote_failed: "quote-checked: no valid x402 quote at the last check",
-  purchase_verified: "purchase-verified",
+  purchase_verified: "test-bought",
   self: "self, not scored",
 } as const;
 
 export const LABEL_NOTES = {
-  "quote-verified, low confidence":
+  "quote-checked, low confidence":
     "A free, unpaid request returned a readable x402 402 quote in the last 48 h. This shows the endpoint is up and asks for payment as listed; it says nothing about what a paid call returns.",
-  "purchase-verified": "Lumi paid for one call from its own wallet; the payment is confirmed on-chain and the outcome (data returned or not) is recorded.",
+  "test-bought": "Lumi paid for one call from its own wallet; the payment is confirmed on-chain and the outcome (data returned or not) is recorded.",
   "catalogued, not yet checked": "Listed in the CDP x402 Bazaar; no quote check yet.",
 };
 

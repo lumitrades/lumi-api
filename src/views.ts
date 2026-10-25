@@ -182,7 +182,7 @@ export function levelsBlock(a: Json) {
           .map((c: Json) => ({ date: c.date, kind: c.kind, text: neutralText(c.text), source: c.source, url: c.url }))
           .filter((c: Json) => c.text)
       : [],
-    sources: Array.isArray(a.sources) ? a.sources.map((s: Json) => ({ title: s.title, url: s.url })) : [],
+    sources: Array.isArray(a.sources) ? a.sources.map((s: Json) => ({ title: typeof s.title === "string" ? neutralWords(s.title) : s.title, url: s.url })) : [],
   };
 }
 
@@ -248,7 +248,7 @@ export function slateView(ideas: Json, coins: CoinRef[]) {
     rules: SLATE_RULES,
     ideas: active.map((t) => tradeView(t, coins)),
     no_setup: noSetup,
-    note: "Lumi's current watchlist ideas (pending/open) as a momentum/trend bias only: no entries, stops, targets, leverage, closed ideas, outcomes or P/L.",
+    note: "Lumi's current watchlist (pending/open items) as a momentum/trend bias only: no trade plans, closed items, outcomes or P/L.",
     evaluated_utc: ideas?.as_of ?? null,
   });
 }

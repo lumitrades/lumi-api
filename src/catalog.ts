@@ -40,13 +40,13 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "levels",
-    name: "Lumi Trades: support and resistance levels",
+    name: "Lumi Trades: chart reference zones",
     method: "GET",
     path: "/v1/levels/{coin}",
     template: "/v1/levels/{coin}",
     summary:
       MARKET_IDEAS_LABEL + " " +
-      "Use this when you need reference price levels for one coin: support/resistance levels, a short bias note, commentary, catalysts and cited sources (no forecasts or scenario levels). " + NOT_CHARGED,
+      "Use this when you need chart reference zones for one coin (the support and resistance prices Lumi watches, not trade levels), a short bias note, commentary, catalysts and cited sources (no forecasts or scenario levels). " + NOT_CHARGED,
     example: `/v1/levels/${EXAMPLE_COIN}`,
   },
   {
@@ -200,7 +200,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     summary:
       "Use this when you need evidence before paying an x402 vendor on Lumi's trust list: the full observation history. Every free 402-quote check (90-day retention) " +
       "with status, quoted price and latency; every paid test-buy with amount, ledger tx hash, explorer link and delivered yes/no; latency stats " +
-      "(min/p50/p90/p95/max) and the 7-day trend; uptime % over 24h/7d/30d/90d and a daily series; per-endpoint quoted-price history; verified " +
+      "(min/p50/p90/p95/max) and the 7-day trend; uptime % over 24h/7d/30d/90d and a daily series; per-endpoint quoted-price history; " +
       "agent reports; vendor replies; score components, sample sizes and confidence labels. Automated observations, not a rating. " +
       "Not sold (503, not charged) when the vendor has no observation in the last 48 h. The free summary is GET /v1/trust/vendors/{id}.",
     example: "/v1/trust/vendors/printmoneylab/report",

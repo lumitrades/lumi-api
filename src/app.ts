@@ -166,7 +166,7 @@ const SCAN_MIN = 40;
 const NEEDS: Record<PaidRoute, DataFile[]> = {
   signal: ["signals", "prices"],
   levels: ["analysis", "prices"],
-  slate: ["ideas"], // data/ideas.json: current (pending/open) watchlist ideas; published as bias/conviction/timeframe only
+  slate: ["ideas"], // data/ideas.json: current (pending/open) watchlist items; published as bias/conviction/timeframe only
   market: ["analysis", "signals", "prices", "context"],
   brief: ["prices", "context", "analysis", "signals"],
   yen: ["context", "analysis", "prices"],

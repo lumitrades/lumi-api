@@ -113,10 +113,10 @@ export const XRPL_BAZAAR_SWEEP = {
   note: "Dated snapshot. Hosts not bought had no payable XRPL quote within Lumi's limits at the time; that is a dated observation, not a judgement of the seller.",
 } as const;
 
-/** XRPL purchase-verified window for the curated list. */
+/** XRPL test-bought window for the curated list. */
 export const CURATED_WINDOW_MS = 30 * 86_400_000;
 
-/** Purchase-verified, split by chain: Base USDC buys of Bazaar listings vs XRPL buys of the curated list. Never merged into one number. */
+/** Test-bought, split by chain: Base USDC buys of Bazaar listings vs XRPL buys of the curated list. Never merged into one number. */
 export function chainSplit(s: CatalogStats | null, x: XrplAgg | null) {
   const base = s?.by_network?.["eip155:8453"] ?? (s && !s.by_network ? { purchase_verified: s.purchase_verified, test_buys: s.test_buys } : { purchase_verified: 0, test_buys: 0 });
   const otherBazaar = s?.by_network ? Object.entries(s.by_network).filter(([n]) => n !== "eip155:8453" && n !== "xrpl:0" && n !== "stellar:pubnet") : [];
@@ -673,7 +673,7 @@ export function createCatalog(deps: CatalogDeps) {
       const last = buys[0];
       return {
         id: v.id, name: v.name, homepage: v.homepage, network: "xrpl:0",
-        tier: buys.length ? "purchase-verified (XRPL, curated list)" : "curated XRPL list: no Lumi test-buy in the last 30 days",
+        tier: buys.length ? "test-bought (XRPL, curated list)" : "curated XRPL list: no Lumi test-buy in the last 30 days",
         xrpl_test_buys: {
           window_days: CURATED_WINDOW_MS / 86_400_000, count: buys.length, ...deliveryCounts(buys),
           ...(last ? { last_at: iso(last.ts), last_data_returned: dataReturnedView(last), last_delivery: deliveryState(last) } : {}),
@@ -858,7 +858,7 @@ export function createCatalog(deps: CatalogDeps) {
     const ins = await store.addBuy(buy);
     deps.log({ event: "catalog_buy", domain: row.domain, inserted: ins === "inserted" });
     if (ins === "inserted") {
-      // Keep the public purchase-verified counts in step with the entries.
+      // Keep the public test-bought counts in step with the entries.
       try { await store.setMeta("stats", JSON.stringify(await store.computeStats(now()))); } catch { /* next cron run */ }
       topMemo = undefined;
     }
@@ -913,8 +913,8 @@ const fmt = (n: number) => Number(n ?? 0).toLocaleString("en-US");
 /** Honest one-line coverage: what is indexed vs what Lumi actually checked or bought. */
 export function coverageLine(s: { catalogued: number; domains: number; quote_verified: number; purchase_verified: number; quote_checked_24h?: number; by_network?: CatalogStats["by_network"] }, x?: XrplAgg | null): string {
   const base = s.by_network?.["eip155:8453"]?.purchase_verified ?? s.purchase_verified;
-  return `${fmt(s.catalogued)} resources across ${fmt(s.domains)} domains indexed, ${fmt(s.quote_verified)} quote-verified, ${fmt(base)} purchase-verified on Base (USDC)` +
+  return `${fmt(s.catalogued)} resources across ${fmt(s.domains)} domains indexed, ${fmt(s.quote_verified)} quote-checked, ${fmt(base)} test-bought on Base (USDC)` +
     (s.quote_checked_24h != null ? ` (${fmt(s.quote_checked_24h)} quote-checked in the last 24 h)` : "") +
-    (x ? `; separately, ${fmt(x.endpoints)} XRPL endpoints from ${fmt(x.vendors)} curated vendors purchase-verified (${fmt(x.buys)} XRPL test-buys in 30 days, ${fmt(x.delivered)} returned data)` : "") +
+    (x ? `; separately, ${fmt(x.endpoints)} XRPL endpoints from ${fmt(x.vendors)} curated vendors test-bought (${fmt(x.buys)} XRPL test-buys in 30 days, ${fmt(x.delivered)} returned data)` : "") +
     `; XRPL Bazaar sweep: ${XRPL_BAZAAR_SWEEP.statement}`;
 }

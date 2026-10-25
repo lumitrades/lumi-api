@@ -127,7 +127,7 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       "Lumi Trades seller checks: an x402 'should I pay this URL?' check and paid x402 vendor reports. " +
       "Market data: the BTC/macro backdrop, a daily market brief, a yen carry-trade watch, a sentiment snapshot (Fear & Greed + funding), an events calendar, " +
       "funding rates, CoinMarketCap Fear & Greed with history, the next 48h of events and a daily policy brief. " +
-      `${MARKET_IDEAS_LABEL} Momentum/trend readings (positive/neutral/negative bias), lite per-coin reads, an all-coins scan, support/resistance levels, and a watchlist bias slate. ` +
+      `${MARKET_IDEAS_LABEL} Momentum/trend readings (positive/neutral/negative bias), lite per-coin reads, an all-coins scan, chart reference zones, and a watchlist bias slate. ` +
       `Trial: ${TRIAL_SHORT} (see free_trial). ` +
       `Agents call an endpoint, receive HTTP 402 with the price in ${acceptsOrder(cfg)}, sign ${cfg.evm ? "an EIP-3009 USDC authorization or " : ""}${cfg.stellar ? "a Stellar USDC transfer or " : ""}a small XRPL Payment, retry, and get JSON back. ` +
       FRESHNESS_FIELDS,
@@ -172,9 +172,9 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       { method: "GET", path: "/v1/verdict/rules", summary: "Verdict labels, public names, the allow/warn/block to label mapping, thresholds and definitions" },
       { method: "GET", path: "/v1/samples", summary: "Free truncated SAMPLE of every paid product (lists cut to 2, up to 10 min old) with USD price and full URL" },
       { method: "GET", path: "/v1/trust/vendors", summary: "Lumi's automated observations of other x402 vendors (402-quote checks every 30 min, paid test-buys with tx evidence, sample sizes)" },
-      { method: "GET", path: "/v1/trust/vendors?url=|domain=|payTo=", summary: "Look up any x402 seller before you pay it: the full CDP Bazaar catalog, with free 402-quote checks on a rotating schedule ('quote-verified, low confidence'; not every listing is checked yet, see catalog.coverage: 'N resources across M domains indexed, X quote-verified, Y purchase-verified on Base (USDC); separately, Z XRPL endpoints from the curated list') and Lumi's on-chain-confirmed test-buys ('purchase-verified', counted per chain)" },
+      { method: "GET", path: "/v1/trust/vendors?url=|domain=|payTo=", summary: "Look up any x402 seller before you pay it: the full CDP Bazaar catalog, with free 402-quote checks on a rotating schedule ('quote-checked, low confidence'; not every listing is checked yet, see catalog.coverage: 'N resources across M domains indexed, X quote-checked, Y test-bought on Base (USDC); separately, Z XRPL endpoints from the curated list') and Lumi's on-chain-confirmed test-buys ('test-bought', counted per chain)" },
       { method: "GET", path: "/v1/trust/catalog", summary: "Free teaser of the ingested x402 catalog: the 100 most-used listings (?page=1..4, ?limit<=25, or ?popular=1&max_usd=0.05), answer-only (no tx hashes), with live counts by tier; rate-limited per client" },
-      { method: "GET", path: "/v1/trust/vendors/{id}", summary: "One vendor: observations with evidence, latest probes, verified agent reports, vendor replies" },
+      { method: "GET", path: "/v1/trust/vendors/{id}", summary: "One vendor: observations with evidence, latest probes, agent reports, vendor replies" },
       { method: "GET", path: "/v1/trust/vendors/{id}/report", summary: "Paid ($0.02, x402): full observation history for one vendor; listed under paid_endpoints" },
       { method: "GET", path: "/v1/trust/methodology", summary: "How trust observations and scores are computed; how to report and how vendors reply" },
       { method: "GET", path: "/v1/badge/{key}.svg", summary: `Free, signed, earned-only 'Tested by Lumi' badge: shown only while the seller's live score is >= ${BADGE_MIN_SCORE} with >= ${BADGE_MIN_PAID_TESTS} conclusive paid test-buys (latest delivered); never sold. Also /v1/badge/{key}.json (Lumi-signed verdict); docs at /v1/badge. Legacy /badge paths answer 301 here (query kept)` },
@@ -188,7 +188,7 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       { method: "POST", path: "/mcp", summary: "Remote MCP server (Streamable HTTP): free tools for everyone; paid tools return the price and how to pay" },
       { method: "POST", path: "/a2a", summary: "A2A JSON-RPC endpoint (SendMessage / message/send): free skills answered inline, paid skills return x402 terms" },
     ],
-    mcp: mcpInfo(base),
+    mcp: mcpInfo(base, cfg),
     a2a: { agent_card: `${base}/.well-known/agent-card.json`, endpoint: `${base}/a2a`, protocol_versions: ["1.0", "0.3"], binding: "JSONRPC" },
     paid_endpoints: priceTable(cfg),
     product_lines: productLinesDoc(),
@@ -206,7 +206,7 @@ export function wellKnownX402(cfg: Config, base: string) {
     x402Version: 2,
     kind: "resource-server",
     name: "Lumi Trades",
-    description: `Pay-per-call reads from Lumi Trades (lumitrades.io), settled in ${settledIn(cfg)}, in three groups: checks before paying an x402 seller (a pre-payment check, a one-label verdict and seller reputation reports from Lumi's trust observations); market data (macro, daily brief, yen carry-trade watch, sentiment, funding, Fear & Greed, events and a 48h window, and a daily policy brief); and educational crypto analysis (technical indicator reads, all-coins scan, lite reads, support and resistance levels, and a paper-trade journal; educational, not financial advice; ${MARKET_IDEAS_NOTICE}). Each resource carries product_line. Also: seller monitoring plans (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d; Audit $99; free tier and 14-day trial) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
+    description: `Pay-per-call reads from Lumi Trades (lumitrades.io), settled in ${settledIn(cfg)}, in three groups: checks before paying an x402 seller (a pre-payment check, a one-label verdict and seller reputation reports from Lumi's trust observations); market data (macro, daily brief, yen carry-trade watch, sentiment, funding, Fear & Greed, events and a 48h window, and a daily policy brief); and momentum/trend readings (per-coin indicator reads, an all-coins scan, lite reads, chart reference zones and a watchlist bias slate; educational, not financial advice; ${MARKET_IDEAS_NOTICE}). Each resource carries product_line. Also: seller monitoring plans (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d; Audit $99; free tier and 14-day trial) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
     resources: paidEndpoints(cfg).map((e) => ({
       name: e.name,
       url: `${base}${e.example}`,
@@ -392,7 +392,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
           ...(e.template.includes("{")
             ? { "400": { description: "Path template not filled in (e.g. :coin, <coin>, ${coin}), or any unfilled path sent with a payment header; the body gives an example URL (never charged). Without a payment header, the literal OpenAPI template path ({coin} / {id}, as discovery crawlers request it) returns the route's normal 402 quote with a note to fill the placeholder; a payment sent to it is refused with this 400." } }
             : e.route === "trust_check" || e.route === "verdict"
-            ? { "400": { description: "url missing, empty or not an absolute http(s) URL, or payTo/amount malformed (never charged). A request with no query string at all, as discovery crawlers send it, returns the normal 402 quote; a payment sent without url is refused with this 400." } }
+            ? { "400": { description: "url missing, empty or not an absolute http(s) URL, or payTo/amount malformed (never charged). A request with no query string at all, as discovery crawlers send it, returns the normal 402 quote; a payment sent without url is refused with this 400.", content: { "application/json": { example: { error: "invalid_query", detail: "url is required: the x402 resource URL (or the seller's domain) you are about to pay.", example: `${base}/v1/${e.route === "verdict" ? "verdict" : "trust/check"}?url=https://api.example.com/v1/data`, note: "Not charged." } } } } }
             : e.route === "brief" || e.route === "institutional"
             ? { "400": { description: "format is not json or md (never charged)." } }
             : {}),
@@ -424,7 +424,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
         `Pay-per-call reads from lumitrades.io for AI agents, in three groups (OpenAPI tags): ` +
         `trust (Lumi Trades seller checks for x402 sellers; free lookup; paid pre-payment check and vendor reports); ` +
         `market data (macro backdrop, sentiment, Fear & Greed, funding, events, a daily market brief and a daily policy brief); ` +
-        `and ${MARKET_IDEAS_NAME} (per-coin signal scores, lite reads, the all-coins scan, support/resistance levels and the watchlist bias slate; ${MARKET_IDEAS_NOTICE}). ` +
+        `and ${MARKET_IDEAS_NAME} (per-coin signal scores, lite reads, the all-coins scan, chart reference zones and the watchlist bias slate; ${MARKET_IDEAS_NOTICE}). ` +
         `No API key: pay a few cents per call in ${settledIn(cfg)} via x402. ` +
         `${TRIAL_SUMMARY} ` +
         `Not charged on bad input or stale data; every response carries as_of, data_age_seconds, next_update and stale_after.`,
@@ -438,7 +438,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
         "GET /v1/institutional gives a daily sourced policy brief (regulators, central banks, banks, tokenization). " +
         `${MARKET_IDEAS_LABEL} Signals cover ${coins.length} top coins (computed live, 1h refreshed about every 13 minutes); levels and slate cover ${siteOnly(coins).map((c) => c.symbol).join(", ")}. ` +
         "GET /v1/signal/{coin} gives the indicator-based momentum/trend reading (positive/neutral/negative bias with score); GET /v1/lite/{coin} gives a cheap bias + score + price read; " +
-        "GET /v1/scan gives all coins' bias readings in one call; GET /v1/levels/{coin} gives support/resistance and commentary; " +
+        "GET /v1/scan gives all coins' bias readings in one call; GET /v1/levels/{coin} gives chart reference zones and commentary; " +
         "GET /v1/slate gives the current watchlist as a momentum/trend bias (no entries, stops, targets or leverage). " +
         `Each paid call is one x402 v2 'exact' payment: ${acceptsOrder(cfg)}` +
         (cfg.evm ? ` (Base: ${cfg.evm.network}, token ${cfg.evm.asset}; XRPL: ${cfg.network}${cfg.stellar ? `; Stellar: ${cfg.stellar.network}, token ${cfg.stellar.asset}` : ""})` : ` (${cfg.network})`) +
@@ -472,7 +472,7 @@ function trustPaths(): Record<string, unknown> {
   const r = (codes: Record<string, string>) => Object.fromEntries(Object.entries(codes).map(([k, v]) => [k, { description: v }]));
   const tag = ["trust"];
   return {
-    "/v1/trust/vendors": { get: { tags: tag, security: [], summary: "x402 seller lookup and vendor observations (free)", description: "With url, domain or payTo (case-insensitive): matches across the full CDP x402 Bazaar catalog, answer-only (tier, last quote check, test-buy count; up to 5 entries; no tx hashes or check history, those are in the paid /v1/trust/check); rate-limited per client (ingested daily; listings get free, unpaid 402-quote checks on a rotating schedule: valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys, counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated vendor list, separately; see catalog.purchase_verified_by_chain). Tiers: 'catalogued, not yet checked', 'quote-verified, low confidence', 'quote-checked: no valid x402 quote at the last check', 'purchase-verified'. No match returns {observed:false, note}; that is not a negative signal. Without parameters: the curated XRPL vendor list (allowlist order, not ranked) plus catalog counts; each vendor's last_paid_observation includes the tx_hash and explorer link of its latest paid test-buy only (free; null when Lumi has no paid test-buy of that vendor). For a few vendors where Lumi has confirmed the cause is not on its side, and only while Lumi has no paid test-buy of them, payment_attempts gives {status:'test_payment_not_accepted_yet', label:'Test payment not accepted yet on XRPL', network:'xrpl:0', network_name:'XRPL', count, first_attempt, last_attempt}: signed XRPL test payments the seller's endpoint did not accept (none reached the ledger, nothing was paid). Informational only, never part of the score; absent for every other vendor. Older tx hashes, signed receipts and the full history are in the paid /v1/trust/vendors/{id}/report ($0.02). Observations, not ratings.", parameters: [
+    "/v1/trust/vendors": { get: { tags: tag, security: [], summary: "x402 seller lookup and vendor observations (free)", description: "With url, domain or payTo (case-insensitive): matches across the full CDP x402 Bazaar catalog, answer-only (tier, last quote check, test-buy count; up to 5 entries; no tx hashes or check history, those are in the paid /v1/trust/check); rate-limited per client (ingested daily; listings get free, unpaid 402-quote checks on a rotating schedule: valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys, counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated vendor list, separately; see catalog.purchase_verified_by_chain). Tiers: 'catalogued, not yet checked', 'quote-checked, low confidence', 'quote-checked: no valid x402 quote at the last check', 'test-bought'. No match returns {observed:false, note}; that is not a negative signal. Without parameters: the curated XRPL vendor list (allowlist order, not ranked) plus catalog counts; each vendor's last_paid_observation includes the tx_hash and explorer link of its latest paid test-buy only (free; null when Lumi has no paid test-buy of that vendor). For a few vendors where Lumi has confirmed the cause is not on its side, and only while Lumi has no paid test-buy of them, payment_attempts gives {status:'test_payment_not_accepted_yet', label:'Test payment not accepted yet on XRPL', network:'xrpl:0', network_name:'XRPL', count, first_attempt, last_attempt}: signed XRPL test payments the seller's endpoint did not accept (none reached the ledger, nothing was paid). Informational only, never part of the score; absent for every other vendor. Older tx hashes, signed receipts and the full history are in the paid /v1/trust/vendors/{id}/report ($0.02). Observations, not ratings.", parameters: [
       { name: "url", in: "query", required: false, description: "Resource URL you are about to pay", schema: { type: "string", maxLength: 500 } },
       { name: "domain", in: "query", required: false, description: "Seller host or registrable domain", schema: { type: "string", maxLength: 253 } },
       { name: "payTo", in: "query", required: false, description: "payTo address from the seller's 402 quote (case-insensitive)", schema: { type: "string", maxLength: 120 } },
@@ -544,17 +544,17 @@ export function productLinesDoc() {
   };
 }
 
-function mcpInfo(base: string) {
+function mcpInfo(base: string, cfg: Config) {
   return {
     remote: { url: `${base}/mcp`, transport: "streamable-http", stateless: true },
-    stdio: { package: "lumi-trades-mcp", command: "npx -y lumi-trades-mcp", pays_with: "your XRPL wallet (XRPL_SEED), within per-call caps and a session budget" },
+    stdio: { package: "lumi-trades-mcp", command: "npx -y lumi-trades-mcp", pays_with: "your own wallet, signed locally: XRP, RLUSD or USDC on the XRP Ledger (XRPL_SEED) or USDC on Base, gasless (EVM_PRIVATE_KEY), within per-call caps and a session budget" },
     registry: "io.github.cypher-osiris/lumi-trades-mcp",
     tools: {
-      free: ["lumi_catalog", "lumi_coins", "lumi_samples", "lumi_quote", "lumi_vendor_scores"],
+      free: ["lumi_catalog", "lumi_coins", "lumi_samples", "lumi_quote", ...(cfg.verdictPaid ? [] : ["lumi_verdict"]), "lumi_vendor_scores"],
       market_ideas: MARKET_IDEAS_TOOLS,
-      paid: ["lumi_brief", "lumi_scan", "lumi_signal", "lumi_lite", "lumi_levels", "lumi_slate", "lumi_market", "lumi_macro_yen", "lumi_sentiment", "lumi_funding", "lumi_fear_greed", "lumi_events", "lumi_events_48h", "lumi_institutional_brief", "lumi_trust_check", "lumi_vendor_report"],
+      paid: ["lumi_brief", "lumi_scan", "lumi_signal", "lumi_lite", "lumi_levels", "lumi_slate", "lumi_market", "lumi_macro_yen", "lumi_sentiment", "lumi_funding", "lumi_fear_greed", "lumi_events", "lumi_events_48h", "lumi_institutional_brief", "lumi_trust_check", "lumi_vendor_report", ...(cfg.verdictPaid ? ["lumi_verdict"] : [])],
     },
-    note: "On the remote server, paid tools return the price and how to pay (x402 at the REST endpoint, or the npm package with your wallet). Stale data is never sold.",
+    note: `On the remote server, paid tools return the price and how to pay: x402 at the REST endpoint (settled in ${settledIn(cfg)}), or the npm package with your wallet. Stale data is never sold.`,
   };
 }
 
@@ -725,12 +725,12 @@ Which one to call (market data):
 Which one to call (${MARKET_IDEAS_NAME}; ${MARKET_IDEAS_NOTICE}):
 - Screening the whole market? \`GET /v1/scan\`: all ${coins.length} coins' bias readings, scores, 1h RSI and price in one call (cheaper than ${coins.length} signal calls).
 - Only the headline for one coin? \`GET /v1/lite/{coin}\` (bias, score, 1h/4h/1d bias, price); \`/v1/signal/{coin}\` adds every indicator.
-- Lumi's current watchlist as a bias (no trade levels)? \`GET /v1/slate\`.
+- Lumi's current watchlist as a bias (no trade plans)? \`GET /v1/slate\`.
 - One coin? \`GET /v1/signal/{coin}\` or \`/v1/lite/{coin}\` (any of ${coins.length}) + \`GET /v1/levels/{coin}\` (watchlist and majors).
 
 Lumi Trades seller checks lookups:
 - Checking any x402 seller before you pay it? \`GET /v1/trust/vendors?url=<resource>\` (or \`?domain=\`, \`?payTo=\`) is free and covers the whole CDP Bazaar catalog (answer-only; tx evidence is in the paid \`/v1/trust/check\`, $0.02). For curated vendors, \`GET /v1/trust/vendors/{id}\` is the free summary; \`GET /v1/trust/vendors/{id}/report\` ($0.02)
-  is the full observation history (every quote check and paid test-buy with tx hashes, latency stats and trend, uptime %, verified reports, replies).
+  is the full observation history (every quote check and paid test-buy with tx hashes, latency stats and trend, uptime %, agent reports, replies).
   Unknown vendor: 404; no observation in the last 48 h: 503. Both before any 402, never charged.
 
 Fields that are not available at request time are omitted, never filled with guesses.
@@ -926,9 +926,9 @@ print(decode_payment_response(r.headers["PAYMENT-RESPONSE"]))
 ## MCP
 
 - **Remote MCP server:** \`${base}/mcp\` (Streamable HTTP, stateless; protocol 2026-07-28 and 2025-03-26 .. 2025-11-25).
-  Add it as a remote MCP connector URL. Free tools: \`lumi_catalog\`, \`lumi_coins\`, \`lumi_samples\`, \`lumi_quote\`, \`lumi_verdict\`, \`lumi_vendor_scores\`. Paid tools
-  return the price and how to pay, since a remote connector has no wallet:
-  Lumi Trades seller checks \`lumi_trust_check\`, \`lumi_vendor_report\`; market data \`lumi_brief\`, \`lumi_market\`, \`lumi_macro_yen\`, \`lumi_sentiment\`, \`lumi_funding\`,
+  Add it as a remote MCP connector URL. Free tools: \`lumi_catalog\`, \`lumi_coins\`, \`lumi_samples\`, \`lumi_quote\`${cfg.verdictPaid ? "" : ", `lumi_verdict`"}, \`lumi_vendor_scores\`. Paid tools
+  return the price and how to pay (x402 at the REST endpoint, settled in ${settledIn(cfg)}), since a remote connector has no wallet:
+  Lumi Trades seller checks ${cfg.verdictPaid ? "`lumi_verdict` ($0.01), " : ""}\`lumi_trust_check\`, \`lumi_vendor_report\`; market data \`lumi_brief\`, \`lumi_market\`, \`lumi_macro_yen\`, \`lumi_sentiment\`, \`lumi_funding\`,
   \`lumi_fear_greed\`, \`lumi_events\`, \`lumi_events_48h\`, \`lumi_institutional_brief\`; ${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}) \`lumi_signal\`, \`lumi_lite\`,
   \`lumi_scan\`, \`lumi_levels\`, \`lumi_slate\`.
 - **Local MCP server that pays for you:** \`npx -y lumi-trades-mcp\` with \`XRPL_SEED\` (XRP/RLUSD/USDC on the XRP Ledger) and/or
@@ -953,12 +953,12 @@ and small paid test-buys from Lumi's own wallets, each with the amount, ledger t
 Test-buys are capped and disclosed: test-buys share a hard cap of about $0.50 a day (0.30 RLUSD + 0.10 XRP for curated XRPL vendors, plus up to 0.15 USDC for Stellar sellers) (not every vendor is bought every day), Base catalog re-buys are capped at $0.10 per day, and no listing priced above $0.05 is bought. The real cadence per vendor is in the coverage figures of /v1/trust/vendors.
 Scores are observations with sample sizes, not ratings; few samples are marked low confidence; vendors are listed in allowlist order, not ranked.
 
-- Lookup before you pay: \`GET ${base}/v1/trust/vendors?url=<resource>\` | \`?domain=\` | \`?payTo=\` (full CDP Bazaar catalog, free quote checks on a rotating schedule = "quote-verified, low confidence"; not every listing is checked yet, the response's \`coverage\` line says "N resources across M domains indexed, X quote-verified, Y purchase-verified on Base (USDC); separately, Z XRPL endpoints from curated vendors purchase-verified"; on-chain test-buys = "purchase-verified", counted per chain: Base USDC buys of Bazaar listings vs XRPL buys of a small curated list (\`purchase_verified_by_chain\`); no match = \`{observed:false}\`, not a negative signal). Free lookups are answer-only (tier, last quote check, test-buy count; no tx hashes) and rate-limited per client; evidence is in the paid \`/v1/trust/check\` ($0.02) and \`/v1/trust/vendors/{id}/report\` ($0.02). Browse a teaser (top 100 most-used, 25 per page, 40 requests/day): \`GET ${base}/v1/trust/catalog?page=1\`.
+- Lookup before you pay: \`GET ${base}/v1/trust/vendors?url=<resource>\` | \`?domain=\` | \`?payTo=\` (full CDP Bazaar catalog, free quote checks on a rotating schedule = "quote-checked, low confidence"; not every listing is checked yet, the response's \`coverage\` line says "N resources across M domains indexed, X quote-checked, Y test-bought on Base (USDC); separately, Z XRPL endpoints from curated vendors test-bought"; on-chain test-buys = "test-bought", counted per chain: Base USDC buys of Bazaar listings vs XRPL buys of a small curated list (\`purchase_verified_by_chain\`); no match = \`{observed:false}\`, not a negative signal). Free lookups are answer-only (tier, last quote check, test-buy count; no tx hashes) and rate-limited per client; evidence is in the paid \`/v1/trust/check\` ($0.02) and \`/v1/trust/vendors/{id}/report\` ($0.02). Browse a teaser (top 100 most-used, 25 per page, 40 requests/day): \`GET ${base}/v1/trust/catalog?page=1\`.
 - \`GET ${base}/v1/trust/vendors\`, \`GET ${base}/v1/trust/vendors/{id}\`, method: \`GET ${base}/v1/trust/methodology\`. MCP: \`lumi_vendor_scores\`. A2A: \`vendor_trust\`.
 - **"Tested by Lumi" badge (free, for sellers, earned only):** \`GET ${base}/v1/badge/{key}.svg\` (and \`.json\`, a Lumi-signed verdict), key = your Lumi vendor id or the exact host of your curated x402 service. Shown only while your live Lumi score is at least ${BADGE_MIN_SCORE} with at least ${BADGE_MIN_PAID_TESTS} conclusive paid test-buys and the latest test-buy delivered; removed automatically when you drop below; never sold, and paying Lumi never changes a result. Links to the public result page \`${base}/trust/v/{key}\` (dated tests, how Lumi tests, right to reply via hello@lumitrades.io). Embed (Markdown/README): \`[![Tested by Lumi](${base}/v1/badge/{key}.svg)](${base}/trust/v/{key})\`; HTML: \`<a href="${base}/trust/v/{key}"><img src="${base}/v1/badge/{key}.svg" alt="Tested by Lumi" height="20"></a>\`. Docs: \`GET ${base}/v1/badge\`. The old \`/badge\` paths are retired and answer 301 to \`/v1/badge\` (query kept).
 - **Paid detailed report ($0.02 per call, x402 on every rail):** \`GET ${base}/v1/trust/vendors/{id}/report\`: full observation history (every free quote
   check over 90 days, every paid test-buy with tx hash and delivered yes/no), latency min/p50/p90/p95/max and 7-day trend, uptime % for 24h/7d/30d/90d and a
-  daily series, quoted-price history, verified agent reports, vendor replies, sample sizes and confidence labels. Not sold (503, not charged) if Lumi has no
+  daily series, quoted-price history, agent reports, vendor replies, sample sizes and confidence labels. Not sold (503, not charged) if Lumi has no
   observation of the vendor in the last 48 h. MCP: \`lumi_vendor_report\`. A2A: \`vendor_report\`.
 - **Paid pay-check ($0.02 per call):** \`GET ${base}/v1/trust/check?url=<resource>[&payTo=<address>][&amount=<USD>]\`: one verdict, \`allow\`, \`warn\` or \`block\`,
   with coded reasons (\`pay_to_mismatch\`, \`price_above_listing\`, \`paid_no_data\`, \`not_observed\`, \`unreliable_quotes\`, \`slow\`, \`young_domain\` ...), a confidence label,

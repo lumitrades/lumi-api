@@ -226,7 +226,7 @@ export function rollupSeller(i: SellerProbeInput): SellerProbeResult {
   const lat = eps.filter((e) => e.quote?.x402 && e.latency_ms != null).map((e) => e.latency_ms!);
   return {
     seller: i.seller,
-    label: (i.delivered_test_buys ?? 0) > 0 ? "purchase-verified" : PROBE_LABEL,
+    label: (i.delivered_test_buys ?? 0) > 0 ? "test-bought" : PROBE_LABEL,
     verified: false,
     score_weight: Math.min(score_weight, PROBE_MAX_WEIGHT),
     checks,
@@ -310,7 +310,7 @@ function safeJson(s: string) { try { return JSON.parse(s); } catch { return null
 
 export function probeRowPublic(row: ProbeRow | null, deliveredTestBuys: number) {
   if (!row) return null;
-  const res: SellerProbeResult = { seller: row.seller, label: deliveredTestBuys > 0 ? "purchase-verified" : PROBE_LABEL, verified: false, score_weight: row.score_weight,
+  const res: SellerProbeResult = { seller: row.seller, label: deliveredTestBuys > 0 ? "test-bought" : PROBE_LABEL, verified: false, score_weight: row.score_weight,
     checks: safeJson(row.checks) ?? {}, passed: 0, failed: 0, outcome: row.outcome, notes: safeJson(row.notes) ?? [], endpoints_checked: row.endpoints_checked,
     endpoints_quoting: row.endpoints_quoting, median_latency_ms: row.median_latency_ms, rules_version: row.rules_version };
   return probePublicView(res, row.checked_at);

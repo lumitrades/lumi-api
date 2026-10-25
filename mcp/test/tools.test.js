@@ -30,9 +30,9 @@ test("0.9.7: versions agree across package.json, server.json and the server", ()
   assert.match(srv.description, /x402 sellers/);
 });
 
-test("coin counts are current (51 coins, 14 for levels; no Solana)", () => {
+test("coin counts are current (50 coins, 13 for levels; no Solana)", () => {
   assert.doesNotMatch(pkg.description, /12 more coins/);
-  assert.match(pkg.description, /51 coins/);
+  assert.match(pkg.description, /50 coins/);
   assert.match(pkg.description, /Lumi Check/);
   assert.match(pkg.description, /XRPL, Base and Stellar/);
   assert.doesNotMatch(pkg.description + srv.description, /solana/i);
@@ -48,7 +48,7 @@ test("tools: seller monitoring and trust feed present; coins says 50; no project
   const by = Object.fromEntries(tools.map((t) => [t.name, t]));
   assert.ok(by.lumi_seller_monitoring && by.lumi_trust_feed);
   assert.match(by.lumi_seller_monitoring.description, /paying never changes a score/);
-  assert.match(by.lumi_coins.description, /51 coins/);
+  assert.match(by.lumi_coins.description, /50 coins/);
   for (const t of tools) assert.doesNotMatch(t.description, /projection/, t.name);
   assert.equal(tools.length, 27);
   assert.ok(by.lumi_verdict, "lumi_verdict present");

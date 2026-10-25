@@ -23,7 +23,7 @@ use this package when you want paid tools to pay automatically from your own wal
 |---|---|---|---|
 | `lumi_catalog` | free | – | Endpoints, live prices, this server's wallet + spend caps |
 | `lumi_samples` | free | `route?` | Truncated, labelled samples of every paid product with USD price and full URL |
-| `lumi_coins` | free | – | The 50 coins covered: Lumi Trades market readings for all, levels only for the 13 watchlist/major coins (XRP XLM HBAR XDC AXL ZBCN SHX BTC ETH DOGE ADA LINK SUI) |
+| `lumi_coins` | free | – | Lists all 50 coins: trend readings for every coin; reference zones only for the 13 watchlist/major coins (XRP XLM HBAR XDC AXL ZBCN SHX BTC ETH DOGE ADA LINK SUI) |
 | `lumi_quote` | free | – | The x402 quote for any paid path, without paying |
 
 **Lumi Trades seller checks (x402)**
@@ -31,14 +31,14 @@ use this package when you want paid tools to pay automatically from your own wal
 | Tool | Paid? | Price (USD) | What you get |
 |---|---|---|---|
 | `lumi_verdict` | $0.01 | `url` `payTo?` `amount?` | One label before paying, same data and signing as `/v1/check`: `checks_passed` (Delivered in recent checks) / `check_first` (Check first) / `checks_failed` (Recent checks failed) / `no_data` (Not enough data), with dates, evidence window, sample count, reason codes, evidence and appeal links. Paying Lumi never changes a result |
-| `lumi_vendor_scores` | free | `url?` `domain?` `payTo?` `vendor_id?` | Look up any x402 seller before paying: tier (catalogued / quote-verified, low confidence / purchase-verified), last free 402-quote check, price and payTo vs its Bazaar listing, on-chain test-buy evidence. No args: Lumi's curated vendor scores |
+| `lumi_vendor_scores` | free | `url?` `domain?` `payTo?` `vendor_id?` | Look up any x402 seller before paying: tier (catalogued / quote-checked, low confidence / test-bought), last free 402-quote check, price and payTo vs its Bazaar listing, on-chain test-buy evidence. No args: Lumi's curated vendor scores |
 | `lumi_seller_monitoring` | free | `enrollment_id?` | Seller monitoring plans (per endpoint per 30d: Watch $5, Watch Plus $12, Watch Pro $20; 10+ endpoints -20% or 3 terms prepaid -10%, not stacked; Audit $99 one-off; free Watch tier; 14-day Watch Plus trial), enrolment steps; with an id, that seller's public entry and badge. Paying never changes a score |
 | `lumi_trust_feed` | free | – | Trust data feed plans (free key 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d) and licence terms |
 | `lumi_check` | free | `url?` `pay_to?` `amount_usd?` `network?` | **Lumi Check** before you pay any x402 seller: allow / warn / block with reasons, the seller's score and a link to its live report. Signed by Lumi and verified locally. Only origin + path of the URL is sent. Fail-open: warn if Lumi is unreachable within 2.5 s |
 | `lumi_scan_seller` | free | `url` | Fetch an x402 seller's 402 quote without paying, plus a dry-run test-buy plan against local caps |
 | `lumi_report_receipt` | free | `endpoint` `network` `tx_hash` … | Sign a receipt for a purchase you already made. `submit: true` is tier 2 sharing: off by default, needs `LUMI_SHARE_RECEIPTS=1` or `lumi-scan sharing on`. Shares the payment's chain and transaction ID, which is public on-chain and linkable to the paying wallet. Verified receipts earn a public badge only |
 | `lumi_trust_check` | paid | $0.02 | Pre-payment check of any x402 URL you are about to pay: payTo/price mismatches vs listings and Lumi's observations. `url` required |
-| `lumi_vendor_report` | paid | $0.02 | Full observation history for one x402 vendor on Lumi's trust list: every quote check (90 days) and paid test-buy with tx hash and delivered yes/no, latency stats and trend, uptime %, verified agent reports, vendor replies, confidence labels. `vendor_id` required |
+| `lumi_vendor_report` | paid | $0.02 | Full observation history for one x402 vendor on Lumi's trust list: every quote check (90 days) and paid test-buy with tx hash and delivered yes/no, latency stats and trend, uptime %, agent reports, vendor replies, confidence labels. `vendor_id` required |
 
 **Market data**
 
@@ -59,7 +59,7 @@ use this package when you want paid tools to pay automatically from your own wal
 | Tool | Paid? | Price (USD) | What you get |
 |---|---|---|---|
 | `lumi_signal` | paid | $0.01 | Momentum/trend bias (positive/neutral/negative) + score for one coin (1h/4h/1d + indicators) |
-| `lumi_levels` | paid | $0.01 | Support/resistance and commentary for one coin |
+| `lumi_levels` | paid | $0.01 | Chart reference zones and commentary for one coin |
 | `lumi_scan` | paid | $0.02 | Whole-market screen: momentum/trend bias, score, 1h RSI, price and 24h change for 49 large-cap coins, highest score first |
 | `lumi_lite` | paid | $0.004 | Cheap headline read for one coin: label, score, 1h/4h/1d labels, price, 24h change |
 | `lumi_slate` | paid | $0.02 | Current watchlist as momentum/trend bias (no entries, stops, targets or leverage) |
