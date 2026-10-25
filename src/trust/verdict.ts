@@ -57,8 +57,10 @@ export interface VerdictThresholds {
   activityMaxAgeDays: number;
   /** Top-payer share (%) at which the information-only concentration flag is shown (only with >= activityMinPayerGroups). */
   concentrationPct: number;
+  /** Share (%) of paying volume from seller-funded wallets or the seller's own promo/prize credits at which `self_funded_loop` is flagged. */
+  selfFundedPct: number;
 }
-export const VERDICT_DEFAULTS: VerdictThresholds = { payMaxAgeDays: 30, activityMinPayerGroups: 5, activityMaxAgeDays: 14, concentrationPct: 60 };
+export const VERDICT_DEFAULTS: VerdictThresholds = { payMaxAgeDays: 30, activityMinPayerGroups: 5, activityMaxAgeDays: 14, concentrationPct: 60, selfFundedPct: 50 };
 
 export function verdictThresholds(env: Record<string, string | undefined> = {}): VerdictThresholds {
   const n = (k: string, lo: number, hi: number, d: number) => { const v = env[k]; const x = v == null || v.trim() === "" ? NaN : Number(v); return Number.isFinite(x) && x >= lo && x <= hi ? x : d; };
@@ -67,6 +69,7 @@ export function verdictThresholds(env: Record<string, string | undefined> = {}):
     activityMinPayerGroups: n("VERDICT_ACTIVITY_MIN_GROUPS", 5, 1000, VERDICT_DEFAULTS.activityMinPayerGroups), // never below 5 (M8)
     activityMaxAgeDays: n("VERDICT_ACTIVITY_MAX_AGE_DAYS", 1, 90, VERDICT_DEFAULTS.activityMaxAgeDays),
     concentrationPct: n("VERDICT_CONCENTRATION_PCT", 1, 100, VERDICT_DEFAULTS.concentrationPct),
+    selfFundedPct: n("VERDICT_SELF_FUNDED_PCT", 1, 100, VERDICT_DEFAULTS.selfFundedPct),
   };
 }
 

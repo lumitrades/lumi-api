@@ -195,7 +195,7 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: one-label pre-payment check",
       description:
-        "Before paying an x402 URL or seller domain: one label from the same data and signing key as Lumi's free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Free today; if Lumi prices it (at most $0.004) it is paid with your wallet within the configured caps. Paying Lumi never changes a result. Observations, not a guarantee.",
+        "Before paying an x402 URL or seller domain: one label from the same data and signing key as Lumi's free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Costs $0.01 per call, paid with your wallet within the configured caps. Paying Lumi never changes a result. Observations, not a guarantee.",
       inputSchema: {
         url: z.string().min(1).max(500).describe("The x402 resource URL (or the seller's domain) you are about to pay"),
         payTo: z.string().max(120).optional().describe("Optional: the payTo address in its 402 quote"),

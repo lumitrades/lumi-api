@@ -14,7 +14,7 @@ import { SEED_OBSERVATIONS } from "../src/trust/seed";
 import { trustVerdict } from "../src/quick";
 import { verifySignedResponse } from "../src/trust/lumi_sign";
 import { labelFor, testBuyEvidence, failureStreak, LABELS, VERDICT_DEFAULTS, EVIDENCE_AGE, DISPUTE_URL, type TestBuyEvidence } from "../src/trust/verdict";
-import { activityBand, activityPublic, createActivity, MemoryActivityStore, D1ActivityStore, ACTIVITY_NAME } from "../src/trust/activity";
+import { activityBand, activityPublic, activityFlags, parseActivityRow, createActivity, MemoryActivityStore, D1ActivityStore, ACTIVITY_NAME } from "../src/trust/activity";
 import { loadConfig, VERDICT_MAX_USD } from "../src/config";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor } from "./helpers";
 
@@ -72,7 +72,15 @@ async function setup(env: Record<string, string> = {}) {
     resource: R(i), domain: `api.s${i}.com`, ts, network: "eip155:8453", tx_hash: "0x" + ts.toString(16).padStart(64, "0"), amount: "0.01", asset: "USDC",
     pay_to: payTo(i), facilitator: null, http_status: 200, data_returned: ok, latency_ms: 100, summary: ok ? "ok" : "200 with an empty body",
   } as any);
-  const verdict = async (u: string) => (await req("/v1/verdict?url=" + enc(u))).json() as Promise<any>;
+  // /v1/verdict is paid ($0.01) by default: pay the 402 like a buyer would (XRPL RLUSD option, test facilitator).
+  const verdict = async (u: string) => {
+    const p = "/v1/verdict?url=" + enc(u);
+    const r = await req(p);
+    if (r.status !== 402) return r.json() as Promise<any>;
+    const q: any = await r.json();
+    const opt = q.accepts.find((a: any) => a.network.startsWith("xrpl:") && (a.extra?.symbol ?? a.asset) === "RLUSD") ?? q.accepts.find((a: any) => a.network.startsWith("xrpl:"));
+    return (await req(p, { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(opt) } })).json() as Promise<any>;
+  };
   const check = async (u: string) => (await req("/v1/check?url=" + enc(u))).json() as Promise<any>;
   return { app, req, owner, buy, verdict, check, catalogStore, activityStore, advance: (ms: number) => (t += ms), rescan: () => app.scheduled() };
 }
@@ -264,7 +272,8 @@ describe("observed on-chain payments (activity)", () => {
     const txt = JSON.stringify(v);
     expect(txt).not.toContain(payer.slice(2, 12));
     expect(txt).not.toMatch(/12\.34|total_usd|usd_30d/i);
-    expect(Object.keys(v.observed_onchain_payments).sort()).toEqual(["as_of", "concentrated", "definition", "last_payment", "name", "payer_groups_30d", "payments_30d", "shown"]);
+    expect(Object.keys(v.observed_onchain_payments).sort()).toEqual(["as_of", "concentrated", "definition", "flags", "last_payment", "name", "payer_groups_30d", "payments_30d", "shown"]);
+    expect(v.observed_onchain_payments.flags).toEqual([]);
     // fewer than 5 payer groups: nothing but the note
     const v2 = await s.verdict(R(2));
     expect(v2.observed_onchain_payments).toMatchObject({ shown: false, note: "too few payers to show" });
@@ -296,6 +305,52 @@ describe("observed on-chain payments (activity)", () => {
     expect(r.rejected.map((x: any) => x.error)).toEqual(["lumi_self_excluded", "lumi_self_excluded"]);
   });
 
+  it("self-funded loop (ax1.vc case): flagged, never reported as not concentrated; flag only, no share or wallets", async () => {
+    const s = await setup();
+    const ax1Pay = "0x" + "7".repeat(40);
+    const funder = "0x" + "e".repeat(40);
+    // Many payer groups and a small top-payer share would look healthy, but ~97.5% of paying volume is the seller's own
+    // AX1 Console game credits/prizes and seller-funded wallets recycling into its $0.02 calls (outside agents ~2.5%).
+    const r = await (await s.owner("/v1/owner/activity", { source: "test", rows: [row({
+      seller: "ax1.vc (+ax1-new.vercel.app)", domains: ["ax1.vc", "ax1-new.vercel.app"], pay_to: ["eip155:8453:" + ax1Pay],
+      payer_groups_30d: 3488, payments_30d: 439980, total_usd_30d: 8799.5, top_payer_share: 0.053, outside_share: 0.025, funders: [funder],
+    })] })).json();
+    expect(r).toMatchObject({ valid: 1, written: 1 });
+    const v = await s.verdict("https://ax1.vc/api/verdict");
+    const a = v.observed_onchain_payments;
+    expect(a).toMatchObject({ shown: true, flags: ["self_funded_loop"], concentrated: true });
+    expect(a.flag_note).toMatch(/funded|credits/);
+    expect(a.flag_note).not.toMatch(BANNED);
+    const txt = JSON.stringify(v);
+    expect(txt).not.toMatch(/0\.975|0\.025|97\.5|2\.5%|self_funded_share|outside_share|8799/);
+    expect(txt).not.toContain("7777777777");
+    expect(txt).not.toContain("eeeeeeeeee");
+    // the flag never moves the label
+    expect(v.label).toBe((await s.check("https://ax1.vc/api/verdict")).label);
+    // owner view keeps the private share
+    const o = await (await s.owner("/v1/owner/activity?seller=" + encodeURIComponent("ax1.vc (+ax1-new.vercel.app)"))).json();
+    expect(o.self_funded_share).toBeCloseTo(0.975, 6);
+  });
+
+  it("self-funded share: direct, seller-funded wallets + own credits, or 1 - outside share; threshold and small sellers", () => {
+    const base = { seller: "x", domains: ["x.example"], payer_groups_30d: 50, top_payer_share: 0.1, window_end: NOW - DAY };
+    const p = (o: any) => parseActivityRow({ ...base, ...o }, NOW) as any;
+    expect(p({ self_funded_share: 0.6 }).self_funded_share).toBe(0.6);
+    expect(p({ seller_funded_share: 0.3, seller_credit_share: 0.4 }).self_funded_share).toBeCloseTo(0.7, 9);
+    expect(p({ outside_share: 0.025 }).self_funded_share).toBeCloseTo(0.975, 9);
+    expect(p({}).self_funded_share).toBeNull();
+    expect(p({ self_funded_share: 1.5 })).toBe("self_funded_share is invalid");
+    expect(activityFlags({ self_funded_share: 0.49 }, VERDICT_DEFAULTS)).toEqual([]);
+    expect(activityFlags({ self_funded_share: 0.5 }, VERDICT_DEFAULTS)).toEqual(["self_funded_loop"]);
+    const healthy = activityPublic(p({ self_funded_share: 0.1 }), NOW, VERDICT_DEFAULTS) as any;
+    expect(healthy).toMatchObject({ shown: true, concentrated: false, flags: [] });
+    // below the payer-group minimum: no counts, but the self-funded flag is still shown
+    const small = activityPublic(p({ payer_groups_30d: 3, outside_share: 0.1 }), NOW, VERDICT_DEFAULTS) as any;
+    expect(small).toMatchObject({ shown: false, flags: ["self_funded_loop"] });
+    expect(small).not.toHaveProperty("payer_groups_30d");
+    expect(small).not.toHaveProperty("concentrated");
+  });
+
   it("activityPublic: stale rows are flagged; null rows give null", () => {
     expect(activityPublic(null, NOW, VERDICT_DEFAULTS)).toBeNull();
     const a = createActivity(new MemoryActivityStore(), () => NOW);
@@ -316,8 +371,8 @@ describe("observed on-chain payments (activity)", () => {
 });
 
 describe("M3 price switch and listings", () => {
-  it("default: free alias, not listed as a paid resource", async () => {
-    const s = await setup();
+  it("free mode (VERDICT_PRICING=free): free alias, not listed as a paid resource", async () => {
+    const s = await setup({ VERDICT_PRICING: "free" });
     expect((await s.req("/v1/verdict?url=" + enc(R(1)))).status).toBe(200);
     const wk = await (await s.req("/.well-known/x402")).text();
     expect(wk).not.toContain("/v1/verdict");
@@ -325,15 +380,18 @@ describe("M3 price switch and listings", () => {
     expect(rules.pricing).toBe("free");
   });
 
-  it("paid: 402 at <= $0.004, listed in well-known and OpenAPI, and a paid call returns the same label", async () => {
-    const s = await setup({ VERDICT_PRICING: "paid" });
+  it("default is paid: 402 at exactly $0.01 (0.01 USDC on Base), listed in well-known and OpenAPI at the same price, and a paid call returns the same label", async () => {
+    const s = await setup();
     const p = "/v1/verdict?url=" + enc(R(1));
     const r = await s.req(p);
     expect(r.status).toBe(402);
     const q: any = await r.json();
     const usdc = q.accepts.find((a: any) => a.network.startsWith("eip155:"));
+    expect(usdc.amount).toBe("10000");
     expect(Number(usdc.amount) / 1e6).toBeLessThanOrEqual(VERDICT_MAX_USD);
     expect(await (await s.req("/.well-known/x402")).text()).toContain("/v1/verdict");
+    const rules = await (await s.req("/v1/verdict/rules")).json();
+    expect(rules.pricing).toBe("paid");
     expect(await (await s.req("/openapi.json")).text()).toContain("/v1/verdict");
     const ok = await s.req(p, { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts.find((a: any) => a.network.startsWith("xrpl:") && (a.extra?.symbol ?? a.asset) === "RLUSD") ?? q.accepts.find((a: any) => a.network.startsWith("xrpl:"))) } });
     expect(ok.status).toBe(200);
@@ -341,9 +399,10 @@ describe("M3 price switch and listings", () => {
     expect(b.label).toBe((await s.check(R(1))).label);
   });
 
-  it("an env price above the cap falls back to $0.004", () => {
-    const c = loadConfig({ ...ENV, PRICE_VERDICT_USDC: "0.01" } as any);
-    expect(Number(c.usdPrices.verdict)).toBeLessThanOrEqual(VERDICT_MAX_USD);
+  it("defaults to $0.01; an env price above the cap falls back to $0.01", () => {
+    expect(loadConfig({ ...ENV } as any).usdPrices.verdict).toBe("0.01");
+    const c = loadConfig({ ...ENV, PRICE_VERDICT_USDC: "0.05" } as any);
+    expect(Number(c.usdPrices.verdict)).toBe(0.01);
     expect(Number(loadConfig({ ...ENV, PRICE_VERDICT_USDC: "0.002" } as any).usdPrices.verdict)).toBe(0.002);
   });
 });
