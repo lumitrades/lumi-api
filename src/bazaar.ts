@@ -282,7 +282,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   lite: {
     description:
-      "Lumi Market Ideas (educational, not financial advice). Low-cost headline read for one of 51 large-cap crypto assets (XRP, BTC, ETH and more): overall label and score, 1h/4h/1d labels, and price with 24h change. Same live computation as /v1/signal/{coin}, without the indicator breakdown. Payable in USDC on Base or XRP, RLUSD or USDC on the XRP Ledger. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on unknown coins or stale data.",
+      "Lumi Market Ideas (educational, not financial advice). Low-cost headline read for one of 51 large-cap crypto assets (XRP, BTC, ETH and more): overall label and score, 1h/4h/1d labels, and price with 24h change. Same live computation as /v1/signal/{coin}, without the indicator breakdown. Payable in USDC on Base or Stellar, or XRP, RLUSD or USDC on the XRP Ledger. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on unknown coins or stale data.",
     routeTemplate: "/v1/lite/:coin",
     pathParam: COIN_PARAM,
     example: {
@@ -359,7 +359,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   fear_greed: {
     description:
-      "CoinMarketCap Crypto Fear and Greed index (market sentiment): current value and classification, change versus yesterday, last week and last month, yearly high and low, and a 30-day daily series. Refreshed every 30 minutes. Use when an agent needs a sentiment gauge with recent history rather than a single reading. Payable in USDC on Base or XRP, RLUSD or USDC on the XRP Ledger. Not charged on stale data.",
+      "CoinMarketCap Crypto Fear and Greed index (market sentiment): current value and classification, change versus yesterday, last week and last month, yearly high and low, and a 30-day daily series. Refreshed every 30 minutes. Use when an agent needs a sentiment gauge with recent history rather than a single reading. Payable in USDC on Base or Stellar, or XRP, RLUSD or USDC on the XRP Ledger. Not charged on stale data.",
     example: {
       kind: "fear_greed",
       source: "CoinMarketCap",
