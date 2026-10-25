@@ -112,10 +112,11 @@ describe("Stage C: /v1/trust/check", () => {
     expect(j.as_of).toMatch(/Z$/);
   });
 
-  it("warns for an unknown URL", async () => {
+  it("an unknown URL is no_data (legal review M2), not a warning", async () => {
     const { buy } = setup();
     const j: any = await (await buy(`/v1/trust/check?url=${encodeURIComponent("https://unknown-seller.test/v1/x")}`)).json();
-    expect(j.verdict).toBe("warn");
+    expect(j.verdict).toBe("unknown");
+    expect(j.label).toBe("no_data");
     expect(j.reasons.map((r: any) => r.code)).toContain("not_observed");
   });
 
@@ -141,10 +142,17 @@ describe("Stage C: /v1/trust/check", () => {
     expect(ok.reasons.map((r: any) => r.code)).toEqual(expect.arrayContaining(["pay_to_matches", "quote_verified"]));
   });
 
-  it("blocks paid_no_data; warns on unreliable, slow, young domains and domain-only matches", () => {
+  it("paid_no_data only after the M1 bar; warns on unreliable, slow, young domains and domain-only matches", () => {
     const url = "https://seller.test/v1/data";
-    const nodata: any = trustVerdict({ url }, doc(entry({ purchases: [{ data_returned: false, at: "2026-10-22", tx_hash: "AB", http_status: 500 }] })), null, BASE);
+    const T = Date.parse("2026-10-24T12:00:00Z");
+    const fail = (at: string) => ({ data_returned: false, at, tx_hash: "AB", http_status: 500 });
+    const one: any = trustVerdict({ url }, doc(entry({ purchases: [fail("2026-10-22T10:00:00Z")] })), null, BASE, undefined, T);
+    expect(one.verdict).toBe("warn");
+    expect(one.reasons.map((r: any) => r.code)).toContain("recent_buy_failed");
+    expect(one.confirm_rebuy).toBe(true);
+    const nodata: any = trustVerdict({ url }, doc(entry({ purchases: [fail("2026-10-15T10:00:00Z"), fail("2026-10-18T10:00:00Z"), fail("2026-10-22T10:00:00Z")] })), null, BASE, undefined, T);
     expect(nodata.verdict).toBe("block");
+    expect(nodata.reasons[0].code).toBe("paid_no_data");
     const flaky: any = trustVerdict({ url }, doc(entry({ quote_checks: { checks_recorded: 6, valid_quote_rate: 0.2, median_latency_ms: 9000 }, domain_age: { age_days: 3 } })), null, BASE);
     expect(flaky.verdict).toBe("warn");
     expect(flaky.reasons.map((r: any) => r.code)).toEqual(expect.arrayContaining(["unreliable_quotes", "slow", "young_domain"]));

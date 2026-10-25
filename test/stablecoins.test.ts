@@ -20,7 +20,7 @@ function setup(env: Record<string, string> = {}, fac: FakeFacilitator = happyFac
 describe("stablecoin config", () => {
   it("defaults to Ripple's / Circle's official issuers per network and USD-cent prices", () => {
     const main = loadConfig({ XRPL_NETWORK: "xrpl:0", INVOICE_SECRET: "x".repeat(32) });
-    const cents = { signal: "0.01", levels: "0.01", slate: "0.02", market: "0.02", brief: "0.02", yen: "0.01", sentiment: "0.005", events: "0.005", institutional: "0.1", vendor_report: "0.02", scan: "0.02", lite: "0.004", trust_check: "0.004", funding: "0.003", fear_greed: "0.003", events_48h: "0.003" };
+    const cents = { signal: "0.01", levels: "0.01", slate: "0.02", market: "0.02", brief: "0.02", yen: "0.01", sentiment: "0.005", events: "0.005", institutional: "0.1", vendor_report: "0.02", scan: "0.02", lite: "0.004", trust_check: "0.004", funding: "0.003", fear_greed: "0.003", events_48h: "0.003", verdict: "0.004" };
     expect(main.ious).toEqual([
       { symbol: "RLUSD", currency: RLUSD_CURRENCY, issuer: MAINNET_ISSUER, prices: cents },
       { symbol: "USDC", currency: USDC_CURRENCY, issuer: USDC_MAINNET, prices: cents },

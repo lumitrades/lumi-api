@@ -64,6 +64,7 @@ describe("GET /v1/check (free pre-pay check)", () => {
     expect(r.status).toBe(200);
     const b = await r.json();
     expect(["allow", "warn", "block"]).toContain(b.decision);
+    expect(["checks_passed", "check_first", "checks_failed"]).toContain(b.label);
     expect(Array.isArray(b.reasons)).toBe(true);
     expect(b.link).toBe(`${BASE}/trust/v/api.printmoneylab.com`);
     expect(b.score.scored).toBe(true);
@@ -78,7 +79,8 @@ describe("GET /v1/check (free pre-pay check)", () => {
   it("unknown sellers get a decision and not_scored; bad input is a 400", async () => {
     const s = mk();
     const b = await (await s.get(`/v1/check?url=${encodeURIComponent("https://unknown-seller.example/v1/x")}`)).json();
-    expect(["allow", "warn", "block"]).toContain(b.decision);
+    expect(b.decision).toBe("unknown"); // legal review M2
+    expect(b.label).toBe("no_data");
     expect(b.score.scored).toBe(false);
     expect((await s.get("/v1/check?url=nope")).status).toBe(400);
   });
@@ -91,7 +93,8 @@ describe("GET /v1/check (free pre-pay check)", () => {
     expect(known.query.url).toBeNull();
     expect((await verifySignedResponse(known.receipt, { trusted: [PUB], now: NOW })).ok).toBe(true);
     const unknown = await (await s.get("/v1/check?payTo=0x000000000000000000000000000000000000dEaD")).json();
-    expect(unknown.decision).toBe("warn");
+    expect(unknown.decision).toBe("unknown");
+    expect(unknown.label).toBe("no_data");
     expect(unknown.reasons.map((r: any) => r.code)).toContain("not_observed");
     expect((await s.get("/v1/check?payTo=GABC")).status).toBe(400);
     expect((await s.get("/v1/check")).status).toBe(400);

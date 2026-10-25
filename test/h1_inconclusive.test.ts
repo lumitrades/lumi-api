@@ -85,7 +85,10 @@ describe("H-1 trust/check verdict: inconclusive buys never warn or block", () =>
     const v: any = trustVerdict({ url: RES }, { catalog: { entries: [entry([inc, ok])] }, curated: [] }, null, BASE);
     expect(v.verdict).toBe("allow");
     const bad = { ...ok, http_status: 502, data_returned: false, delivery: "not_delivered" };
-    expect((trustVerdict({ url: RES }, { catalog: { entries: [entry([inc, bad])] }, curated: [] }, null, BASE) as any).verdict).toBe("block");
+    // Legal review M1: one failed conclusive buy is "check first" (and asks for a confirming re-buy), never checks_failed.
+    const one: any = trustVerdict({ url: RES }, { catalog: { entries: [entry([inc, bad])] }, curated: [] }, null, BASE, undefined, Date.parse("2026-10-23T12:00:00Z"));
+    expect(one.verdict).toBe("warn");
+    expect(one.reasons.map((r: any) => r.code)).toContain("recent_buy_failed");
   });
   it("curated XRPL: an inconclusive latest buy does not add xrpl_paid_no_data", () => {
     const v: any = trustVerdict({ url: "https://curated.test/x" }, { catalog: { entries: [] }, curated: [{ id: "c", name: "C", detail: `${BASE}/v1/trust/vendors/c`, xrpl_test_buys: { count: 1, delivered: 0, inconclusive: 1 }, purchases: [{ ...inc, network: "xrpl:0" }] }] }, null, BASE);

@@ -21,7 +21,7 @@ export const BAZAAR_MAX_DESCRIPTION = 500;
 export const SERVICE_NAME = "Lumi Trades";
 /** The trust layer (pay-check, vendor reports, monitoring and feed plans) is listed under its own service name. */
 export const TRUST_SERVICE_NAME = "Lumi Trust";
-export const TRUST_ROUTES: PaidRoute[] = ["trust_check", "vendor_report"];
+export const TRUST_ROUTES: PaidRoute[] = ["trust_check", "vendor_report", "verdict"];
 /** Signal-style routes (signal, lite, scan, slate, levels) are listed as their own line, apart from the trust layer. */
 export const MARKET_IDEAS_SERVICE_NAME = MARKET_IDEAS_NAME;
 export const SERVICE_ICON = "https://lumitrades.io/assets/icon-512.png";
@@ -38,7 +38,8 @@ export const ROUTE_TAGS: Record<PaidRoute, string[]> = {
   vendor_report: ["x402", "trust-score", "api-monitoring", "security", "due-diligence"],
   scan: ["crypto-screener", "trading-signals", "market-scan", "technical-analysis", "crypto"],
   lite: ["crypto-signals", "trading-signals", "bitcoin", "cheap", "crypto"],
-  trust_check: ["x402", "payment-safety", "trust-score", "fraud-check", "agent-payments"],
+  trust_check: ["x402", "payment-safety", "trust-score", "payment-check", "agent-payments"],
+  verdict: ["x402", "payment-check", "pre-payment", "test-buys", "agent-payments"],
   funding: ["funding-rates", "perpetuals", "derivatives", "positioning", "crypto"],
   fear_greed: ["fear-and-greed", "sentiment", "coinmarketcap", "bitcoin", "crypto"],
   events_48h: ["economic-calendar", "events", "macro", "fomc", "crypto"],
@@ -317,6 +318,32 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
       payment: pay("trust_check"),
     },
   },
+  verdict: {
+    description:
+      "One-label pre-payment check for an x402 URL or seller domain: checks_passed, check_first, checks_failed or no_data, with as-of date, evidence window, conclusive Lumi test-buy count, last delivered/failed dates, reason codes, evidence and appeal links. Same data and signing key as the free /v1/check. Observed on-chain payments shown as ranges only (unverified; no payer addresses or amounts). Observations, not a guarantee.",
+    query: {
+      url: { type: "string", description: "The x402 resource URL or the seller's domain (required)" },
+      payTo: { type: "string", description: "The payTo address from its 402 quote (optional)" },
+      amount: { type: "string", description: "The quoted price in USD, e.g. 0.01 (optional)" },
+    },
+    queryRequired: ["url"],
+    example: {
+      kind: "lumi_verdict",
+      label: "checks_passed",
+      label_text: "Delivered in recent checks",
+      reason_code: "delivered_recently",
+      as_of: "2026-10-25",
+      evidence_window: { from: "2026-09-02", to: "2026-10-20", test_buy_rule_days: 14 },
+      n_conclusive: 3,
+      last_delivered_at: "2026-10-20T09:12:00Z",
+      last_failed_at: null,
+      reply_url: "https://lumitrades.io/contact/",
+      observed_onchain_payments: { shown: true, name: "Observed on-chain payments (unverified)", payer_groups_30d: "10–99", payments_30d: "100–999", last_payment: "within the last week" },
+      commercial_relationship: [],
+      ...FRESH("2026-10-25T11:00:00Z", "2026-10-26T11:00:00Z"),
+      payment: pay("verdict"),
+    },
+  },
   funding: {
     description:
       "Perpetual funding rates for every Lumi coin listed on OKX USDT swaps: rate, 8h-normalised rate, annualised rate, next funding time and a plain-English read, plus the BTC read, the median and the most positive and negative coins (XRP, BTC, ETH and the rest). Positive means longs pay shorts. Refreshed every 15 minutes. Use when an agent needs derivatives positioning data across many coins. Analytics only, not financial advice. Not charged on stale data.",
@@ -436,7 +463,8 @@ const HEADLINES: Record<PaidRoute, (subject?: string) => string> = {
   vendor_report: (v) => `x402 vendor trust report${v ? ` for ${v}` : ""} (uptime, latency, test-buys)`,
   scan: () => "Crypto market scan: buy/sell signals for 50 large-cap coins in one call",
   lite: (c) => (c ? `${c} lite trading signal (label, score, price)` : "Crypto lite trading signal (label, score, price)"),
-  trust_check: () => "Should I pay this x402 URL? allow/warn/block check",
+  trust_check: () => "Pre-payment check for an x402 URL (coded reasons, checks_passed/check_first/checks_failed/no_data)",
+  verdict: () => "One-label x402 pre-payment check (Delivered in recent checks / Check first / Recent checks failed / Not enough data)",
   funding: () => "Crypto perpetual funding rates (OKX perps)",
   fear_greed: () => "Crypto Fear & Greed index (CoinMarketCap, 30-day history)",
   events_48h: () => "Crypto and macro events in the next 48 hours",

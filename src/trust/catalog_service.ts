@@ -550,6 +550,26 @@ export function createCatalog(deps: CatalogDeps) {
     return { queued: true, reason: "queued" };
   }
 
+  /**
+   * Confirm re-buy (legal review M1 / §3.4): a failed test-buy that has not met the checks_failed bar, or a seller's re-test
+   * request, puts the resource back in the Base test-buy queue. Not limited by the never-test-bought rule or the 30-day
+   * priority slot (it is a re-test of a failure), but at most once per seller per 24 h. Only Base is bought automatically.
+   */
+  async function queueConfirmBuy(c: { resource: string; network?: string | null; price_usd: number | null; why: string }): Promise<{ queued: boolean; reason: string }> {
+    if (!deps.evidence) return { queued: false, reason: "evidence_off" };
+    let seller: string;
+    try { seller = normalizeDomain(new URL(c.resource).hostname); } catch { return { queued: false, reason: "bad_resource" }; }
+    if (c.network && c.network !== BASE_NET) return { queued: false, reason: "not_base" };
+    const t = now();
+    const k = `confirm_rebuy:${seller}`;
+    const last = Number((await store.getMeta(k)) ?? "0");
+    if (t - last < 86_400_000) return { queued: false, reason: "duplicate_24h" };
+    await store.setMeta(k, String(t));
+    await deps.evidence.enqueueBuy({ resource: c.resource, network: BASE_NET, price_usd: c.price_usd, reasons: [c.why] }, t);
+    await deps.evidence.setBuyStatus(c.resource, "queued", c.why, t);
+    return { queued: true, reason: "queued" };
+  }
+
   async function evidenceStatus() {
     if (!deps.evidence) return null;
     const idx = await metaJson<{ started_at: number; last_run: number; skipped_blocks: number; gaps: unknown[] }>("base_index");
@@ -883,7 +903,7 @@ export function createCatalog(deps: CatalogDeps) {
 
   /** Owner correction: reclassify a stored catalog buy as inconclusive (Lumi-side). The prior summary is kept. */
   const markInconclusive = (tx: string, reason: string, summary: string) => deps.store.markInconclusive(tx, reason, summary, deps.now());
-  return { cron, consume, lookupDoc, summary, handle, startIngest, stats, xrplAgg, queueBuy, markInconclusive };
+  return { cron, consume, lookupDoc, summary, handle, startIngest, stats, xrplAgg, queueBuy, queueConfirmBuy, markInconclusive };
 }
 
 export type Catalog = ReturnType<typeof createCatalog>;

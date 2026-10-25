@@ -20,7 +20,7 @@ export const MARKET_IDEAS_KINDS = ["signal", "signal_lite", "scan", "slate", "le
 /** MCP tools of the Market Ideas routes. */
 export const MARKET_IDEAS_TOOLS = ["lumi_signal", "lumi_lite", "lumi_scan", "lumi_slate", "lumi_levels"];
 /** Trust-branded paid routes (Lumi Trust). */
-export const TRUST_LINE_ROUTES: PaidRoute[] = ["trust_check", "vendor_report"];
+export const TRUST_LINE_ROUTES: PaidRoute[] = ["trust_check", "vendor_report", "verdict"];
 
 export type ProductLine = "market_ideas" | "market_data" | "trust";
 export const LINE_LABEL: Record<ProductLine, string> = {

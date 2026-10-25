@@ -6,12 +6,12 @@
 import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCOME_FIELDS, OUTCOME_RETENTION_DAYS, OUTCOME_SUMMARY_RETENTION, type OutcomeStore } from "./trust/outcomes";
 import { createBadges } from "./trust/badge";
 import { setPrivateNames } from "./sanitize";
-import { loadConfig, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, type Config, type Env, type PaidRoute } from "./config";
+import { loadConfig, verdictPaid, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, type Config, type Env, type PaidRoute } from "./config";
 import { STELLAR_HORIZON } from "./trust/verify";
 import { DataSource, type DataFile } from "./data";
 import { D1TrialStore, MemoryTrialStore, SIWX_HEADER, SIWX_KEY, TRIAL_LIMITS, trialHint, wantsTrial, decodeSiwx, siwxChallenge, trialEligible, trialIpHash, usdcBalance, verifySiwx, trialChains, xrplTrialAccount, type TrialStore } from "./trial";
 import { makeReplayGuard, json, requirePayment, paymentRequiredResponse, staleRefusal, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, assetLabel, isEvmRequirement, isStellarRequirement, type PaywallDeps, type PaymentRequirements, type Quote, type Settlement } from "./x402";
-import { PAID_ENDPOINTS } from "./catalog";
+import { PAID_ENDPOINTS, endpointFor } from "./catalog";
 import { bazaarExtension, resourceDescription, serviceMeta } from "./bazaar";
 import { indexDoc, indexHtml, openApi, skillMd, wellKnownX402, VERSION } from "./docs";
 import { agentCard, handleA2a, A2A_CORS } from "./a2a";
@@ -51,6 +51,11 @@ import { D1LiveStore, MemoryLiveStore, refreshLive, isFresh, LIVE_UNIVERSE, LIVE
 import { mcpServerCard, agentsJson } from "./wellknown";
 import { MARKET_IDEAS_HEADERS, MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, MARKET_IDEAS_PATH_RE, TRUST_DISCLAIMER } from "./lines";
 import { D1IdempotencyStore, MemoryIdempotencyStore, type IdempotencyStore } from "./idempotency";
+import { labelFor, LABELS, DEFINITION, FAILED_RULE, testBuyEvidence, thresholdsDoc, verdictThresholds, VERDICT_KIND, VERDICT_RULES_VERSION, DISPUTE_URL, CHECK_NOTE } from "./trust/verdict";
+import { createReviewGate, D1ReviewStore, MemoryReviewStore, appealUntil, type ReviewStore } from "./trust/reviews";
+import { relationshipConfig, relationshipFor, relationshipTag } from "./trust/relationship";
+import { createActivity, activityPublic, activityOwnerView, D1ActivityStore, MemoryActivityStore, type ActivityStore } from "./trust/activity";
+import { CONTACT_EMAIL } from "./trust/index";
 import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, type SalesStore, type AlertConfig } from "./sales";
 
 export interface AppOptions {
@@ -89,6 +94,10 @@ export interface AppOptions {
   idempotencyStore?: IdempotencyStore;
   /** Lumi Check contributor store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   contributorStore?: ContributorStore;
+  /** Seller customer-activity store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
+  activityStore?: ActivityStore;
+  /** checks_failed review queue + re-test requests override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
+  reviewStore?: ReviewStore;
   /** Contributions write queue override (tests). Default: env.CONTRIB_QUEUE; absent = writes inline. */
   contribQueue?: ContribQueue | null;
 }
@@ -165,6 +174,7 @@ const NEEDS: Record<PaidRoute, DataFile[]> = {
   scan: [], // live_signals (D1), checked in prepare()
   lite: ["signals", "prices"], // via the signal route (live row first)
   trust_check: [], // trust catalog (D1)
+  verdict: [], // trust catalog + seller_activity (D1), same lookup as /v1/check
   funding: [], // live_feeds (D1)
   fear_greed: [], // live_feeds (D1), context.json fallback in prepare()
   events_48h: ["events"],
@@ -190,6 +200,7 @@ const FIXED: Record<string, PaidRoute> = {
   "/v1/fear-greed": "fear_greed",
   "/v1/events/next48h": "events_48h",
   "/v1/trust/check": "trust_check",
+  "/v1/verdict": "verdict",
 };
 
 /** Unfilled path placeholders in any common style: {coin}, {{coin}}, :coin, <coin>, [coin], ${coin}, $coin. */
@@ -285,6 +296,15 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   const stellarHorizon = (env.STELLAR_HORIZON_URL || STELLAR_HORIZON).replace(/\/+$/, "");
   const evidenceStore = opts.evidenceStore ?? (env.TRUST_DB ? new D1EvidenceStore(env.TRUST_DB) : new MemoryEvidenceStore());
   const commerceStore: CommerceStore = opts.commerceStore ?? (env.TRUST_DB ? new D1CommerceStore(env.TRUST_DB) : new MemoryCommerceStore());
+  // Per-seller customer activity (information only; never a score input). Optional: absent table = no activity block.
+  // Lumi's own sellers and wallets are never ingested (payments from Lumi's wallets are already excluded upstream).
+  const lumiSelf = { domains: ["lumitrades.io"], pay_to: [config.payTo, ...xrplBuyers, ...(config.evm ? [config.evm.payTo] : []), ...(config.stellar ? [config.stellar.payTo] : []), ...evmBuyers, ...stellarBuyers] };
+  const activity = createActivity(opts.activityStore ?? (env.TRUST_DB ? new D1ActivityStore(env.TRUST_DB) : new MemoryActivityStore()), now, lumiSelf);
+  const verdictTh = verdictThresholds(env as unknown as Record<string, string | undefined>);
+  const relCfg = relationshipConfig(env as unknown as Record<string, string | undefined>);
+  const reviewStore: ReviewStore = opts.reviewStore ?? (env.TRUST_DB ? new D1ReviewStore(env.TRUST_DB) : new MemoryReviewStore());
+  const reviewGate = createReviewGate(reviewStore, now, (e) => deps.log?.(e));
+  const verdictIsPaid = verdictPaid(env);
   const ownerReq = async (request: Request) => {
     const m = (request.headers.get("Authorization") ?? "").match(/^Bearer\s+(\S+)$/i);
     return isOwnerKey(m?.[1], env.OWNER_MCP_KEY);
@@ -410,7 +430,24 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const host = new URL(input.url).hostname.toLowerCase();
     const dom = hasExact ? null : ((await trust.lookup({ domain: host } as LookupQuery, base, free ? { free: true } : undefined)) as any);
     await sanctions.ready();
-    return { verdict: trustVerdict(input, exact, dom, base, sanctions) as Record<string, any>, exact, dom, host };
+    return finishCheck(trustVerdict(input, exact, dom, base, sanctions, now()) as Record<string, any>, exact, dom, host);
+  }
+
+  /**
+   * The rest of the ONE check core, shared by /v1/check, /v1/trust/check and /v1/verdict: human review / re-test gate, then the
+   * shared label. The relationship disclosure is computed here but only attached for display: labelFor() never sees it.
+   */
+  async function finishCheck(v: Record<string, any>, exact: any, dom: any, host: string | null) {
+    const commercial = ((exact?.commercial_relationship ?? dom?.commercial_relationship ?? null) as unknown[] | null);
+    const relationship = relationshipFor(host, commercial, relCfg);
+    const gate = host ? await reviewGate(v, exact ?? dom, host, relationshipTag(relationship)) : { review: null, retest: null };
+    const tests = testBuyEvidence(exact, dom);
+    const lab = labelFor({ check: { decision: String(v.verdict), reasons: v.reasons ?? [] }, tests, now: now(), th: verdictTh });
+    v.label = lab.label;
+    v.label_text = LABELS[lab.label];
+    v.relationship = relationship;
+    v.commercial_relationship = commercial ?? [];
+    return { verdict: v, exact, dom, host, tests, lab, gate, relationship };
   }
 
   /** payTo-only verdict (MCP tool payments): who is this address, per the catalog and Lumi's curated vendors. */
@@ -421,9 +458,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     let host: string | null = cur ?? null;
     if (!host && first) { try { host = new URL(first).hostname.toLowerCase(); } catch { host = null; } }
     await sanctions.ready();
-    const verdict = trustVerdict({ url: first ?? "", ...input } as any, doc, null, base, sanctions) as Record<string, any>;
+    const verdict = trustVerdict({ url: first ?? "", ...input } as any, doc, null, base, sanctions, now()) as Record<string, any>;
     if (verdict.matched) verdict.matched.exact = false;
-    return { verdict, exact: doc, host };
+    return finishCheck(verdict, doc, null, host);
   }
 
   async function freeCheck(request: Request, url: URL, base: string, ctx?: WaitUntil): Promise<Response> {
@@ -444,14 +481,17 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const limit = await trust.freeLimit(request, "lookup");
     if (limit) return limit;
     const network = sp.get("network")?.slice(0, 40) || undefined;
-    const { verdict, host } = clean ? await checkVerdict({ url: clean, payTo, amountUsd, network }, base, true) : await payToVerdict({ payTo: payTo!, amountUsd, network }, base);
+    // One check core for /v1/check, /v1/trust/check and /v1/verdict: the same full catalog lookup and the same trustVerdict, so
+    // the free check, the paid check and the verdict can never disagree for the same seller at the same time. Only the
+    // response shape differs (checkPayload is answer-only).
+    const { verdict, host, exact } = clean ? await checkVerdict({ url: clean, payTo, amountUsd, network }, base, false) : await payToVerdict({ payTo: payTo!, amountUsd, network }, base);
     if (verdict?.verdict === "block" && verdict?.reasons?.[0]?.code === "sanctioned_address") {
       const hit = sanctions.check(payTo);
       if (hit) sanctions.refuse("free_check", hit, host ? { url_host: host } : {});
     }
     if (clean) {
       // Free pre-pay checks send the same test-buy priority signal as paid checks (one path; abuse limits in catalog.queueBuy).
-      const p = checkSignal({ url: clean, ...(payTo ? { payTo } : {}) }, base, "free_check");
+      const p = prioritySignal(verdict, exact, "free_check").catch((e) => { deps.log?.({ event: "buy_queue_error", source: "free_check", error: String(e) }); return null; });
       if (ctx) ctx.waitUntil(p); else await p;
     }
     const score = host ? scoreView(await liveScore(host), verdict.matched?.tier) : null;
@@ -462,7 +502,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     return json(200, {
       kind: "lumi_check", ...payload, receipt,
       detail: clean ? `${base}/v1/trust/check?url=${encodeURIComponent(clean)} (x402, adds reason details and next steps)` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(payTo!)}`,
-      note: "Free pre-pay check. Paying Lumi (checks, monitoring, reports) never changes a score, tier, ranking or badge. Only origin + path of the URL is used; nothing about the query is stored.",
+      note: CHECK_NOTE,
     }, noStore);
   }
 
@@ -570,6 +610,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   async function prepareRaw(route: PaidRoute, coinArg?: string, base = config.publicBaseUrl ?? "https://api.lumitrades.io"): Promise<Prepared> {
     if (route === "vendor_report") return prepareVendorReport(coinArg ?? "", base);
     if (route === "trust_check") return prepareTrustCheck(coinArg ?? "", base);
+    if (route === "verdict") return prepareVerdict(coinArg ?? "", base);
     if (route === "scan") return prepareScan();
     if (route === "funding" || route === "fear_greed") return prepareFeed(route);
     if (route === "lite") {
@@ -708,15 +749,147 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   }
 
   /**
+   * GET /v1/verdict: the shared label (checks_passed | check_first | checks_failed | no_data) on top of the SAME check core as
+   * the free /v1/check (same lookup, same reasons, same review gate, same signing key). The embedded check_receipt is exactly
+   * what /v1/check signs at the same moment. Free alias by default; paid (<= $0.004) when VERDICT_PRICING = "paid".
+   * Never an input: monitoring/commercial status, relationship flags, payment for this call, observed on-chain payments.
+   */
+  type VerdictOut = { ok: true; body: Record<string, unknown>; t: number; onServed: () => Promise<unknown> } | { ok: false; status: number; error: Record<string, unknown> };
+  async function buildVerdict(qs: string, base: string, paid: boolean): Promise<VerdictOut> {
+    const sp = new URLSearchParams(qs);
+    let raw = sp.get("url")?.trim() || sp.get("domain")?.trim() || "";
+    const payTo = sp.get("payTo")?.trim() || sp.get("pay_to")?.trim() || undefined;
+    const amountRaw = sp.get("amount")?.trim();
+    const amountUsd = amountRaw ? Number(amountRaw.replace(/^\$/, "")) : undefined;
+    const notCharged = paid ? { note: "Not charged." } : {};
+    const bad = (detail: string) => ({ ok: false as const, status: 400, error: { error: "invalid_query", detail, example: `${base}/v1/verdict?url=https://api.example.com/v1/data`, ...notCharged } });
+    if (!raw) return bad("url is required: the x402 resource URL (or the seller's domain) you are about to pay.");
+    // A bare domain is accepted and checked as https://<domain>/ (domain-level evidence only).
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) && /^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(raw)) raw = `https://${raw}`;
+    const err = lookupError({ url: raw, ...(payTo ? { payTo } : {}) }, { url: true, payTo: payTo !== undefined }, "check");
+    if (err) return { ok: false, status: 400, error: { ...err, ...notCharged } };
+    if (amountRaw && !(amountUsd !== undefined && Number.isFinite(amountUsd) && amountUsd >= 0 && amountUsd < 1e6)) return bad("amount must be a USD number, e.g. 0.01.");
+    let host = "";
+    try { host = new URL(raw).hostname.toLowerCase(); } catch { return bad("url must be an absolute http(s) URL or a domain."); }
+    const clean = originPath(raw) ?? raw;
+    const network = sp.get("network")?.slice(0, 40) || undefined;
+    const r = await checkVerdict({ url: clean, payTo, amountUsd, network }, base, false);
+    const { verdict: check, exact, dom, tests, lab, gate, relationship } = r;
+    if (check?.verdict === "block" && check?.reasons?.[0]?.code === "sanctioned_address") {
+      const hit = sanctions.check(payTo) ?? sanctions.checkAny(((exact?.catalog?.entries?.[0]?.pay_to ?? dom?.catalog?.entries?.[0]?.pay_to ?? []) as any[]).map((p) => String(p?.pay_to ?? "")));
+      if (hit) sanctions.refuse("verdict", hit, { url_host: host });
+    }
+    const t = now();
+    const link = `${base}/trust/v/${encodeURIComponent(host)}`;
+    const score = scoreView(await liveScore(host), check.matched?.tier);
+    // Identical to what GET /v1/check signs for this query at this moment (paid: false: the check itself is free).
+    const checkBody = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: check, score, link, paid: false });
+    const key = await signKey();
+    const checkReceipt = await signResponse("lumi_check", checkBody, key, t, CHECK_SIGNED_TTL_SEC);
+    // Observed on-chain payments: keys are the host and the payTos Lumi has on record (never the quoted payTo). Display only.
+    const recorded = [
+      ...((exact?.catalog?.entries?.[0]?.pay_to ?? dom?.catalog?.entries?.[0]?.pay_to ?? []) as any[]).map((p) => String(p?.pay_to ?? p ?? "")),
+      ...VENDORS.filter((v) => [...(exact?.curated ?? []), ...(dom?.curated ?? [])].some((c: any) => c?.id === v.id)).flatMap((v) => [...v.pay_to.xrpl, ...(v.pay_to.evm ?? [])]),
+    ].filter(Boolean);
+    const act = activityPublic(await activity.lookup(host, recorded), t, verdictTh);
+    // Seller replies: a re-test request's reply text (email / contact form, entered by the owner) and verified curated-vendor replies.
+    const curatedId = [...(exact?.curated ?? []), ...(dom?.curated ?? [])][0]?.id as string | undefined;
+    const [appeal, vendorReplies] = await Promise.all([
+      reviewStore.appealFor(host).catch(() => null),
+      curatedId ? trust.vendorReplies(curatedId).catch(() => []) : Promise.resolve([]),
+    ]);
+    const replies = [
+      ...(appeal?.reply ? [{ replied_at: new Date(appeal.opened_at).toISOString(), via: appeal.source, text: appeal.reply }] : []),
+      ...vendorReplies.slice(0, 3).map((x: any) => ({ replied_at: new Date(x.ts).toISOString(), via: x.via, text: x.text })),
+    ];
+    const day = (iso: string | null) => (iso ? iso.slice(0, 10) : null);
+    const reasonCodes = (check.reasons ?? []).filter((x: any) => x.severity !== "info" || ["not_observed", "not_quote_checked", "lumi_itself"].includes(x.code)).map((x: any) => String(x.code));
+    const payload = {
+      label: lab.label,
+      label_text: LABELS[lab.label],
+      reason: lab.reason,
+      reason_code: lab.reason_code,
+      reason_codes: reasonCodes,
+      as_of: day(new Date(t).toISOString()),
+      evidence_window: { from: day(tests.window_from), to: day(tests.window_to), test_buy_rule_days: FAILED_RULE.windowDays },
+      n_conclusive: tests.conclusive,
+      last_delivered_at: tests.last_delivered_at,
+      last_failed_at: tests.last_failed_at,
+      review: gate.review ? { state: gate.review.state } : null,
+      retest: gate.retest,
+      seller_replies: replies,
+      score: score.value,
+      observed_onchain_payments: act,
+      relationship,
+      commercial_relationship: check.commercial_relationship ?? [],
+      check: { decision: checkBody.decision, label: checkBody.label, reasons: checkBody.reasons, matched: checkBody.matched ?? null },
+      subject: { url: clean, host },
+      evidence: link,
+      reply_url: DISPUTE_URL,
+      appeal: { url: DISPUTE_URL, email: CONTACT_EMAIL, api: `${base}/v1/trust/replies`, note: "Sellers can reply or ask for a re-test at any time. A re-test request pauses checks_failed for up to 72 hours while Lumi re-buys, and the reply is shown here." },
+      definition: DEFINITION,
+      rules_version: VERDICT_RULES_VERSION,
+      rules: `${base}/v1/verdict/rules`,
+      paid,
+    };
+    const receipt = await signResponse(VERDICT_KIND, payload, key, t, CHECK_SIGNED_TTL_SEC);
+    const body = {
+      kind: VERDICT_KIND, ...payload, receipt,
+      check_receipt: { ...checkBody, receipt: checkReceipt },
+      note: "Same data, label and signing key as the free GET /v1/check. Paying for this, or paying Lumi for monitoring or reports, never changes a score, tier, ranking, label or 'Tested by Lumi' result. Observed on-chain payments are information only (ranges; no payer addresses, no seller income).",
+    };
+    return { ok: true, body, t, onServed: () => prioritySignal(check, exact, "verdict") };
+  }
+
+  async function prepareVerdict(qs: string, base: string): Promise<Prepared> {
+    try {
+      const r = await buildVerdict(qs, base, true);
+      if (!r.ok) return r;
+      const meta = metaFrom(r.t, r.t + 86_400_000, r.t + 30 * 60_000, r.t);
+      return { ok: true, route: "verdict", body: isoTimestamps(withMeta(r.body, meta)), onServed: r.onServed };
+    } catch {
+      return notForSale("data_unavailable", "the trust catalog is unavailable right now", 60, null);
+    }
+  }
+
+  /** Free alias (VERDICT_PRICING = "free", the default): same body, same free limit as /v1/check, no 402. */
+  async function freeVerdict(request: Request, url: URL, base: string, ctx?: WaitUntil): Promise<Response> {
+    const noStore = { "Cache-Control": "no-store" };
+    const limit = await trust.freeLimit(request, "lookup");
+    if (limit) return limit;
+    try {
+      const r = await buildVerdict(url.search, base, false);
+      if (!r.ok) return json(r.status, r.error, noStore);
+      const p = r.onServed().catch((e) => { deps.log?.({ event: "buy_queue_error", source: "verdict", error: String(e) }); return null; });
+      if (ctx) ctx.waitUntil(p); else await p;
+      return json(200, isoTimestamps(r.body), noStore);
+    } catch {
+      return json(503, { error: "data_unavailable", detail: "the trust catalog is unavailable right now", retry_after_s: 60 }, { ...noStore, "Retry-After": "60" });
+    }
+  }
+
+  /**
    * Test-buy priority signal: ONE path for paid and free checks. A never-test-bought Base seller with an objective signal
    * (BUY_SIGNALS) moves to the front of the next day's Base test-buy list, within the abuse limits in catalog.queueBuy (one
    * slot per seller per PRIORITY_SELLER_DAYS = 30 days, TRUST_PRIORITY_DAILY_CAP sellers per day). `source` is only logged; it never changes the outcome.
    */
   async function prioritySignal(body: Record<string, unknown>, exact: unknown, source: string) {
+    // M1: a failed test-buy below the checks_failed bar asks for a confirming re-buy (at most once per seller per 24 h).
+    if ((body as any)?.confirm_rebuy) await confirmRebuy(exact, "confirm_rebuy", source);
     const cand = buyCandidate(body as any, exact, now());
     if (!cand) return null;
     const r = await catalog.queueBuy(cand);
     deps.log?.({ event: "buy_priority", source, resource: cand.resource, ...r });
+    return r;
+  }
+
+  /** Queue a confirming / re-test buy of the catalog entry in a lookup doc (Base only; once per seller per 24 h). */
+  async function confirmRebuy(doc: unknown, why: string, source: string) {
+    const e = (doc as any)?.catalog?.entries?.[0];
+    if (!e?.resource) return { queued: false, reason: "no_catalog_entry" };
+    const nets: string[] = (e.pay_to ?? []).map((p: any) => String(p.network));
+    const r = await catalog.queueConfirmBuy({ resource: String(e.resource), network: nets.includes("eip155:8453") ? "eip155:8453" : nets[0] ?? null, price_usd: Number(e.listed_price_usd) || null, why });
+    deps.log?.({ event: "confirm_rebuy", source, resource: e.resource, ...r });
     return r;
   }
 
@@ -735,8 +908,12 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   async function prepareVendorReport(id: string, base: string): Promise<Prepared> {
     const r = await trust.vendorReport(id.trim().toLowerCase(), base);
     if (r.ok) {
+      // Observed on-chain payments (ranges only, information only; null when Lumi has no row for this vendor).
+      const v = vendorById(id.trim().toLowerCase());
+      let act: unknown = null;
+      if (v) { try { act = activityPublic(await activity.lookup(new URL(v.homepage).hostname, [...v.pay_to.xrpl, ...(v.pay_to.evm ?? [])]), now(), verdictTh); } catch { act = null; } }
       return hasContent("vendor_report", r.doc)
-        ? { ok: true, route: "vendor_report", body: isoTimestamps(withMeta({ kind: "vendor_report", timestamp: new Date(now()).toISOString(), source: "api.lumitrades.io trust layer", ...r.doc, disclaimer: TRUST_DISCLAIMER }, vendorMeta(r.doc))) }
+        ? { ok: true, route: "vendor_report", body: isoTimestamps(withMeta({ kind: "vendor_report", timestamp: new Date(now()).toISOString(), source: "api.lumitrades.io trust layer", ...r.doc, observed_onchain_payments: act, disclaimer: TRUST_DISCLAIMER }, vendorMeta(r.doc))) }
         : notForSale("data_unavailable", "no observations for this vendor yet", 1800, null);
     }
     if (r.reason === "unknown_vendor") {
@@ -856,6 +1033,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     // Lumi Check v0: free signed pre-pay check, signing keys, earned-only signed badge.
     if (request.method === "GET" || request.method === "HEAD") {
       if (path === "/v1/check") return freeCheck(request, url, base, ctx);
+      if (path === "/v1/verdict/rules") return json(200, { kind: "lumi_verdict_rules", pricing: verdictIsPaid ? "paid" : "free", ...thresholdsDoc(verdictTh) }, { "Cache-Control": "public, max-age=3600" });
+      // VERDICT_PRICING = "free" (default): a free alias of /v1/check with the shared label. "paid": falls through to x402.
+      if (path === "/v1/verdict" && !verdictIsPaid) return freeVerdict(request, url, base, ctx);
       if (path === "/v1/check/keys" || path === "/.well-known/lumi-keys.json") return json(200, keysDoc(await signKey(), base, { secretReused }), { "Cache-Control": "public, max-age=3600" });
       if (path === "/v1/badge") return json(200, badgeDocs(base, badgeThresholds(env)), { "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" });
       const eb = /^\/v1\/badge\/([^/]{1,200})\.(json|svg)$/.exec(path);
@@ -875,6 +1055,62 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (path.startsWith("/v1/contrib/") || path === "/v1/owner/contributors" || path.startsWith("/v1/owner/contributors/")) {
       const r = await contributors.handle(request, path);
       if (r) return r;
+    }
+    // Owner-only (Authorization: Bearer <OWNER_MCP_KEY>): observed on-chain payments ingest / read, checks_failed review queue.
+    if (path === "/v1/owner/activity" || path === "/v1/owner/reviews") {
+      const noStore = { "Cache-Control": "no-store" };
+      if (!(await ownerReq(request))) return json(401, { error: "owner_key_required", hint: "Authorization: Bearer <OWNER_MCP_KEY>" }, { ...noStore, "WWW-Authenticate": "Bearer" });
+      const readBody = async (max: number) => {
+        const text = await request.text().catch(() => "");
+        if (text.length > max) return { tooLarge: true as const };
+        try { return { body: JSON.parse(text) as any }; } catch { return { body: null }; }
+      };
+      if (path === "/v1/owner/activity") {
+        if (request.method === "POST") {
+          const b = await readBody(2_000_000);
+          if ("tooLarge" in b) return json(413, { error: "body_too_large", max_bytes: 2_000_000 }, noStore);
+          const r = await activity.ingest(b.body);
+          return "error" in r ? json(400, r, noStore) : json(200, { ok: true, ...r }, noStore);
+        }
+        if (request.method !== "GET") return json(405, { error: "method_not_allowed" }, { Allow: "GET, POST" });
+        const seller = url.searchParams.get("seller")?.trim().slice(0, 200);
+        const host = url.searchParams.get("host")?.trim().toLowerCase().slice(0, 253);
+        const row = seller ? await activity.store.get(seller) : host ? await activity.lookup(host, []) : null;
+        if (seller || host) return row ? json(200, activityOwnerView(row, now(), verdictTh), noStore) : json(404, { error: "not_found" }, noStore);
+        return json(200, { rows: await activity.store.count(), thresholds: { min_payer_groups: verdictTh.activityMinPayerGroups, max_age_days: verdictTh.activityMaxAgeDays, concentration_pct: verdictTh.concentrationPct } }, noStore);
+      }
+      if (request.method === "GET") {
+        const state = url.searchParams.get("state") ?? "pending";
+        if (!["pending", "approved", "rejected", "all"].includes(state)) return json(400, { error: "invalid_state", allowed: ["pending", "approved", "rejected", "all"] }, noStore);
+        return json(200, { reviews: await reviewStore.list(state, 200), appeals: await reviewStore.appeals(50) }, noStore);
+      }
+      if (request.method !== "POST") return json(405, { error: "method_not_allowed" }, { Allow: "GET, POST" });
+      const b = await readBody(8_000);
+      if ("tooLarge" in b) return json(413, { error: "body_too_large", max_bytes: 8_000 }, noStore);
+      const x = b.body ?? {};
+      const host = typeof x.host === "string" ? x.host.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "").slice(0, 253) : "";
+      if (!host) return json(400, { error: "host_required" }, noStore);
+      const t = now();
+      if (x.action === "approve" || x.action === "reject") {
+        if (typeof x.evidence !== "string" || !x.evidence) return json(400, { error: "evidence_required", hint: "the evidence key from GET /v1/owner/reviews" }, noStore);
+        const ok = await reviewStore.decide(host, x.evidence, x.action === "approve" ? "approved" : "rejected", typeof x.note === "string" ? x.note.slice(0, 500) : null, t);
+        return ok ? json(200, { ok: true, host, evidence: x.evidence, state: x.action === "approve" ? "approved" : "rejected" }, noStore) : json(404, { error: "review_not_found" }, noStore);
+      }
+      if (x.action === "appeal") {
+        // §3.4: pause checks_failed for 72 h, show "re-test requested" and the seller's reply, and re-buy.
+        const reply = typeof x.reply === "string" && x.reply.trim() ? x.reply.trim().slice(0, 1000) : null;
+        const source = typeof x.source === "string" ? x.source.slice(0, 40) : "email";
+        await reviewStore.openAppeal({ host, opened_at: t, until_at: appealUntil(t), source, reply, rebuy: null });
+        let rebuy: { queued: boolean; reason: string } = { queued: false, reason: "no_catalog_entry" };
+        try {
+          const target = typeof x.url === "string" && x.url ? x.url : `https://${host}/`;
+          const doc = await trust.lookup(typeof x.url === "string" && x.url ? { url: target } : { domain: host }, base);
+          rebuy = await confirmRebuy(doc, "retest_requested", "appeal");
+        } catch (e) { deps.log?.({ event: "confirm_rebuy_error", error: String(e) }); }
+        await reviewStore.setRebuy(host, rebuy.queued ? "queued" : rebuy.reason);
+        return json(200, { ok: true, host, paused_until: new Date(appealUntil(t)).toISOString(), rebuy }, noStore);
+      }
+      return json(400, { error: "invalid_action", allowed: ["approve", "reject", "appeal"] }, noStore);
     }
     if (request.method !== "GET" && request.method !== "HEAD") {
       return json(405, { error: "method_not_allowed" }, { Allow: "GET, OPTIONS" });
@@ -1013,7 +1249,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const example = isReport ? `${base}/v1/trust/vendors/printmoneylab/report` : `${base}/v1/${route}/xrp`;
       const hasPayment = !!(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT));
       if (!hasPayment && rawArg === (isReport ? "{id}" : "{coin}")) {
-        const endpoint = PAID_ENDPOINTS.find((e) => e.route === route)!;
+        const endpoint = endpointFor(route);
         return paymentRequiredResponse(config, {
           routeKey: `${route}:template`,
           amountDrops: config.pricesDrops[route],
@@ -1042,10 +1278,10 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     // /v1/trust/check probed bare (no query string at all, as x402scan and other discovery crawlers do): the normal 402 price
     // quote, so the paywall is visible. A query without a usable url, or any request with a payment header and no url, is
     // refused below (400, nothing verified or settled).
-    if (route === "trust_check" && !url.search.replace(/^\?/, "") && !(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT))) {
-      const endpoint = PAID_ENDPOINTS.find((e) => e.route === route)!;
+    if ((route === "trust_check" || route === "verdict") && !url.search.replace(/^\?/, "") && !(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT))) {
+      const endpoint = endpointFor(route);
       const usd = config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route];
-      const example = `${base}/v1/trust/check?url=https://api.example.com/v1/data&payTo=0x...&amount=0.01`;
+      const example = route === "verdict" ? `${base}/v1/verdict?url=https://api.example.com/v1/data` : `${base}/v1/trust/check?url=https://api.example.com/v1/data&payTo=0x...&amount=0.01`;
       return paymentRequiredResponse(config, {
         routeKey: `${route}:probe`,
         amountDrops: config.pricesDrops[route],
@@ -1063,7 +1299,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       }, "PAYMENT-SIGNATURE header is required");
     }
 
-    const prep = await prepare(route, route === "trust_check" ? url.search : m[2], base);
+    const prep = await prepare(route, route === "trust_check" || route === "verdict" ? url.search : m[2], base);
     if (!prep.ok) return json(prep.status, prep.error, prep.headers);
     const { coin, body } = prep;
     // Owner key (Authorization: Bearer <OWNER_MCP_KEY>) reads the vendor report at no charge.
@@ -1081,7 +1317,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if ((route === "brief" || route === "institutional") && url.searchParams.has("format") && !/^(json|md|markdown|text)$/i.test(url.searchParams.get("format") ?? "")) {
       return json(400, { error: "invalid_format", detail: "format must be json or md. Not charged." });
     }
-    const endpoint = PAID_ENDPOINTS.find((e) => e.route === route)!;
+    const endpoint = endpointFor(route);
     const quote: Quote = {
       routeKey: coin ? `${route}:${coin.symbol}` : vendorId ? `${route}:${vendorId}` : route,
       amountDrops: config.pricesDrops[route],
@@ -1100,7 +1336,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       bazaar: bazaarExtension(
         route,
         coin?.symbol ?? vendorId,
-        route === "trust_check" ? Object.fromEntries(url.searchParams) : wantsMarkdown && url.searchParams.has("format") ? { format: "md" } : undefined,
+        route === "trust_check" || route === "verdict" ? Object.fromEntries(url.searchParams) : wantsMarkdown && url.searchParams.has("format") ? { format: "md" } : undefined,
         config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route],
       ),
       service: serviceMeta(route),

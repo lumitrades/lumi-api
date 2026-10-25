@@ -50,7 +50,9 @@ test("tools: seller monitoring and trust feed present; coins says 50; no project
   assert.match(by.lumi_seller_monitoring.description, /paying never changes a score/);
   assert.match(by.lumi_coins.description, /51 coins/);
   for (const t of tools) assert.doesNotMatch(t.description, /projection/, t.name);
-  assert.equal(tools.length, 26);
+  assert.equal(tools.length, 27);
+  assert.ok(by.lumi_verdict, "lumi_verdict present");
+  assert.match(by.lumi_verdict.description, /never changes a result/);
   assert.ok(!tools.some((t) => t.name === "lumi_trades"), "lumi_trades removed");
   assert.ok(by.lumi_scan_seller && by.lumi_report_receipt);
 });

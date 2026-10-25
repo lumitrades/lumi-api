@@ -105,6 +105,8 @@ export interface Trust {
   lookup(q: LookupQuery, base: string, opts?: { free?: boolean }): Promise<Record<string, unknown>>;
   /** Live score of one curated vendor (same inputs as the public score: probes, Lumi test-buys, verified reports). Null = unknown id. */
   vendorScore(id: string): Promise<{ vendor_id: string; name: string; score: ScoreResult; status: string; last_conclusive: "delivered" | "not_delivered" | null } | null>;
+  /** Verified seller replies for a curated vendor (shown in /v1/verdict). */
+  vendorReplies(id: string): Promise<Array<{ text: string; via: string; ts: number }>>;
   /** Free-route rate limit (same buckets as free lookups). Null = allowed. */
   freeLimit(request: Request, bucket: "lookup"): Promise<Response | null>;
 }
@@ -1427,5 +1429,5 @@ export function createTrust(deps: TrustDeps): Trust {
     return limited(bucket, await ipHash(request), l.perMinute, l.perDay, l.globalPerDay);
   }
 
-  return { handle, runProbes, vendorsDoc, vendorDoc, vendorReport, lookup, vendorScore, freeLimit };
+  return { handle, runProbes, vendorsDoc, vendorDoc, vendorReport, lookup, vendorScore, freeLimit, vendorReplies: (id: string) => store.verifiedReplies(id) };
 }

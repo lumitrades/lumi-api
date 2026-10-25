@@ -1,3 +1,4 @@
+import { DECISION_TO_LABEL, LABELS, DISPUTE_URL, type Label } from "./verdict";
 /**
  * Lumi Check v0 (server side, proprietary): the free pre-pay check, the signed payload of the paid trust/check, and the
  * earned-only "Tested by Lumi" badge (signed, short-lived, linked to the live score).
@@ -86,13 +87,20 @@ export function checkPayload(o: {
   const v = o.verdict;
   const reasons = (Array.isArray(v.reasons) ? v.reasons : []).map((r: any) => ({ code: String(r.code), severity: String(r.severity) }));
   return {
-    decision: String(v.verdict) as "allow" | "warn" | "block",
+    decision: String(v.verdict) as "allow" | "warn" | "block" | "unknown",
+    // Shared label set (legal review M4). The legacy decision stays for existing clients; the mapping is in /v1/verdict/rules.
+    label: (v.label ?? DECISION_TO_LABEL[String(v.verdict) as keyof typeof DECISION_TO_LABEL] ?? "no_data") as Label,
+    label_text: LABELS[(v.label ?? DECISION_TO_LABEL[String(v.verdict) as keyof typeof DECISION_TO_LABEL] ?? "no_data") as Label],
     confidence: v.confidence ?? null,
     reasons,
     query: { url: originPath(o.query.url ?? null), pay_to: o.query.payTo ?? null, amount_usd: o.query.amountUsd ?? null, network: o.query.network ?? null },
     matched: v.matched ? { resource: originPath(v.matched.resource) ?? null, domain: v.matched.domain ?? null, tier: v.matched.tier ?? null, exact: !!v.matched.exact } : null,
     score: o.score,
     link: o.link,
+    reply_url: DISPUTE_URL,
+    // Disclosure only (M13/M14): never an input to the decision or label.
+    relationship: v.relationship ?? null,
+    commercial_relationship: v.commercial_relationship ?? [],
     paid: o.paid,
   };
 }

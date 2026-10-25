@@ -207,8 +207,33 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
 ];
 
+/**
+ * GET /v1/verdict, listed as a paid resource only when the owner switches VERDICT_PRICING to "paid" (legal review M3).
+ * In the default free mode it is a free, rate-limited alias of /v1/check and appears under free endpoints instead.
+ */
+export const VERDICT_ENDPOINT: PaidEndpoint = {
+  route: "verdict",
+  name: "Lumi pre-payment check: one label (checks_passed / check_first / checks_failed / no_data)",
+  method: "GET",
+  path: "/v1/verdict",
+  template: "/v1/verdict",
+  summary:
+    "Use this before your agent pays an x402 URL or seller domain: one label from the same data and signing key as the free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as_of, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Paying Lumi never changes a result. Observations, not a guarantee. Not charged on bad input.",
+  example: "/v1/verdict?url=https://api.example.com/v1/data",
+};
+
+/** Every endpoint sold over x402 under this config (adds /v1/verdict only in paid mode). */
+export function paidEndpoints(cfg: Pick<Config, "verdictPaid">): PaidEndpoint[] {
+  return cfg.verdictPaid ? [...PAID_ENDPOINTS, VERDICT_ENDPOINT] : PAID_ENDPOINTS;
+}
+
+/** Catalog entry for a paid route, including /v1/verdict (whether or not it is currently priced). */
+export function endpointFor(route: PaidRoute): PaidEndpoint {
+  return route === "verdict" ? VERDICT_ENDPOINT : PAID_ENDPOINTS.find((e) => e.route === route)!;
+}
+
 export function priceTable(cfg: Config) {
-  return PAID_ENDPOINTS.map((e) => ({
+  return paidEndpoints(cfg).map((e) => ({
     method: e.method,
     path: e.path,
     name: e.name,
