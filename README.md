@@ -235,7 +235,7 @@ twice. Payment problems (insufficient funds, bad signature, expired authorizatio
 - **Runs on Cloudflare Workers** (`src/index.ts`) and on **plain Node** (`src/node.ts`) from the same `createApp()` (`src/app.ts`). The only runtime dependency in the Worker bundle is `@x402/core` (its x402 v2 schemas validate Base payment payloads); the bundle is about 62 KiB gzipped.
 - **Two payment networks, one invoice.** XRPL options come first and use the unchanged T54 flow; the Base option (`src/x402.ts`, `requireEvmPayment`) uses its own facilitator URL. Tests drive it with the official `@x402/fetch` + `@x402/evm` client and real EIP-3009 signatures against mocked facilitator responses, and check our requirement constants against `@x402/evm`'s own price parser.
 - **Wire-compatible with the XRPL reference implementation.** `src/x402.ts` mirrors T54's FastAPI/Express `require_payment` middleware (x402 v2 headers, `/verify` then `/settle`, typed 503/409 errors). The official npm and PyPI buyer SDKs work against it unchanged. Both were exercised on testnet.
-- **Stateless invoices.** Workers isolates share no memory, so the reference SDK's in-memory invoice store can't be used. Invoice ids are HMAC tokens (`INVOICE_SECRET`) that bind route, amount, network, `payTo` and expiry. Any isolate can validate them, and a quote for `/v1/signal/XRP` can't be redeemed on `/v1/slate`.
+- **Stateless invoices.** Workers isolates share no memory, so the reference SDK's in-memory invoice store can't be used. Invoice ids are HMAC tokens (`INVOICE_SECRET`) that bind route, amount, network, `payTo` and expiry. Any isolate can validate them, and a quote for `/v1/sentiment` can't be redeemed on `/v1/market`.
 - **One-time redemption via a Durable Object** (`src/invoice-guard.ts`). This is required. On testnet, the T54 facilitator returns `success: true` again when an already-settled blob is resubmitted, because XRPL submission is idempotent on the tx hash. `npm run probe:replay` reproduces this. Without a resource-server guard, one payment could be replayed for unlimited data. The guard atomically claims each invoice id before `/settle`. It is sharded 16 ways and expires entries with alarms. SQLite-backed DOs are on the Workers Free plan.
 - **Privacy filter** (`src/sanitize.ts`). Every field is whitelisted per endpoint (`src/views.ts`). Free text is then filtered sentence by sentence to drop anything mentioning a configured private name (`PRIVATE_NAMES` secret) or personal holdings/positions, and sensitive keys are dropped recursively. Tests inject canaries to prove it.
 - **Short cache.** Upstream `lumitrades.io/data/*.json` is cached for 60s per isolate (`DATA_TTL_SECONDS`), with up to 15 minutes of stale fallback.
@@ -279,20 +279,20 @@ Recorded runs (Oct 22 2026; historical: the per-coin and watchlist routes used h
 
 | Run | Endpoint | Amount | Tx |
 |---|---|---|---|
-| Node | `/v1/signal/XRP` | 0.02 XRP | [D1575C79…3A38EA](https://testnet.xrpl.org/transactions/D1575C79856EF71080F9118B0E3228C397021002D26EAAA9EED300BCA13A38EA) |
+| Node | retired route | 0.02 XRP | [D1575C79…3A38EA](https://testnet.xrpl.org/transactions/D1575C79856EF71080F9118B0E3228C397021002D26EAAA9EED300BCA13A38EA) |
 | Node | `/v1/market` (x402Fetch) | 0.05 XRP | [59790423…70A4](https://testnet.xrpl.org/transactions/59790423E951F3FA9DD32BA026CEED66CED895DB4232800A072E9E8C3DF870A4) |
-| workerd (`wrangler dev`) | `/v1/signal/XRP` | 0.02 XRP | [2E7E0E11…402591](https://testnet.xrpl.org/transactions/2E7E0E119548B9C96F16359BAFABB0A2906EF2F0FD2326473A91042286402591) |
+| workerd (`wrangler dev`) | retired route | 0.02 XRP | [2E7E0E11…402591](https://testnet.xrpl.org/transactions/2E7E0E119548B9C96F16359BAFABB0A2906EF2F0FD2326473A91042286402591) |
 | workerd (`wrangler dev`) | `/v1/market` (x402Fetch) | 0.05 XRP | [E4165025…21BB90](https://testnet.xrpl.org/transactions/E41650253754E23A613C4D593D2B4B2654C7581BB64AFD397D6EE3526A21BB90) |
-| Python SDK client | `/v1/levels/XRP` | 0.02 XRP | [355244D3…683F70](https://testnet.xrpl.org/transactions/355244D3602E67D7BF87CB2920B609CF74DF9E9C63B01005F27B020823683F70) |
-| Node (current prices) | `/v1/signal/XRP` | 0.005 XRP | [70B12A01…FB2A6E](https://testnet.xrpl.org/transactions/70B12A01E8D8E51E5E9755C858AC94DCB5360BE996C96A6242DF92B994FB2A6E) |
+| Python SDK client | retired route | 0.02 XRP | [355244D3…683F70](https://testnet.xrpl.org/transactions/355244D3602E67D7BF87CB2920B609CF74DF9E9C63B01005F27B020823683F70) |
+| Node (current prices) | retired route | 0.005 XRP | [70B12A01…FB2A6E](https://testnet.xrpl.org/transactions/70B12A01E8D8E51E5E9755C858AC94DCB5360BE996C96A6242DF92B994FB2A6E) |
 | Node (current prices) | `/v1/market` (x402Fetch) | 0.01 XRP | [4510B9AE…2E7C97](https://testnet.xrpl.org/transactions/4510B9AE3D4B2751D55CB54634DAA4B6C6148809A9E609EE53574C97562E7C97) |
 
 Stablecoin runs (`npm run demo:testnet:stablecoin`, `DEMO_ASSET=RLUSD|USDC`), Oct 22 2026 (historical route), through the T54 testnet facilitator. Both validated `tesSUCCESS`, and replay was refused:
 
 | Asset | Endpoint | Price | Tx |
 |---|---|---|---|
-| RLUSD (`524C55…`) | `/v1/slate` | 0.02 | [336D4368…7016D8](https://testnet.xrpl.org/transactions/336D4368F784BC8454A01DCEBBF66F29D8D64878D1C31A712AA865A1BD7016D8) |
-| USDC (`555344…`) | `/v1/slate` | 0.02 | [E6C88B93…011F10](https://testnet.xrpl.org/transactions/E6C88B93493DFC6E3450753066008345AC9587FA303EA953276D07E5E0011F10) |
+| RLUSD (`524C55…`) | retired route | 0.02 | [336D4368…7016D8](https://testnet.xrpl.org/transactions/336D4368F784BC8454A01DCEBBF66F29D8D64878D1C31A712AA865A1BD7016D8) |
+| USDC (`555344…`) | retired route | 0.02 | [E6C88B93…011F10](https://testnet.xrpl.org/transactions/E6C88B93493DFC6E3450753066008345AC9587FA303EA953276D07E5E0011F10) |
 
 The official testnet faucets for RLUSD (tryrlusd.com, login) and USDC (faucet.circle.com, reCAPTCHA) cannot be scripted. These runs therefore use a **stand-in testnet issuer** (`rhkAVriskfs45BnuJ49jx2GVa9M7Szh9nu`) that issues the same 40-hex currency codes, with the API pointed at it through `RLUSD_ISSUER` / `USDC_ISSUER`. The API, SDK and facilitator run the same IOU code path. `STANDIN=0` uses the official testnet issuer once the payer has been funded from a faucet.
 
@@ -308,7 +308,7 @@ Historical (the route below was retired on 2026-10-25):
 
 | Date | From (demo buyer) | Endpoint | Amount | Tx |
 |---|---|---|---|---|
-| 2026-10-22 | `rpvsTYDZmX1j1ndmEFG6YjjZZwp6VRtQRz` | `/v1/signal/XRP` | 0.005 XRP | [356E5C91…4C37E5](https://livenet.xrpl.org/transactions/356E5C9147B4B5D6C1F275C172EF8652E9C082458BAEC4204B569986714C37E5) (`tesSUCCESS`, SourceTag 804681468, 7.4 s) |
+| 2026-10-22 | `rpvsTYDZmX1j1ndmEFG6YjjZZwp6VRtQRz` | retired route | 0.005 XRP | [356E5C91…4C37E5](https://livenet.xrpl.org/transactions/356E5C9147B4B5D6C1F275C172EF8652E9C082458BAEC4204B569986714C37E5) (`tesSUCCESS`, SourceTag 804681468, 7.4 s) |
 
 ## Deploy to `api.lumitrades.io` (Cloudflare Workers)
 
