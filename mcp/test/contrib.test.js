@@ -117,7 +117,11 @@ test("lumi_check in MCP server mode never asks: sharing stays off, one stderr hi
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
   const { registerContribTools } = await import("../src/contrib.js");
-  const { _resetHintForTests } = await import("../../packages/scanner-kit/src/first_run.js");
+  // Reset the hint in the same lumi-check copy that src/contrib.js loads (npm install first, repo package as fallback)
+  let firstRun;
+  try { firstRun = new URL("./first_run.js", import.meta.resolve("lumi-check")).href; await import(firstRun); }
+  catch { firstRun = "../../packages/scanner-kit/src/first_run.js"; }
+  const { _resetHintForTests } = await import(firstRun);
   _resetHintForTests();
   const cfg = join(mkdtempSync(join(tmpdir(), "lk-mcp-")), "config.json");
   const handlers = {};
