@@ -163,9 +163,9 @@ const SCAN_MIN = 40;
 const NEEDS: Record<PaidRoute, DataFile[]> = {
   signal: ["signals", "prices"],
   levels: ["analysis", "prices"],
-  slate: ["ideas"], // data/ideas.json: current (pending/open) paper-trade ideas only, no outcomes
+  slate: ["ideas"], // data/ideas.json: current (pending/open) watchlist ideas; published as bias/conviction/timeframe only
   market: ["analysis", "signals", "prices", "context"],
-  brief: ["prices", "context", "analysis", "signals", "ideas"],
+  brief: ["prices", "context", "analysis", "signals"],
   yen: ["context", "analysis", "prices"],
   sentiment: ["context", "prices", "signals"],
   events: ["analysis"],
@@ -1644,7 +1644,7 @@ export function sitemapXml(base: string): string {
 }
 
 /**
- * Lumi Market Ideas paths (signal, lite, levels, scan, slate) carry X-Lumi-Product-Line and X-Lumi-Notice on
+ * Lumi Trades market-readings paths (signal, lite, levels, scan, slate) carry X-Lumi-Product-Line and X-Lumi-Notice on
  * every response (200, 402, 4xx, 503). Additive headers only; status and body are unchanged.
  */
 export function withProductLine(request: Request, res: Response): Response {

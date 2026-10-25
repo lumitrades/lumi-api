@@ -53,7 +53,8 @@ describe("new endpoints: payloads", () => {
     expect(b.key_levels.length).toBeGreaterThan(5);
     expect(b.yen.usd_jpy).toBeGreaterThan(100);
     expect(b.events_next_48h.length).toBeGreaterThan(0);
-    expect(b.paper_trades.active.length).toBeGreaterThan(0);
+    expect(b).not.toHaveProperty("paper_trades");
+    expect(b.bitcoin.signal).toMatch(/^(positive|neutral|negative) bias$/);
     expect(b.markdown).toContain("# Lumi's market brief");
     expect(b.markdown).toContain("Fear & Greed");
     expect(b.disclaimer).toMatch(/Not financial advice/);
@@ -87,7 +88,7 @@ describe("new endpoints: payloads", () => {
     const b = await (await paid("/v1/sentiment")).json();
     expect(b.fear_greed.value).toBeTypeOf("number");
     expect(b.derivatives.funding_read).toBeTruthy();
-    expect(b.breadth.coins_tracked).toBe(13);
+    expect(b.breadth.coins_tracked).toBe(12); // fixture site coins minus SOL
     expect(b.summary).toMatch(/Fear & Greed/);
   });
 
@@ -109,13 +110,13 @@ describe("new endpoints: payloads", () => {
     expect(slate.ideas.map((t: any) => t.id)).toEqual(ids);
     for (const t of slate.ideas) expect(["open", "pending"]).toContain(t.status);
     const brief = await (await paid("/v1/brief")).json();
-    expect(brief.paper_trades.active.map((t: any) => t.id)).toEqual(ids);
+    expect(brief).not.toHaveProperty("paper_trades");
     for (const b of [slate, brief]) {
       const s = JSON.stringify(b);
       expect(s).not.toMatch(/"(pnl_pct|unrealized_pnl_pct|mark_price|exit_price|closed_at|targets_hit|missed_it|cancel_reason|track_record|win_rate|stats)":/);
       expect(s).not.toMatch(/"status":"(stopped|cancelled|closed|win|loss|target|expired)"/);
     }
-    expect(brief.markdown).toContain("current paper-trade ideas");
+    expect(brief.markdown).not.toMatch(/paper-trade|entry|stop|target/i);
     expect(brief.markdown).not.toMatch(/, now [+-]?\d/);
   });
 

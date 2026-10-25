@@ -27,7 +27,7 @@ describe("free endpoints", () => {
     const r = await get("/", { Accept: "text/html,application/xhtml+xml" });
     expect(r.headers.get("content-type")).toMatch(/text\/html/);
     const html = await r.text();
-    expect(html).toMatch(/<title>Lumi API: x402 seller checks, crypto market data and Lumi Market Ideas \(pay on XRPL, Base or Stellar\)/);
+    expect(html).toMatch(/<title>Lumi API: x402 seller checks, crypto market data and Lumi Trades market readings \(pay on XRPL, Base or Stellar\)/);
     expect(html).toContain('<meta name="description"');
     expect(html).toContain("/v1/trust/vendors");
     expect(html).toContain("/v1/brief");
@@ -76,7 +76,7 @@ describe("free endpoints", () => {
     expect(oa.paths["/v1/signal/{coin}"].get["x-payment-info"].protocols).toEqual([{ x402: {} }]);
     expect(oa.paths["/v1/signal/{coin}"].get["x-payment-info"].xrp_price).toEqual({ mode: "fixed", currency: "XRP", amount: "0.005" });
     const coins = await (await get("/v1/coins")).json();
-    expect(coins.count).toBe(50);
+    expect(coins.count).toBe(49);
     expect(coins.coins.map((c: any) => c.symbol)).toContain("ZBCN");
   });
 
@@ -226,24 +226,23 @@ describe("paid payloads", () => {
     return r.json();
   }
 
-  it("levels: support/resistance/projection, with private content stripped", async () => {
+  it("levels: support/resistance only (no scenarios/projection), with private content stripped", async () => {
     const b = await paid("/v1/levels/XRP");
     expect(b.support.length).toBeGreaterThan(0);
     expect(b.resistance.length).toBeGreaterThan(0);
-    expect(b.projection).toHaveProperty("bull");
+    expect(b).not.toHaveProperty("projection");
+    expect(b).not.toHaveProperty("scenarios");
     expect(JSON.stringify(b)).not.toMatch(/canaryname/i);
     expect(b.commentary).toContain("XRP held $1.30.");
   });
 
-  it("slate: active ideas with entry/stop/targets/leverage, no private notes", async () => {
+  it("slate: active ideas as bias/conviction/timeframe only, no trade plan, no private notes", async () => {
     const b = await paid("/v1/slate");
     expect(b.ideas.length).toBeGreaterThan(0);
     for (const i of b.ideas) {
       expect(["open", "pending"]).toContain(i.status);
-      expect(i).toHaveProperty("entry");
-      expect(i).toHaveProperty("stop");
-      expect(i).toHaveProperty("targets");
-      expect(i).toHaveProperty("leverage");
+      expect(["positive bias", "negative bias", "neutral bias"]).toContain(i.bias);
+      for (const k of ["entry", "entry_zone", "stop", "targets", "leverage", "direction", "invalidation"]) expect(i).not.toHaveProperty(k);
       expect(i).not.toHaveProperty("source");
     }
     const s = JSON.stringify(b);
@@ -255,9 +254,9 @@ describe("paid payloads", () => {
   it("market: BTC backdrop, macro with yen note, breadth", async () => {
     const b = await paid("/v1/market");
     expect(b.btc_backdrop.coin.symbol).toBe("BTC");
-    expect(b.btc_backdrop.projection).toHaveProperty("bear");
+    expect(b.btc_backdrop).not.toHaveProperty("projection");
     expect(b.macro.yen_note).toMatch(/yen|USD\/JPY/i);
-    expect(b.breadth.coins_tracked).toBe(13);
+    expect(b.breadth.coins_tracked).toBe(12); // fixture site coins minus SOL
   });
 });
 

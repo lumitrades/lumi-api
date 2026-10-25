@@ -62,11 +62,11 @@ const SKILLS: SkillDef[] = [
     match: /\b(institution(al|s)?|policy|regulat(ion|ions|ory|ors?)|bis|imf|treasury|occ|sec|cftc|cbdcs?|jpmorgan|jpm|kinexys|sbi|cross river|securitize|corda|r3|banks?|tokeni[sz](ed|ation))\b/i,
   },
   { id: "brief", route: "brief", name: "Daily crypto market brief", tags: ["crypto", "market", "brief", "newsletter", "paid"], examples: ["today's crypto market brief"], match: /\b(brief|summary|today|newsletter)\b/i },
-  { id: "scan", route: "scan", name: "Lumi Market Ideas: all-coins scan, 50 live signals in one call", tags: ["crypto", "screener", "signals", "scan", "market-ideas", "paid"], examples: ["scan all coins", "which coins look strongest?"], match: /\b(scan|screen|screener|all coins|strongest|weakest)\b/i },
-  { id: "lite", route: "lite", name: "Lumi Market Ideas: lite coin signal (label, score, price)", tags: ["crypto", "signal", "lite", "market-ideas", "paid"], examples: ["lite XRP"], match: /\blite\b/i, needsCoin: true },
-  { id: "signal", route: "signal", name: "Lumi Market Ideas: coin signal (buy/sell read)", tags: ["crypto", "signal", "technical-analysis", "market-ideas", "paid"], examples: ["signal XRP", "is BTC a buy?"], match: /\b(signal|buy|sell|rsi|macd)\b/i, needsCoin: true },
-  { id: "levels", route: "levels", name: "Lumi Market Ideas: support/resistance + rule-based 7-day scenario levels (not forecasts)", tags: ["crypto", "levels", "support", "resistance", "market-ideas", "paid"], examples: ["levels ETH"], match: /\b(levels?|support|resistance|projection|scenarios?)\b/i, needsCoin: true },
-  { id: "slate", route: "slate", name: "Lumi Market Ideas: paper-trade slate (current ideas)", tags: ["crypto", "trade-ideas", "paper-trading", "market-ideas", "paid"], examples: ["current trade ideas"], match: /\b(slate|ideas?|setups?)\b/i },
+  { id: "scan", route: "scan", name: "Lumi Trades market readings: all-coins scan, 49 live readings in one call", tags: ["crypto", "screener", "signals", "scan", "market-ideas", "paid"], examples: ["scan all coins", "which coins have the highest momentum score?"], match: /\b(scan|screen|screener|all coins|strongest|weakest)\b/i },
+  { id: "lite", route: "lite", name: "Lumi Trades market readings: lite coin reading (bias, score, price)", tags: ["crypto", "signal", "lite", "market-ideas", "paid"], examples: ["lite XRP"], match: /\blite\b/i, needsCoin: true },
+  { id: "signal", route: "signal", name: "Lumi Trades market readings: coin signal (momentum/trend bias)", tags: ["crypto", "signal", "technical-analysis", "market-ideas", "paid"], examples: ["signal XRP", "what is BTC's momentum bias?"], match: /\b(signal|bias|momentum|rsi|macd)\b/i, needsCoin: true },
+  { id: "levels", route: "levels", name: "Lumi Trades market readings: support/resistance levels", tags: ["crypto", "levels", "support", "resistance", "market-ideas", "paid"], examples: ["levels ETH"], match: /\b(levels?|support|resistance)\b/i, needsCoin: true },
+  { id: "slate", route: "slate", name: "Lumi Trades market readings: watchlist slate (momentum/trend bias only)", tags: ["crypto", "watchlist", "bias", "market-ideas", "paid"], examples: ["current watchlist ideas"], match: /\b(slate|ideas?|watchlist)\b/i },
   { id: "market", route: "market", name: "BTC + macro market backdrop", tags: ["crypto", "bitcoin", "macro", "paid"], examples: ["BTC macro backdrop"], match: /\b(market|backdrop|macro|dominance)\b/i },
   { id: "macro_yen", route: "yen", name: "Yen carry-trade watch (USD/JPY, Nikkei)", tags: ["macro", "yen", "carry-trade", "japan", "paid"], examples: ["yen carry trade risk"], match: /\b(yen|jpy|usd\/?jpy|nikkei|carry|japan|boj)\b/i },
   { id: "funding", route: "funding", name: "Perpetual funding rates (OKX perps)", tags: ["crypto", "funding", "perpetuals", "derivatives", "paid"], examples: ["funding rates"], match: /\bfunding\b/i },
@@ -96,7 +96,7 @@ const SKILLS: SkillDef[] = [
 
 const FREE_DESCRIPTIONS: Record<string, string> = {
   catalog: "Lists every Lumi endpoint with live prices on every payment network (XRP Ledger, Base, Stellar), the MCP and A2A endpoints, and the no-charge-when-stale guarantee.",
-  coins: "The 51 coins Lumi covers (tickers and CoinGecko ids). Lumi Market Ideas (paper-trade analysis, not investment advice): signals for all 51; levels only for the 14 watchlist and major coins.",
+  coins: "The 50 coins Lumi covers (tickers and CoinGecko ids). Lumi Trades market readings (information only, not investment advice): signals for all 50; levels only for the 13 watchlist and major coins.",
   vendor_trust:
     "Check an x402 seller before paying it: {\"url\":\"...\"}, {\"domain\":\"...\"} or {\"payTo\":\"...\"} (case-insensitive) looks it up in the full CDP x402 Bazaar catalog (free quote checks of listings on a rotating schedule: 'quote-verified, low confidence'; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys ('purchase-verified', counted per chain: Base USDC for Bazaar listings, XRPL for a small curated list). Answer-only; tx evidence is in the paid trust check. With no arguments: curated XRPL vendor observations; {\"vendor_id\":\"...\"} for one vendor's summary. Observations, not ratings; no match is not a negative signal.",
   samples: "Free, clearly labelled SAMPLE previews of every paid product (truncated, up to 10 minutes old), with the USD price of each. Use it to see the output shape before paying.",
@@ -136,11 +136,11 @@ export function agentCard(cfg: Config, base: string) {
   return {
     name: "Lumi Trades",
     description:
-      "Should I pay this x402 URL? Lumi Trust checks a seller before you pay: allow / warn / block with coded reasons from daily CDP Bazaar index checks and Lumi's own on-chain test-buys, " +
+      "Should I pay this x402 URL? Lumi Trades seller checks checks a seller before you pay: allow / warn / block with coded reasons from daily CDP Bazaar index checks and Lumi's own on-chain test-buys, " +
       "(free lookup, paid check, vendor reports); signed delivery receipts come with paid vendor reports and Feed catalog lookups, verifiable free. " +
       "Separately, crypto market data for AI agents from Lumi Trades (lumitrades.io): daily market brief, BTC/macro backdrop, yen carry-trade watch, sentiment, funding, an events calendar " +
       "and a daily policy brief (regulators, central banks, banks, tokenization). " +
-      `And ${MARKET_IDEAS_NAME}, a separate product line (${MARKET_IDEAS_NOTICE}): per-coin signals, lite reads, the all-coins scan, support/resistance levels and current paper-trade ideas (signals cover 51 coins; levels and ideas cover 14 watchlist and major coins). ` +
+      `And ${MARKET_IDEAS_NAME}, a separate product line (${MARKET_IDEAS_NOTICE}): per-coin signals, lite reads, the all-coins scan, support/resistance levels and a watchlist bias slate (signals cover 50 coins; levels and the slate cover 13 watchlist and major coins). ` +
       `Pay per call over x402 v2 with no API key or account, in ${settledIn(cfg)}. Also available as a remote MCP server. Analytics only, not financial advice.`,
     // A2A 1.0
     supportedInterfaces: A2A_VERSIONS.map((v) => ({ url: a2aUrl, protocolBinding: "JSONRPC", protocolVersion: v })),
@@ -171,7 +171,7 @@ export function agentCard(cfg: Config, base: string) {
             idempotency: "Send an Idempotency-Key header (or the x402 payment-identifier extension id) with a payment: a retry with the same key and payment returns the cached response and is never charged twice.",
             attestation: {
               type: "signed-receipts",
-              receipts: "counterparty_delivery_receipt v0.1 (SHA-256 receipt_hash, signed by the paying wallet) on Lumi Trust test-buys",
+              receipts: "counterparty_delivery_receipt v0.1 (SHA-256 receipt_hash, signed by the paying wallet) on Lumi Trades seller checks test-buys",
               verify: `${base}/v1/trust/receipts/verify`,
             },
           },

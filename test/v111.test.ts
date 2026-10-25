@@ -22,7 +22,7 @@ describe("v1.1.1 discovery files", () => {
       const c = await r.json();
       expect(c).toMatchObject({ name: "io.github.cypher-osiris/lumi-trades-mcp", version: "1.1.7", remotes: [{ type: "streamable-http", url: `${BASE}/mcp` }] });
       expect(c.$schema).toMatch(/server-card/);
-      expect(c.description).toMatch(/^Lumi Trust/);
+      expect(c.description).toMatch(/^Lumi Trades/);
     }
     const a = await (await get("/.well-known/agents.json")).json();
     expect(a).toMatchObject({ agentsJson: "0.1.0", sources: [{ id: "lumi", path: `${BASE}/openapi.json` }] });
@@ -104,7 +104,7 @@ describe("v1.1.1 policies and metadata", () => {
     expect(JSON.stringify(await u.json())).not.toContain("?domain=");
   });
 
-  it("every paid data response carries as_of, data_age_seconds and next_update; levels carry labelled scenarios + projection", async () => {
+  it("every paid data response carries as_of, data_age_seconds and next_update; levels carry no scenarios or projection", async () => {
     const { get } = setup();
     for (const p of ["/v1/levels/XRP", "/v1/signal/XRP", "/v1/slate", "/v1/brief"]) {
       const req = (await (await get(p)).json()).accepts[0];
@@ -115,8 +115,8 @@ describe("v1.1.1 policies and metadata", () => {
       expect(typeof b.data_age_seconds, p).toBe("number");
       expect(b, p).toHaveProperty("next_update");
       if (p.startsWith("/v1/levels")) {
-        expect(b.scenarios.label).toBe("rule-based scenario levels, not forecasts");
-        expect(b.projection.bull).toBe(b.scenarios.bull);
+        expect(b).not.toHaveProperty("scenarios");
+        expect(b).not.toHaveProperty("projection");
       }
     }
   });

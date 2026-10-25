@@ -35,10 +35,11 @@ describe("Stage C: /v1/scan", () => {
     expect(r.status).toBe(200);
     const j: any = await r.json();
     expect(j.kind).toBe("scan");
-    expect(j.count).toBe(50);
+    expect(j.count).toBe(49);
     const scores = j.coins.map((c: any) => c.score);
     expect([...scores].sort((a: number, b: number) => b - a)).toEqual(scores);
-    expect(j.breadth.bullish + j.breadth.neutral + j.breadth.bearish).toBe(50);
+    expect(j.breadth.positive + j.breadth.neutral + j.breadth.negative).toBe(49);
+    expect(j.coins.map((c: any) => c.symbol)).not.toContain("SOL");
     expect(j.stale_after).toMatch(/Z$/);
     expect(j.coins[0].computed_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
@@ -55,7 +56,7 @@ describe("Stage C: /v1/scan", () => {
   it("scanView lists missing coins", () => {
     const v: any = scanView(liveRows(NOW, 45), LIVE_UNIVERSE as any);
     expect(v.count).toBe(45);
-    expect(v.missing).toHaveLength(5);
+    expect(v.missing).toHaveLength(4);
   });
 });
 

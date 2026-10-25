@@ -125,7 +125,7 @@ describe("remote MCP: tools", () => {
   it("free tools work without a key", async () => {
     const { call } = setup();
     const coins = JSON.parse(textOf((await call("lumi_coins")).body));
-    expect(coins).toHaveLength(50);
+    expect(coins).toHaveLength(49);
     const cat = JSON.parse(textOf((await call("lumi_catalog")).body));
     expect(cat.endpoints).toHaveLength(17);
     expect(cat.access).toMatch(/^public/);

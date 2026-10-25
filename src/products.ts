@@ -1,6 +1,6 @@
 /**
  * Composite products built only from data Lumi already publishes on lumitrades.io/data:
- *   /v1/brief      daily market brief (JSON + markdown): BTC, CoinMarketCap Fear & Greed, movers, key levels, yen, events, current paper-trade ideas, news
+ *   /v1/brief      daily market brief (JSON + markdown): BTC, CoinMarketCap Fear & Greed, movers, key levels, yen, events, news (no trade plans)
  *   /v1/macro/yen  USD/JPY + Nikkei 225 and a rule-based carry-trade risk read around the 155 line
  *   /v1/sentiment  Fear & Greed (CoinMarketCap) + BTC perp funding/OI + market-wide breadth
  *   /v1/events     sourced, dated macro/crypto events and per-coin catalysts
@@ -11,8 +11,9 @@
 import type { Json } from "./data";
 import { isSignedObject } from "./signed";
 import {
-  DISCLAIMER, FALLBACK_COINS, envelope, levelsBlock, num, priceBlock, activeIdeas, yenNote, type CoinRef,
+  DISCLAIMER, FALLBACK_COINS, envelope, isExcludedCoin, levelsBlock, num, priceBlock, yenNote, type CoinRef,
 } from "./views";
+import { biasLabel, neutralText } from "./bias";
 
 /** Lumi's carry-trade line in the sand for USD/JPY (newsletter + analysis: "watching ~155"). */
 export const YEN_KEY_LEVEL = 155;
@@ -65,8 +66,8 @@ export function fearGreedBlock(context: Json) {
 export function fundingRead(ratePct: number | null): string | null {
   if (ratePct === null) return null;
   if (ratePct >= 0.03) return "hot: longs pay a large premium (crowded long, squeeze risk to the downside)";
-  if (ratePct >= 0.01) return "positive: longs pay the usual premium (mild long bias)";
-  if (ratePct > -0.005) return "flat: below the usual 0.01% baseline, no strong leverage bias";
+  if (ratePct >= 0.01) return "positive: longs pay the usual premium";
+  if (ratePct > -0.005) return "flat: below the usual 0.01% baseline, no strong positioning tilt";
   return "negative: shorts pay longs (crowded short, squeeze risk to the upside)";
 }
 
@@ -107,7 +108,7 @@ function breadthBlock(prices: Json, signals: Json, coins: CoinRef[]) {
       changes.push(ch);
       ch >= 0 ? up++ : down++;
     }
-    const l = signals?.coins?.[c.id]?.label;
+    const l = biasLabel(signals?.coins?.[c.id]?.label, num(signals?.coins?.[c.id]?.score));
     if (l) labels[l] = (labels[l] ?? 0) + 1;
   }
   return {
@@ -250,12 +251,15 @@ export function catalystRows(analysis: Json, coins: CoinRef[], now: number): Cat
     for (const c of list) {
       if (c?.kind !== "event" || typeof c.date !== "string" || c.date < today || typeof c.text !== "string") continue;
       if (!(c.source || c.url)) continue;
-      out.push({ date: c.date, coin, text: c.text, source: c.source, url: c.url });
+      const text = neutralText(c.text);
+      if (!text) continue;
+      out.push({ date: c.date, coin, text, source: c.source, url: c.url });
     }
   };
   add(analysis?.backdrop?.catalysts, "MARKET");
   for (const [id, a] of Object.entries<Json>(analysis?.coins ?? {})) {
     if (id === analysis?.backdrop?.coin) continue; // backdrop already covers BTC's macro events
+    if (isExcludedCoin({ id })) continue;
     add(a?.catalysts, sym(coins.length ? coins : FALLBACK_COINS, id));
   }
   return dedupe(out).sort((a, b) => a.date.localeCompare(b.date));
@@ -313,7 +317,7 @@ function keyLevels(analysis: Json, prices: Json, coins: CoinRef[]) {
     out.push({
       coin: c.symbol,
       usd: px,
-      bias: a.bias ?? null,
+      bias: neutralText(a.bias),
       nearest_support: sup.length ? Math.max(...sup) : null,
       nearest_resistance: res.length ? Math.min(...res) : null,
     });
@@ -330,7 +334,6 @@ export function briefView(d: { prices: Json; context: Json; analysis: Json; sign
   const btcLv = levelsBlock(backdrop);
   const usdjpy = quoteBlock(freshQuote(d.context?.yen?.usd_jpy, now));
   const nikkei = quoteBlock(freshQuote(d.context?.yen?.nikkei, now));
-  const tr: Json[] = activeIdeas(d.ideas);
   const nl = d.brief?.newsletter && fresh(d.brief.newsletter.date, now) ? d.brief.newsletter : null;
   const news = Array.isArray(d.brief?.news?.items) ? d.brief.news.items.filter((n: Json) => fresh(n.date, now) && n.source_url) : [];
   const nowIso = new Date(now).toISOString();
@@ -339,10 +342,12 @@ export function briefView(d: { prices: Json; context: Json; analysis: Json; sign
 
   const body = compact({
     date: nowIso.slice(0, 10),
-    headline: nl?.subject ?? null,
+    headline: neutralText(nl?.subject),
     lumi_take: nl?.tldr ? (() => {
       const synced = btc ? syncBtcLede(String(nl.tldr), btc.usd, round(btc.change_24h_pct)) : { text: String(nl.tldr), changed: false };
-      return { text: synced.text, from: `Trade with Lumi newsletter, ${nl.date}${synced.changed && btc?.as_of ? `; BTC figures updated to live data as of ${btc.as_of}` : ""}` };
+      const text = neutralText(synced.text);
+      if (!text) return null;
+      return { text, from: `Trade with Lumi newsletter, ${nl.date}${synced.changed && btc?.as_of ? `; BTC figures updated to live data as of ${btc.as_of}` : ""}` };
     })() : null,
     bitcoin: btc
       ? {
@@ -353,7 +358,8 @@ export function briefView(d: { prices: Json; context: Json; analysis: Json; sign
           bias: btcLv?.bias ?? null,
           support: btcLv?.support ?? null,
           resistance: btcLv?.resistance ?? null,
-          signal: d.signals?.coins?.bitcoin?.label ?? null,
+          signal: biasLabel(d.signals?.coins?.bitcoin?.label, num(d.signals?.coins?.bitcoin?.score)),
+          signal_score: num(d.signals?.coins?.bitcoin?.score),
           as_of: btc.as_of,
         }
       : null,
@@ -367,13 +373,11 @@ export function briefView(d: { prices: Json; context: Json; analysis: Json; sign
     yen: usdjpy || nikkei ? { usd_jpy: usdjpy?.price, usd_jpy_change_pct: usdjpy?.change_pct, nikkei: nikkei?.price, nikkei_change_pct: nikkei?.change_pct, carry_trade_risk: carryRisk(usdjpy, nikkei)?.level } : null,
     events_next_48h: evs.map((e) => ({ at_utc: e.at_utc, at_ct: e.at_ct, title: e.title, why: e.why, source: e.source, url: e.url })),
     coming_up: cats,
-    paper_trades: {
-      active: tr.map((t) =>
-        compact({ id: t.id, coin: sym(coins, t.coin), direction: t.direction, leverage: t.leverage, status: t.status, entry: t.entry, entry_zone: t.entry_zone, stop: t.stop, targets: t.targets, timeframe: t.timeframe, expiry: t.expiry ?? t.fill_by })),
-    },
-    what_happened: nl?.what_happened ?? null,
-    news: news.map((n: Json) => ({ date: n.date, headline: n.headline, summary: n.summary, coins: n.coins, source: n.source_name, url: n.source_url })),
-    sources_as_of: { prices: d.prices?.updated_utc, context: d.context?.generated_utc, analysis: d.analysis?.as_of, ideas: d.ideas?.as_of, newsletter: nl?.date },
+    what_happened: Array.isArray(nl?.what_happened) ? nl.what_happened.map((w: unknown) => neutralText(w)).filter(Boolean) : null,
+    news: news
+      .map((n: Json) => ({ date: n.date, headline: neutralText(n.headline), summary: neutralText(n.summary), coins: Array.isArray(n.coins) ? n.coins.filter((c: unknown) => String(c).toUpperCase() !== "SOL") : n.coins, source: n.source_name, url: n.source_url }))
+      .filter((n: Json) => n.headline),
+    sources_as_of: { prices: d.prices?.updated_utc, context: d.context?.generated_utc, analysis: d.analysis?.as_of, newsletter: nl?.date },
   });
   const env = envelope("brief", body as Record<string, unknown>);
   return { ...env, markdown: briefMarkdown(env as Json) };
@@ -412,7 +416,7 @@ export function briefMarkdown(b: Json): string {
   L.push("", "## Market");
   if (b.bitcoin) {
     const x = b.bitcoin;
-    L.push(`- **BTC ${fmtUsd(x.usd)}** (${pct(x.change_24h_pct)} 24h${x.low_24h && x.high_24h ? `, range ${fmtUsd(x.low_24h)}-${fmtUsd(x.high_24h)}` : ""})${x.signal ? `, signal: ${x.signal}` : ""}.`);
+    L.push(`- **BTC ${fmtUsd(x.usd)}** (${pct(x.change_24h_pct)} 24h${x.low_24h && x.high_24h ? `, range ${fmtUsd(x.low_24h)}-${fmtUsd(x.high_24h)}` : ""})${x.signal ? `, momentum/trend: ${x.signal}${typeof x.signal_score === "number" ? ` (score ${x.signal_score})` : ""}` : ""}.`);
     if (x.support || x.resistance) L.push(`- BTC levels: support ${(x.support ?? []).map(fmtUsd).join(" / ") || "n/a"}; resistance ${(x.resistance ?? []).map(fmtUsd).join(" / ") || "n/a"}${x.bias ? `. Bias: ${x.bias}` : ""}.`);
   }
   const s = b.sentiment ?? {};
@@ -442,13 +446,6 @@ export function briefMarkdown(b: Json): string {
     L.push("", "## Events");
     for (const e of b.events_next_48h ?? []) L.push(`- ${e.at_utc.replace("T", " ").slice(0, 16)} UTC: **${e.title}**${e.why ? `. ${e.why}` : ""}${e.url ? ` ([source](${e.url}))` : ""}`);
     for (const c of b.coming_up ?? []) L.push(`- ${c.date}${c.coin && c.coin !== "MARKET" ? ` [${c.coin}]` : ""}: ${c.text}${c.url ? ` ([source](${c.url}))` : ""}`);
-  }
-  const pt = b.paper_trades;
-  if (pt) {
-    L.push("", "## Lumi's current paper-trade ideas");
-    for (const t of pt.active ?? []) {
-      L.push(`- ${t.id} ${t.coin} ${t.direction}${t.leverage ? ` ${t.leverage}x` : ""} (${t.status})${t.entry !== undefined ? `: entry ${t.entry}` : ""}${t.stop !== undefined ? `, stop ${t.stop}` : ""}${t.targets ? `, targets ${t.targets.join(" / ")}` : ""}`);
-    }
   }
   L.push("", `_Source: Lumi Trades (lumitrades.io), ${b.timestamp}. ${DISCLAIMER}_`, "");
   return L.join("\n");

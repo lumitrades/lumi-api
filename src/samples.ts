@@ -105,7 +105,7 @@ export function stripTradeOutcome(v: unknown, depth = 0): number {
     return n;
   }
   const o = v as Record<string, unknown>;
-  const tradeLike = "direction" in o || "entry" in o || "entry_zone" in o || "stop" in o;
+  const tradeLike = "direction" in o || "entry" in o || "entry_zone" in o || "stop" in o || ("conviction" in o && "bias" in o);
   for (const k of Object.keys(o)) {
     if (tradeLike && SAMPLE_TRADE_HIDDEN.includes(k)) {
       delete o[k];
@@ -135,8 +135,6 @@ function reshape(route: PaidRoute, s: Record<string, any>): string[] {
     if (n) omitted.push("paper-trade unrealized_pnl_pct, mark_price and status (not shown in free samples)");
   }
   if (route === "levels") {
-    drop(s, "scenarios", "scenarios");
-    drop(s, "projection", "projection");
     for (const k of ["support", "resistance"]) if (Array.isArray(s[k]) && s[k].length > 1) { s[k] = s[k].slice(0, 1); omitted.push(`${k}[1..]`); }
   }
   return omitted;

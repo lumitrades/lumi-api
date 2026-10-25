@@ -40,7 +40,7 @@ export const MONITOR_METHODOLOGY = {
 };
 
 export const FEED_LICENSE = {
-  title: "Lumi Trust Data Licence (feed)",
+  title: "Lumi Trades Trust Data Licence (feed)",
   version: "2026-10-22",
   terms: [
     "Licence: a non-exclusive, non-transferable right to query the Lumi trust feed and use the results inside your own product (for example a facilitator, wallet, agent framework or marketplace) to inform your users.",

@@ -20,7 +20,7 @@ const K = (id: string, symbol: string, name: string, product: string): LiveCoin 
  * public USD candles, plus every coin on Lumi's site. Stable ids = CoinGecko ids. */
 export const LIVE_UNIVERSE: LiveCoin[] = [
   C("bitcoin", "BTC", "Bitcoin"), C("ethereum", "ETH", "Ethereum"), C("binancecoin", "BNB", "BNB"), C("ripple", "XRP", "XRP"),
-  C("solana", "SOL", "Solana"), K("tron", "TRX", "TRON", "TRXUSD"), C("zcash", "ZEC", "Zcash"), C("hyperliquid", "HYPE", "Hyperliquid"),
+  K("tron", "TRX", "TRON", "TRXUSD"), C("zcash", "ZEC", "Zcash"), C("hyperliquid", "HYPE", "Hyperliquid"),
   C("dogecoin", "DOGE", "Dogecoin"), K("monero", "XMR", "Monero", "XXMRZUSD"), C("chainlink", "LINK", "Chainlink"), C("cardano", "ADA", "Cardano"),
   C("near", "NEAR", "NEAR Protocol"), C("stellar", "XLM", "Stellar"), C("bitcoin-cash", "BCH", "Bitcoin Cash"), C("litecoin", "LTC", "Litecoin"),
   C("uniswap", "UNI", "Uniswap"), C("avalanche-2", "AVAX", "Avalanche"), C("sui", "SUI", "Sui"), C("hedera-hashgraph", "HBAR", "Hedera"),

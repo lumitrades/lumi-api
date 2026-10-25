@@ -28,7 +28,7 @@ export const SERVICE_ICON = "https://lumitrades.io/assets/icon-512.png";
 export const ROUTE_TAGS: Record<PaidRoute, string[]> = {
   signal: ["technical-analysis", "rsi", "macd", "crypto-indicators", "bitcoin"],
   levels: ["support-resistance", "technical-analysis", "price-levels", "bitcoin", "crypto"],
-  slate: ["paper-trading", "market-analysis", "education", "bitcoin", "crypto"],
+  slate: ["watchlist", "market-analysis", "education", "bitcoin", "crypto"],
   market: ["market-data", "bitcoin", "funding-rates", "open-interest", "crypto"],
   brief: ["market-brief", "crypto-news", "daily-report", "bitcoin", "crypto"],
   yen: ["macro", "forex", "yen-carry-trade", "japan", "bitcoin"],
@@ -106,7 +106,7 @@ export const IDEAS_DISCLAIMER = `Educational, not financial advice. ${MARKET_IDE
 export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   signal: {
     description:
-      "Use when an agent needs a rule-based technical indicator read for one of 51 large-cap crypto assets (XRP, BTC, ETH and more): overall label and score, 1h/4h/1d labels and an indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume), with price and 24h change. From public exchange candles; 1h refreshes about every 13 minutes. Not charged on unknown coins or stale data. " + IDEAS_DISCLAIMER,
+      "Use when an agent needs a rule-based momentum/trend reading for one of 50 large-cap crypto assets (XRP, BTC, ETH and more): positive/neutral/negative bias and score, 1h/4h/1d bias and indicators (RSI, MACD, EMA, Bollinger, StochRSI, volume), price and 24h change. Public exchange candles; 1h refreshes about every 13 min. Not charged on unknown coins or stale data. " + IDEAS_DISCLAIMER,
     routeTemplate: "/v1/signal/:coin",
     pathParam: COIN_PARAM,
     example: {
@@ -114,17 +114,17 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
       product_line: MARKET_IDEAS_NAME,
       notice: MARKET_IDEAS_NOTICE,
       coin: { symbol: "XRP", name: "XRP" },
-      label: "Sell",
+      label: "negative bias",
       score: -0.34,
       price: { usd: 2.41, change_24h_pct: -1.62 },
-      timeframes: { "1h": { label: "Sell", score: -0.3 }, "4h": { label: "Neutral", score: 0 }, "1d": { label: "Sell", score: -0.45 } },
+      timeframes: { "1h": { label: "negative bias", score: -0.3 }, "4h": { label: "neutral bias", score: 0 }, "1d": { label: "negative bias", score: -0.45 } },
       ...FRESH("2026-10-22T11:17:26Z", "2026-10-22T23:17:26Z"),
       payment: pay("signal"),
     },
   },
   levels: {
     description:
-      "Use when an agent needs reference price levels for one of 14 watchlist and major coins (XRP, BTC, ETH, HBAR, XLM and more): support and resistance levels, a short bias note, commentary, dated catalysts and cited sources. Other coins return 404 without charge; see /v1/coins. Not charged on stale data. " + IDEAS_DISCLAIMER,
+      "Use when an agent needs reference price levels for one of 13 watchlist and major coins (XRP, BTC, ETH, HBAR, XLM and more): support and resistance levels, a short bias note, commentary, dated catalysts and cited sources. Other coins return 404 without charge; see /v1/coins. Not charged on stale data. " + IDEAS_DISCLAIMER,
     routeTemplate: "/v1/levels/:coin",
     pathParam: COIN_PARAM,
     example: {
@@ -145,38 +145,38 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   slate: {
     description:
-      "Use when an agent needs Lumi Trades' current paper-trade journal to compare with its own analysis: each pending or open idea with coin, direction, conviction, timeframe and written reasoning, plus notes on coins where no setup qualifies. Hypothetical paper trades only; no orders, outcomes or performance figures. Not charged on stale data. " + IDEAS_DISCLAIMER,
+      "Use when an agent needs Lumi Trades' current watchlist to compare with its own analysis: each pending or open idea as coin, momentum/trend bias (positive or negative), conviction, timeframe and expiry, plus coins with no current idea. No trade plans, outcomes or performance figures. Not charged on stale data. " + IDEAS_DISCLAIMER,
     example: {
       kind: "slate",
       product_line: MARKET_IDEAS_NAME,
       notice: MARKET_IDEAS_NOTICE,
       ...FRESH("2026-10-22T11:05:00Z", "2026-10-22T23:05:00Z"),
-      ideas: [{ coin: "BTC", direction: "long", conviction: "medium", timeframe: "swing", reasoning: "Range floor with steady ETF inflows; macro events inside the window." }],
-      no_setup_notes: { XLM: "No setup: near a 30-day low with oversold readings." },
+      ideas: [{ coin: "BTC", bias: "positive bias", conviction: "medium", timeframe: "swing", expires: "2026-10-29" }],
+      no_setup: ["XLM"],
       payment: pay("slate"),
     },
   },
   market: {
     description:
-      "Use when an agent needs the overall crypto market context before analysing individual coins: BTC support/resistance and bias, macro context (total market cap, BTC dominance, Fear & Greed, USD/JPY note, BTC perpetual funding and open interest) and 24h breadth across 14 tracked coins. Not charged on stale data. Analytics only, not financial advice.",
+      "Use when an agent needs the overall crypto market context before analysing individual coins: BTC support/resistance and bias, macro context (total market cap, BTC dominance, Fear & Greed, USD/JPY note, BTC perpetual funding and open interest) and 24h breadth across 13 tracked coins. Not charged on stale data. Analytics only, not financial advice.",
     example: {
       kind: "market",
       btc_backdrop: { bias: "soft", support: [80000, 81000], resistance: [82500, 84800] },
       macro: { total_mcap_usd: 2742576601668, btc_dominance_pct: 60.04, fear_greed: { value: 49, classification: "Neutral" } },
-      breadth: { coins_tracked: 14, up_24h: 1, down_24h: 13 },
+      breadth: { coins_tracked: 13, up_24h: 1, down_24h: 12 },
       ...FRESH("2026-10-22T11:05:00Z", "2026-10-22T23:05:00Z"),
       payment: pay("market"),
     },
   },
   brief: {
     description:
-      "Use when an agent needs one daily summary of the crypto market to read or republish: JSON with a ready-to-use markdown field (or text/markdown with format=md) covering BTC price and indicator label, key levels, Fear & Greed, funding, top and bottom movers, yen watch, events in the next 48 hours, current paper-trade ideas (pending/open only) and sourced news. Not charged on invalid format or stale data. Analytics only, not financial advice.",
+      "Use when an agent needs one daily summary of the crypto market to read or republish: JSON with a ready-to-use markdown field (or text/markdown with format=md) covering BTC price and momentum/trend bias, key levels, Fear & Greed, funding, top and bottom movers, yen watch, events in the next 48 hours and sourced news (no trade plans). Not charged on invalid format or stale data. Analytics only, not financial advice.",
     query: FORMAT_QUERY,
     example: {
       kind: "brief",
       date: "2026-10-22",
       headline: "Crypto slides with stocks",
-      bitcoin: { usd: 81984, change_24h_pct: -1.62, signal: "Sell" },
+      bitcoin: { usd: 81984, change_24h_pct: -1.62, signal: "negative bias", signal_score: -0.34 },
       key_levels: [{ coin: "ETH", support: 3800, resistance: 4100 }],
       events_next_48h: [{ at_utc: "2026-10-22T23:30:00Z", title: "Japan September CPI" }],
       markdown: "# Lumi daily brief, Oct 22 2026 ...",
@@ -205,7 +205,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
       fear_greed: { value: 49, classification: "Neutral", previous: 54, change: -5 },
       derivatives: { instrument: "BTC-USDT-SWAP (OKX)", funding_rate_pct: 0.00657, open_interest_usd: 2462680121 },
       global: { total_mcap_usd: 2742576601668, btc_dominance_pct: 60.04 },
-      breadth: { coins_tracked: 14, up_24h: 1, down_24h: 13 },
+      breadth: { coins_tracked: 13, up_24h: 1, down_24h: 12 },
       ...FRESH("2026-10-22T11:05:00Z", "2026-10-22T23:05:00Z"),
       payment: pay("sentiment"),
     },
@@ -270,22 +270,22 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   scan: {
     description:
-      "Use when an agent needs to compare many coins in one call: a market-wide screen of 51 large-cap crypto assets with label, score, 1h/4h/1d labels, 1h RSI, price and 24h change per coin, strongest first, plus label counts and breadth. Computed live; freshness fields reflect the oldest coin included; not sold when fewer than 40 coins are fresh. Not charged on stale data. " + IDEAS_DISCLAIMER,
+      "Use when an agent needs to compare many coins in one call: a market-wide screen of 49 large-cap crypto assets with momentum/trend bias, score, 1h/4h/1d bias, 1h RSI, price and 24h change per coin, highest score first, plus bias counts and breadth. Computed live; freshness fields reflect the oldest coin included; not sold when fewer than 40 coins are fresh. Not charged on stale data. " + IDEAS_DISCLAIMER,
     example: {
       kind: "scan",
       product_line: MARKET_IDEAS_NAME,
       notice: MARKET_IDEAS_NOTICE,
-      count: 50,
-      label_counts: { Buy: 11, Neutral: 21, Sell: 12 },
-      breadth: { bullish: 14, neutral: 21, bearish: 15, read: "mixed" },
-      coins: [{ symbol: "ETH", label: "Buy", score: 0.41, tf: { "1h": "Buy", "4h": "Buy", "1d": "Neutral" }, rsi_1h: 61.2, price_usd: 2432.5, change_24h_pct: 2.1 }],
+      count: 49,
+      label_counts: { "positive bias": 14, "neutral bias": 21, "negative bias": 14 },
+      breadth: { positive: 14, neutral: 21, negative: 14, read: "mixed" },
+      coins: [{ symbol: "ETH", label: "positive bias", score: 0.41, tf: { "1h": "positive bias", "4h": "positive bias", "1d": "neutral bias" }, rsi_1h: 61.2, price_usd: 2432.5, change_24h_pct: 2.1 }],
       ...FRESH("2026-10-23T11:02:00Z", "2026-10-23T12:17:00Z"),
       payment: pay("scan"),
     },
   },
   lite: {
     description:
-      "Use when an agent only needs the headline indicator read for one of 51 large-cap crypto assets (XRP, BTC, ETH and more), cheaply: overall label and score, 1h/4h/1d labels, and price with 24h change. Same computation as /v1/signal/{coin}, minus the indicator breakdown. Pay in USDC on Base or Stellar, or XRP, RLUSD or USDC on the XRP Ledger. Not charged on unknown coins or stale data. " + IDEAS_DISCLAIMER,
+      "Use when an agent only needs the headline momentum/trend reading for one of 50 large-cap crypto assets (XRP, BTC, ETH and more), cheaply: overall bias and score, 1h/4h/1d bias, and price with 24h change. Same computation as /v1/signal/{coin}, without indicators. Pay in USDC on Base or Stellar, or XRP, RLUSD or USDC on the XRP Ledger. Not charged on unknown coins or stale data. " + IDEAS_DISCLAIMER,
     routeTemplate: "/v1/lite/:coin",
     pathParam: COIN_PARAM,
     example: {
@@ -293,10 +293,10 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
       product_line: MARKET_IDEAS_NAME,
       notice: MARKET_IDEAS_NOTICE,
       coin: { symbol: "XRP", name: "XRP" },
-      label: "Neutral",
+      label: "neutral bias",
       score: 0.05,
       price: { usd: 2.43, change_24h_pct: 0.4 },
-      timeframes: { "1h": { label: "Buy", score: 0.3 }, "4h": { label: "Neutral", score: 0 }, "1d": { label: "Sell", score: -0.3 } },
+      timeframes: { "1h": { label: "positive bias", score: 0.3 }, "4h": { label: "neutral bias", score: 0 }, "1d": { label: "negative bias", score: -0.3 } },
       ...FRESH("2026-10-23T11:02:00Z", "2026-10-23T12:17:00Z"),
       payment: pay("lite"),
     },
@@ -493,7 +493,7 @@ export function bazaarExtension(route: PaidRoute, arg?: string, query?: Record<s
 const HEADLINES: Record<PaidRoute, (subject?: string) => string> = {
   signal: (c) => (c ? `${c} technical indicator read (RSI, MACD, EMA)` : "Crypto technical indicator read (RSI, MACD, EMA)"),
   levels: (c) => `${c ? `${c} support` : "Crypto support"} and resistance levels`,
-  slate: () => "Crypto paper-trade journal (current ideas, educational)",
+  slate: () => "Crypto watchlist slate (momentum/trend bias, educational)",
   market: () => "Crypto market backdrop (BTC levels, macro, dominance, funding)",
   brief: () => "Daily crypto market brief (BTC, movers, key levels, news)",
   yen: () => "Yen carry-trade risk watch for crypto (USD/JPY, Nikkei, BOJ)",

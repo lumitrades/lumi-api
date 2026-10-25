@@ -2,7 +2,8 @@
  * Stage C products: cheap, focused reads (lite signal, all-coins scan, funding, Fear & Greed, next-48h events) and the
  * "should I pay this x402 URL?" verdict. Mechanical readings and observations only; not financial advice.
  */
-import { envelope, type CoinRef } from "./views";
+import { envelope, isExcludedCoin, type CoinRef } from "./views";
+import { BIASES, BIAS_NOTE, BIAS_RULE, biasLabel } from "./bias";
 import { compact, eventRows, catalystRows } from "./products";
 import { band } from "./feeds";
 import type { LiveRow } from "./live";
@@ -14,12 +15,12 @@ type Json = any;
 const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
 
 // ---------------------------------------------------------------- lite signal
-/** Lite read: label, score, price, 1h/4h/1d labels. Built from the full signal body. */
+/** Lite read: momentum/trend bias + score, price, 1h/4h/1d bias. Built from the full signal body. */
 export function liteView(full: Json) {
-  const tf = (k: string) => (full?.timeframes?.[k] ? { label: full.timeframes[k].label ?? null, score: num(full.timeframes[k].score) } : null);
+  const tf = (k: string) => (full?.timeframes?.[k] ? { label: biasLabel(full.timeframes[k].label, num(full.timeframes[k].score)), score: num(full.timeframes[k].score) } : null);
   return envelope("signal_lite", compact({
     coin: full?.coin,
-    label: full?.label ?? null,
+    label: biasLabel(full?.label, num(full?.score)),
     score: num(full?.score),
     price: { usd: num(full?.price?.usd), change_24h_pct: num(full?.price?.change_24h_pct) },
     timeframes: { "1h": tf("1h"), "4h": tf("4h"), "1d": tf("1d") },
@@ -29,32 +30,33 @@ export function liteView(full: Json) {
 }
 
 // ---------------------------------------------------------------- scan
-const ORDER = ["Strong Buy", "Buy", "Neutral", "Sell", "Strong Sell"];
-
-/** Every fresh live row, strongest score first, with label counts. */
+/** Every fresh live row, highest score first, with bias counts (momentum/trend readings, not buy/sell calls). */
 export function scanView(rows: LiveRow[], universe: CoinRef[]) {
-  const sorted = [...rows].sort((a, b) => (b.score ?? -9) - (a.score ?? -9));
-  const counts = Object.fromEntries(ORDER.map((l) => [l, sorted.filter((r) => r.label === l).length]));
-  const have = new Set(rows.map((r) => r.id));
-  const bull = counts["Strong Buy"] + counts["Buy"], bear = counts["Sell"] + counts["Strong Sell"];
+  const shown = rows.filter((r) => !isExcludedCoin(r));
+  const sorted = [...shown].sort((a, b) => (b.score ?? -9) - (a.score ?? -9));
+  const bias = (r: LiveRow) => biasLabel(r.label, r.score);
+  const counts = Object.fromEntries(BIASES.map((l) => [l, sorted.filter((r) => bias(r) === l).length]));
+  const have = new Set(shown.map((r) => r.id));
+  const pos = counts["positive bias"], neg = counts["negative bias"];
+  const tfBias = (r: LiveRow, k: string) => (r.timeframes[k] ? biasLabel(r.timeframes[k]?.label, r.timeframes[k]?.score) : null);
   return envelope("scan", {
     count: sorted.length,
-    universe: universe.length,
+    universe: universe.filter((c) => !isExcludedCoin(c)).length,
     label_counts: counts,
-    breadth: { bullish: bull, neutral: counts["Neutral"], bearish: bear, read: bull > bear * 1.5 ? "broadly bullish" : bear > bull * 1.5 ? "broadly bearish" : "mixed" },
+    breadth: { positive: pos, neutral: counts["neutral bias"], negative: neg, read: pos > neg * 1.5 ? "broadly positive" : neg > pos * 1.5 ? "broadly negative" : "mixed" },
     coins: sorted.map((r) => ({
       symbol: r.symbol,
       id: r.id,
-      label: r.label,
+      label: bias(r),
       score: r.score,
-      tf: { "1h": r.timeframes["1h"]?.label ?? null, "4h": r.timeframes["4h"]?.label ?? null, "1d": r.timeframes["1d"]?.label ?? null },
+      tf: { "1h": tfBias(r, "1h"), "4h": tfBias(r, "4h"), "1d": tfBias(r, "1d") },
       rsi_1h: num(r.timeframes["1h"]?.indicators?.rsi?.value),
       price_usd: num(r.price?.usd),
       change_24h_pct: num(r.price?.change_24h_pct),
       computed_at: new Date(r.computed_at).toISOString(),
     })),
-    missing: universe.filter((c) => !have.has(c.id)).map((c) => c.symbol),
-    method: "Same mechanical 1h/4h/1d indicator score as GET /v1/signal/{coin}, computed live from public exchange candles (1h refreshed about every 13 minutes). Coins without a fresh reading are listed in missing.",
+    missing: universe.filter((c) => !isExcludedCoin(c) && !have.has(c.id)).map((c) => c.symbol),
+    method: `Same mechanical 1h/4h/1d indicator score as GET /v1/signal/{coin}, computed live from public exchange candles (1h refreshed about every 13 minutes); ${BIAS_RULE}. ${BIAS_NOTE} Coins without a fresh reading are listed in missing.`,
   });
 }
 

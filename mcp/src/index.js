@@ -25,29 +25,29 @@ export const PAID_TOOLS = [
     path: (a) => `/v1/brief${a.format === "md" ? "?format=md" : ""}`,
     input: { format: z.enum(["json", "md"]).optional().describe("json (default) or md for ready-to-post markdown") },
     description:
-      "Today's crypto market brief from Lumi: BTC price/levels/signal, CoinMarketCap Fear & Greed, funding, top/bottom movers, key levels for 14 coins, yen watch, events in the next 48h, Lumi's current paper-trade ideas (pending/open only, no outcomes or P/L), sourced news. Paid: $0.02 per call (USDC on Base; or RLUSD, USDC or XRP at the live rate on the XRP Ledger).",
+      "Today's crypto market brief from Lumi: BTC price/levels/momentum bias, CoinMarketCap Fear & Greed, funding, top/bottom movers, key levels for 13 coins, yen watch, events in the next 48h, sourced news (no trade plans). Paid: $0.02 per call (USDC on Base; or RLUSD, USDC or XRP at the live rate on the XRP Ledger).",
   },
   {
     name: "lumi_signal",
     path: (a) => `/v1/signal/${encodeURIComponent(a.coin)}`,
-    input: { coin: z.string().describe("Ticker or CoinGecko id, any of the 51 in lumi_coins, e.g. BTC ETH XRP SOL AVAX TRX") },
-    description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Mechanical buy/sell read for one of 51 coins, computed live (1h refreshed about every 13 minutes): overall label + score, 1h/4h/1d labels and indicators (RSI, MACD, EMA, Bollinger, StochRSI, volume). Paid: $0.01 per call (USDC on Base; or RLUSD, USDC or XRP at the live rate on the XRP Ledger).",
+    input: { coin: z.string().describe("Ticker or CoinGecko id, any of the 50 in lumi_coins, e.g. BTC ETH XRP AVAX TRX") },
+    description: "Lumi Trades market readings. Information only, not investment advice or a recommendation. Lumi does not trade real money. Mechanical momentum/trend reading for one of 50 coins, computed live (1h refreshed about every 13 minutes): overall positive/neutral/negative bias + score, 1h/4h/1d bias and indicators (RSI, MACD, EMA, Bollinger, StochRSI, volume). Paid: $0.01 per call (USDC on Base; or RLUSD, USDC or XRP at the live rate on the XRP Ledger).",
   },
   {
     name: "lumi_levels",
     path: (a) => `/v1/levels/${encodeURIComponent(a.coin)}`,
     input: { coin: z.string().describe("Ticker or CoinGecko id of a watchlist/major coin, e.g. XRP BTC ETH") },
-    description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Lumi's support/resistance levels, bias, rule-based 7-day bull/base/bear scenario levels (not forecasts), commentary, catalysts and sources for one coin. Paid: $0.01 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger).",
+    description: "Lumi Trades market readings. Information only, not investment advice or a recommendation. Lumi does not trade real money. Lumi's support/resistance levels, a short bias note, commentary, catalysts and sources for one coin (no forecasts or scenario levels). Paid: $0.01 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger).",
   },
-  { name: "lumi_scan", path: () => "/v1/scan", input: {}, description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Whole-market screen in one call: buy/sell label, score, 1h/4h/1d labels, 1h RSI, price and 24h change for 50 large-cap coins, strongest first, plus label counts and breadth. Computed live. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
+  { name: "lumi_scan", path: () => "/v1/scan", input: {}, description: "Lumi Trades market readings. Information only, not investment advice or a recommendation. Lumi does not trade real money. Whole-market screen in one call: momentum/trend bias, score, 1h/4h/1d bias, 1h RSI, price and 24h change for 49 large-cap coins, highest score first, plus bias counts and breadth. Computed live. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
   {
     name: "lumi_lite",
     path: (a) => `/v1/lite/${encodeURIComponent(a.coin)}`,
-    input: { coin: z.string().describe("Ticker or CoinGecko id, any of the 51 in lumi_coins, e.g. BTC ETH XRP") },
-    description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Cheap headline read for one coin: overall buy/sell label and score, 1h/4h/1d labels, price and 24h change (lumi_signal adds the indicator breakdown). Paid: $0.004 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger).",
+    input: { coin: z.string().describe("Ticker or CoinGecko id, any of the 50 in lumi_coins, e.g. BTC ETH XRP") },
+    description: "Lumi Trades market readings. Information only, not investment advice or a recommendation. Lumi does not trade real money. Cheap headline read for one coin: overall momentum/trend bias and score, 1h/4h/1d bias, price and 24h change (lumi_signal adds the indicator breakdown). Paid: $0.004 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger).",
   },
-  { name: "lumi_slate", path: () => "/v1/slate", input: {}, description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Lumi's current paper-trade ideas (entry, stop, targets, leverage, conviction) and 'no setup' notes. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
-  { name: "lumi_market", path: () => "/v1/market", input: {}, description: "BTC backdrop (levels, scenario levels, signal), macro (yen note, total cap, dominance, Fear & Greed, funding) and breadth. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
+  { name: "lumi_slate", path: () => "/v1/slate", input: {}, description: "Lumi Trades market readings. Information only, not investment advice or a recommendation. Lumi does not trade real money. Lumi's current watchlist ideas as a momentum/trend bias with conviction, timeframe and expiry only (no entries, stops, targets or leverage), plus coins with no current idea. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
+  { name: "lumi_market", path: () => "/v1/market", input: {}, description: "BTC backdrop (support/resistance, momentum/trend bias), macro (yen note, total cap, dominance, Fear & Greed, funding) and breadth. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
   { name: "lumi_macro_yen", path: () => "/v1/macro/yen", input: {}, description: "Yen carry-trade watch: USD/JPY, Nikkei 225, rule-based carry-trade risk (low/watch/elevated) around 155, Japan events (BOJ, CPI). Paid: $0.01 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
   { name: "lumi_sentiment", path: () => "/v1/sentiment", input: {}, description: "CoinMarketCap Fear & Greed, BTC perp funding with a plain-English read, open interest, total cap/dominance, breadth across 14 coins. Paid: $0.005 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
   { name: "lumi_events", path: () => "/v1/events", input: {}, description: "Sourced upcoming macro/crypto events (timed releases in UTC + US Central, and dated per-coin catalysts). Paid: $0.005 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
@@ -95,10 +95,10 @@ export const PAID_TOOLS = [
   },
 ];
 
-const DISCLAIMER = "Lumi Trades data: analytics and education only, not financial advice. Trade ideas are paper trades.";
+const DISCLAIMER = "Lumi Trades data: analytics and education only, not financial advice and not a recommendation to buy, sell or hold.";
 const TRUST_DISCLAIMER = "Automated observations by Lumi, not a rating, endorsement or guarantee. Not financial advice.";
-const MARKET_IDEAS_NAME = "Lumi Market Ideas";
-const MARKET_IDEAS_NOTICE = "Paper-trade analysis, not investment advice. Lumi does not trade real money.";
+const MARKET_IDEAS_NAME = "Lumi Trades market readings";
+const MARKET_IDEAS_NOTICE = "Information only, not investment advice. Lumi does not trade real money.";
 const MARKET_IDEAS_TOOLS = new Set(["lumi_signal", "lumi_lite", "lumi_scan", "lumi_slate", "lumi_levels"]);
 const text = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] });
 
@@ -131,7 +131,7 @@ export function buildServer(client, opts = {}) {
 
   server.registerTool(
     "lumi_coins",
-    { title: "Lumi: supported coins (free)", description: "Free. The 51 coins Lumi covers (tickers and CoinGecko ids). Lumi Market Ideas (paper-trade analysis, not investment advice): signals for all 51; levels only for the 14 watchlist and major coins.", inputSchema: {} },
+    { title: "Lumi: supported coins (free)", description: "Free. The 50 coins Lumi covers (tickers and CoinGecko ids). Lumi Trades market readings (information only, not investment advice): signals for all 50; levels only for the 13 watchlist and major coins.", inputSchema: {} },
     async () => {
       const r = await client.free("/v1/coins");
       return text(r.body?.coins?.map((c) => ({ symbol: c.symbol, id: c.id, name: c.name, group: c.group })) ?? r.body);

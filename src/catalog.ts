@@ -35,7 +35,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     template: "/v1/signal/{coin}",
     summary:
       MARKET_IDEAS_LABEL + " " +
-      "Use this when you need a fast, mechanical buy/sell read on one coin before acting: overall label + score, per-timeframe (1h/4h/1d) labels and an indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume). 50 top coins (GET /v1/coins), computed live from public exchange candles; 1h refreshed about every 13 minutes. " + NOT_CHARGED,
+      "Use this when you need a fast, mechanical momentum/trend reading on one coin: overall positive/neutral/negative bias + score, per-timeframe (1h/4h/1d) bias and an indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume). 50 top coins (GET /v1/coins), computed live from public exchange candles; 1h refreshed about every 13 minutes. " + NOT_CHARGED,
     example: `/v1/signal/${EXAMPLE_COIN}`,
   },
   {
@@ -46,7 +46,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     template: "/v1/levels/{coin}",
     summary:
       MARKET_IDEAS_LABEL + " " +
-      "Use this when you need to know where price may stall or turn for one coin: support/resistance levels, bias, rule-based 7-day bull/base/bear scenario levels (not forecasts), commentary, catalysts and cited sources. " + NOT_CHARGED,
+      "Use this when you need reference price levels for one coin: support/resistance levels, a short bias note, commentary, catalysts and cited sources (no forecasts or scenario levels). " + NOT_CHARGED,
     example: `/v1/levels/${EXAMPLE_COIN}`,
   },
   {
@@ -57,7 +57,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     template: "/v1/scan",
     summary:
       MARKET_IDEAS_LABEL + " " +
-      "Use this when you need to screen the whole market in one call instead of 50: label, score, 1h/4h/1d labels, 1h RSI, price and 24h change for every coin in the live 50-coin universe (GET /v1/coins lists all 51 covered coins), strongest first, plus label counts and breadth. Computed live; 1h refreshed about every 13 minutes; freshness fields reflect the oldest coin included. Not sold when fewer than 40 coins are fresh. " + NOT_CHARGED,
+      "Use this when you need to screen the whole market in one call instead of 49: momentum/trend bias, score, 1h/4h/1d bias, 1h RSI, price and 24h change for every coin in the live 49-coin universe (GET /v1/coins lists all 50 covered coins), highest score first, plus bias counts and breadth. Computed live; 1h refreshed about every 13 minutes; freshness fields reflect the oldest coin included. Not sold when fewer than 40 coins are fresh. " + NOT_CHARGED,
     example: "/v1/scan",
   },
   {
@@ -73,13 +73,13 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
   },
   {
     route: "slate",
-    name: "Lumi Trades: paper-trade journal (current ideas)",
+    name: "Lumi Trades: watchlist slate (momentum/trend bias)",
     method: "GET",
     path: "/v1/slate",
     template: "/v1/slate",
     summary:
       MARKET_IDEAS_LABEL + " " +
-      "Use this when you need current, concrete trade setups to evaluate (paper trades, not advice): direction, entry/entry zone, stop, targets, leverage, conviction, plus 'no setup' notes. " + NOT_CHARGED,
+      "Use this when you want Lumi's current watchlist as a momentum/trend bias (information only, not advice): coin, positive/negative bias, conviction, timeframe and expiry, plus coins with no current idea. No entries, stops, targets or leverage. " + NOT_CHARGED,
     example: "/v1/slate",
   },
   {
@@ -89,7 +89,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     path: "/v1/market",
     template: "/v1/market",
     summary:
-      "Use this when you need the whole crypto backdrop in one call: BTC levels/scenario levels/signal, macro (USD/JPY note, total cap, dominance, Fear & Greed, BTC perp funding/OI) and breadth across tracked coins. " + NOT_CHARGED,
+      "Use this when you need the whole crypto backdrop in one call: BTC support/resistance and momentum/trend bias, macro (USD/JPY note, total cap, dominance, Fear & Greed, BTC perp funding/OI) and breadth across tracked coins. " + NOT_CHARGED,
     example: "/v1/market",
   },
   {
@@ -99,8 +99,8 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     path: "/v1/brief",
     template: "/v1/brief",
     summary:
-      "Use this when you need a ready-to-read daily crypto brief (the same read as Lumi's newsletter): BTC price/levels/signal, Fear & Greed, funding, " +
-      "top/bottom movers, key levels, yen watch, events in the next 48h, current paper-trade ideas (pending/open only, no outcomes or P/L) and sourced news. JSON with a " +
+      "Use this when you need a ready-to-read daily crypto brief (the same read as Lumi's newsletter): BTC price/levels/momentum bias, Fear & Greed, funding, " +
+      "top/bottom movers, key levels, yen watch, events in the next 48h and sourced news (no trade plans). JSON with a " +
       "ready-to-use `markdown` field; add ?format=md (or Accept: text/markdown) for text/markdown. " + NOT_CHARGED,
     example: "/v1/brief",
   },

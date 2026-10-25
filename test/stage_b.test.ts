@@ -55,9 +55,10 @@ describe("live signal engine", () => {
     expect(typeof p.change_24h_pct).toBe("number");
   });
 
-  it("universe: 50 unique coins, no political tokens", () => {
-    expect(LIVE_UNIVERSE).toHaveLength(50);
-    expect(new Set(LIVE_UNIVERSE.map((c) => c.id)).size).toBe(50);
+  it("universe: 49 unique coins (SOL excluded), no political tokens", () => {
+    expect(LIVE_UNIVERSE).toHaveLength(49);
+    expect(LIVE_UNIVERSE.map((c) => c.symbol)).not.toContain("SOL");
+    expect(new Set(LIVE_UNIVERSE.map((c) => c.id)).size).toBe(49);
     expect(LIVE_UNIVERSE.map((c) => c.symbol)).not.toContain("WLFI");
     expect(LIVE_UNIVERSE.map((c) => c.symbol)).not.toContain("TRUMP");
   });
@@ -109,7 +110,7 @@ describe("/v1/signal with live rows", () => {
   it("lists 50 coins; levels only for site coins", async () => {
     const { get } = await setup();
     const j: any = await (await get("/v1/coins")).json();
-    expect(j.count).toBe(50);
+    expect(j.count).toBe(49);
     const avax = j.coins.find((c: any) => c.symbol === "AVAX");
     expect(avax.levels).toBeNull();
     expect(avax.signal).toMatch(/\/v1\/signal\/AVAX$/);
@@ -126,7 +127,7 @@ describe("/v1/signal with live rows", () => {
     expect(j.kind).toBe("signal");
     expect(j.computed).toBe("live");
     expect(j.coin.symbol).toBe("AVAX");
-    expect(["Strong Buy", "Buy", "Neutral", "Sell", "Strong Sell"]).toContain(j.label);
+    expect(["positive bias", "neutral bias", "negative bias"]).toContain(j.label);
     expect(j.timeframes["1h"].indicators.rsi.value).toBeTypeOf("number");
     expect(j.timeframes["4h"]).toBeTruthy();
     expect(j.price.usd).toBeTypeOf("number");

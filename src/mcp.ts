@@ -92,15 +92,15 @@ export const PAID_TOOLS: PaidTool[] = [
     path: (a) => `/v1/brief${a.format === "md" ? "?format=md" : ""}`,
     inputSchema: { type: "object", properties: { format: { type: "string", enum: ["json", "md"], description: "json (default) or md for ready-to-post markdown" } } },
     description:
-      "Today's crypto market brief from Lumi: BTC price/levels/signal, CoinMarketCap Fear & Greed, funding, top/bottom movers, key levels for 14 coins, yen watch, events in the next 48h, Lumi's current paper-trade ideas (pending/open only, no outcomes or P/L), sourced news. Paid: $0.02 per call (USDC/RLUSD, or the XRP equivalent).",
+      "Today's crypto market brief from Lumi: BTC price/levels/momentum bias, CoinMarketCap Fear & Greed, funding, top/bottom movers, key levels for 13 coins, yen watch, events in the next 48h, sourced news (no trade plans). Paid: $0.02 per call (USDC/RLUSD, or the XRP equivalent).",
   },
   {
     name: "lumi_signal",
     route: "signal",
     coin: (a) => str(a.coin),
     path: (a) => `/v1/signal/${encodeURIComponent(str(a.coin) ?? "")}`,
-    inputSchema: COIN_ARG("Ticker or CoinGecko id, any of the 50 in lumi_coins, e.g. BTC ETH XRP SOL AVAX TRX"),
-    description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Mechanical buy/sell read for one of 50 top coins, computed live (1h refreshed about every 13 minutes): overall label + score, 1h/4h/1d labels and indicators (RSI, MACD, EMA, Bollinger, StochRSI, volume). Paid: $0.01 per call (USDC/RLUSD, or the XRP equivalent).",
+    inputSchema: COIN_ARG("Ticker or CoinGecko id, any of the 50 in lumi_coins, e.g. BTC ETH XRP AVAX TRX"),
+    description: "Lumi Trades market readings. Information only, not investment advice or a recommendation. Lumi does not trade real money. Mechanical momentum/trend reading for one of 50 top coins, computed live (1h refreshed about every 13 minutes): overall positive/neutral/negative bias + score, 1h/4h/1d bias and indicators (RSI, MACD, EMA, Bollinger, StochRSI, volume). Paid: $0.01 per call (USDC/RLUSD, or the XRP equivalent).",
   },
   {
     name: "lumi_levels",
@@ -108,14 +108,14 @@ export const PAID_TOOLS: PaidTool[] = [
     coin: (a) => str(a.coin),
     path: (a) => `/v1/levels/${encodeURIComponent(str(a.coin) ?? "")}`,
     inputSchema: COIN_ARG("Ticker or CoinGecko id of a watchlist/major coin, e.g. XRP BTC ETH"),
-    description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Lumi's support/resistance levels, bias, rule-based 7-day bull/base/bear scenario levels (not forecasts), commentary, catalysts and sources for one coin. Paid: $0.01 per call (USDC/RLUSD, or the XRP equivalent).",
+    description: "Lumi Trades market readings. Information only, not investment advice or a recommendation. Lumi does not trade real money. Lumi's support/resistance levels, a short bias note, commentary, catalysts and sources for one coin (no forecasts or scenario levels). Paid: $0.01 per call (USDC/RLUSD, or the XRP equivalent).",
   },
   {
     name: "lumi_scan",
     route: "scan",
     path: () => "/v1/scan",
     inputSchema: NO_ARGS,
-    description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Whole-market screen in one call: buy/sell label, score, 1h/4h/1d labels, 1h RSI, price and 24h change for all 50 top coins, strongest first, plus label counts and breadth. Computed live. Paid: $0.02 per call (USDC/RLUSD, or the XRP equivalent).",
+    description: "Lumi Trades market readings. Information only, not investment advice or a recommendation. Lumi does not trade real money. Whole-market screen in one call: momentum/trend bias, score, 1h/4h/1d bias, 1h RSI, price and 24h change for the 49 live-universe coins, highest score first, plus bias counts and breadth. Computed live. Paid: $0.02 per call (USDC/RLUSD, or the XRP equivalent).",
   },
   {
     name: "lumi_lite",
@@ -123,10 +123,10 @@ export const PAID_TOOLS: PaidTool[] = [
     coin: (a) => str(a.coin),
     path: (a) => `/v1/lite/${encodeURIComponent(str(a.coin) ?? "")}`,
     inputSchema: COIN_ARG("Ticker or CoinGecko id, any of the 50 in lumi_coins, e.g. BTC ETH XRP"),
-    description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Cheap headline read for one coin: overall buy/sell label and score, 1h/4h/1d labels, price and 24h change (lumi_signal adds the indicator breakdown). Paid: $0.004 per call (USDC/RLUSD, or the XRP equivalent).",
+    description: "Lumi Trades market readings. Information only, not investment advice or a recommendation. Lumi does not trade real money. Cheap headline read for one coin: overall momentum/trend bias and score, 1h/4h/1d bias, price and 24h change (lumi_signal adds the indicator breakdown). Paid: $0.004 per call (USDC/RLUSD, or the XRP equivalent).",
   },
-  { name: "lumi_slate", route: "slate", path: () => "/v1/slate", inputSchema: NO_ARGS, description: "Lumi Market Ideas. Paper-trade analysis, not investment advice. Lumi does not trade real money. Lumi's current paper-trade ideas (entry, stop, targets, leverage, conviction) and 'no setup' notes. Paid: $0.02 per call (USDC/RLUSD, or the XRP equivalent)." },
-  { name: "lumi_market", route: "market", path: () => "/v1/market", inputSchema: NO_ARGS, description: "BTC backdrop (levels, scenario levels, signal), macro (yen note, total cap, dominance, Fear & Greed, funding) and breadth. Paid: $0.02 per call (USDC/RLUSD, or the XRP equivalent)." },
+  { name: "lumi_slate", route: "slate", path: () => "/v1/slate", inputSchema: NO_ARGS, description: "Lumi Trades market readings. Information only, not investment advice or a recommendation. Lumi does not trade real money. Lumi's current watchlist ideas as a momentum/trend bias with conviction, timeframe and expiry only (no entries, stops, targets or leverage), plus coins with no current idea. Paid: $0.02 per call (USDC/RLUSD, or the XRP equivalent)." },
+  { name: "lumi_market", route: "market", path: () => "/v1/market", inputSchema: NO_ARGS, description: "BTC backdrop (support/resistance, momentum/trend bias), macro (yen note, total cap, dominance, Fear & Greed, funding) and breadth. Paid: $0.02 per call (USDC/RLUSD, or the XRP equivalent)." },
   { name: "lumi_macro_yen", route: "yen", path: () => "/v1/macro/yen", inputSchema: NO_ARGS, description: "Yen carry-trade watch: USD/JPY, Nikkei 225, rule-based carry-trade risk (low/watch/elevated) around 155, Japan events (BOJ, CPI). Paid: $0.01 per call (USDC/RLUSD, or the XRP equivalent)." },
   { name: "lumi_sentiment", route: "sentiment", path: () => "/v1/sentiment", inputSchema: NO_ARGS, description: "CoinMarketCap Fear & Greed, BTC perp funding with a plain-English read, open interest, total cap/dominance, breadth across 14 coins. Paid: $0.005 per call (USDC/RLUSD, or the XRP equivalent)." },
   { name: "lumi_events", route: "events", path: () => "/v1/events", inputSchema: NO_ARGS, description: "Sourced upcoming macro/crypto events (timed releases in UTC + US Central, and dated per-coin catalysts). Paid: $0.005 per call (USDC/RLUSD, or the XRP equivalent)." },
@@ -186,7 +186,7 @@ function toolList() {
       inputSchema: NO_ARGS,
       annotations: ro,
     },
-    { name: "lumi_coins", title: "Lumi: supported coins (free)", description: "Free. The 51 coins Lumi covers (tickers and CoinGecko ids). Lumi Market Ideas (paper-trade analysis, not investment advice): signals for all, levels for the watchlist and majors.", inputSchema: NO_ARGS, annotations: ro },
+    { name: "lumi_coins", title: "Lumi: supported coins (free)", description: "Free. The 50 coins Lumi covers (tickers and CoinGecko ids). Lumi Trades market readings (information only, not investment advice): signals for all, levels for the watchlist and majors.", inputSchema: NO_ARGS, annotations: ro },
     {
       name: "lumi_samples",
       title: "Lumi: free samples of every paid product",
@@ -263,10 +263,10 @@ function toolList() {
 }
 
 const INSTRUCTIONS =
-  "Lumi Trades (lumitrades.io), three groups. Lumi Trust: lumi_verdict (one-label pre-payment check, $0.01 on the API: checks_passed / check_first / checks_failed / no_data), lumi_trust_check (paid, full coded reasons), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
+  "Lumi Trades (lumitrades.io), three groups. Lumi Trades seller checks: lumi_verdict (one-label pre-payment check, $0.01 on the API: checks_passed / check_first / checks_failed / no_data), lumi_trust_check (paid, full coded reasons), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
   "Market data: daily brief, BTC/macro backdrop, yen carry-trade watch, sentiment, funding rates, Fear & Greed, events and the next 48h, and a daily policy brief " +
   "(BIS, IMF, US regulators, major banks and tokenization firms mapped to XRP, XLM, XDC, QNT, AXL, HBAR). " +
-  `${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}): live signals for 51 coins (lumi_signal, cheap lumi_lite, or all at once with lumi_scan), lumi_levels support/resistance, lumi_slate current paper-trade ideas. ` +
+  `${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}): live momentum/trend readings for 50 coins (lumi_signal, cheap lumi_lite, or all at once with lumi_scan), lumi_levels support/resistance, lumi_slate the watchlist bias slate. ` +
   "Free: lumi_catalog, lumi_coins, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_verdict (returns the $0.01 x402 terms for /v1/verdict; the free signed GET /v1/check has the same data), lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d, Audit $99, free tier and 14-day trial) and lumi_trust_feed (free 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d); lumi_vendor_report is the paid full history for one vendor ($0.02). " +
   "Paid tools cost $0.003 to $0.10 per call (the daily policy brief is $0.10, everything else $0.02 or less) via x402; paid in XRP, RLUSD or USDC on the XRP Ledger or USDC on Base or Stellar; " + TRIAL_SHORT + "; without access they return the price and how to pay. " +
   PAID_TOOLS_NOTE + " Analytics and education only, not financial advice. Cite 'Lumi Trades (lumitrades.io)'.";

@@ -2,14 +2,14 @@
 
 MCP server (stdio) for **[Lumi Trades](https://lumitrades.io)**: **Lumi Check**, a free signed allow/warn/block check before your agent pays an x402 seller,
 backed by Lumi's own paid test-buys on XRPL, Base and Stellar. Also a **daily Institutional & Policy Brief**, crypto market data, and, as a separate product line,
-**Lumi Market Ideas** for 51 coins (educational, not advice). Works with Claude Desktop, Cursor, Claude Code, Cline, Windsurf and any other MCP client.
+**Lumi Trades market readings** for 50 coins (educational, not advice). Works with Claude Desktop, Cursor, Claude Code, Cline, Windsurf and any other MCP client.
 Paid tools **pay per call via x402 with your own wallet: USDC on Base (gasless) or XRP / RLUSD / USDC on the XRP Ledger**
 (the API also accepts USDC on Stellar; this package pays only on Base or the XRP Ledger).
 No API key, no account: each paid tool call is one small payment, signed locally on your machine.
 
-> Analytics and education only. Not financial advice. Trade ideas are hypothetical paper trades for illustration, not orders or signals to copy.
+> Analytics and education only. Not financial advice and not a recommendation to buy, sell or hold. Readings are mechanical momentum/trend summaries, not forecasts.
 >
-> **Lumi Market Ideas** (`lumi_signal`, `lumi_lite`, `lumi_scan`, `lumi_levels`, `lumi_slate`): Paper-trade analysis, not investment advice. Lumi does not trade real money.
+> **Lumi Trades market readings** (`lumi_signal`, `lumi_lite`, `lumi_scan`, `lumi_levels`, `lumi_slate`): Information only, not investment advice. Lumi does not trade real money.
 
 **No install needed to browse:** the same tools are also served remotely at `https://api.lumitrades.io/mcp` (Streamable HTTP),
 for clients that take a remote MCP server URL. A remote connector has no wallet, so its paid tools return the price and how to pay;
@@ -23,10 +23,10 @@ use this package when you want paid tools to pay automatically from your own wal
 |---|---|---|---|
 | `lumi_catalog` | free | – | Endpoints, live prices, this server's wallet + spend caps |
 | `lumi_samples` | free | `route?` | Truncated, labelled samples of every paid product with USD price and full URL |
-| `lumi_coins` | free | – | The 51 coins covered: Lumi Market Ideas signals for all, levels only for the 14 watchlist/major coins (XRP XLM HBAR XDC AXL ZBCN SHX BTC ETH SOL DOGE ADA LINK SUI) |
+| `lumi_coins` | free | – | The 50 coins covered: Lumi Trades market readings for all, levels only for the 13 watchlist/major coins (XRP XLM HBAR XDC AXL ZBCN SHX BTC ETH DOGE ADA LINK SUI) |
 | `lumi_quote` | free | – | The x402 quote for any paid path, without paying |
 
-**Lumi Trust: x402 seller checks**
+**Lumi Trades seller checks (x402)**
 
 | Tool | Paid? | Price (USD) | What you get |
 |---|---|---|---|
@@ -44,7 +44,7 @@ use this package when you want paid tools to pay automatically from your own wal
 
 | Tool | Paid? | Price (USD) | What you get |
 |---|---|---|---|
-| `lumi_brief` | paid | $0.02 | Today's market brief (BTC, CoinMarketCap Fear & Greed, movers, key levels, yen, events, current paper-trade ideas, news). `format: "md"` for markdown |
+| `lumi_brief` | paid | $0.02 | Today's market brief (BTC, CoinMarketCap Fear & Greed, movers, key levels, yen, events, news; no trade plans). `format: "md"` for markdown |
 | `lumi_market` | paid | $0.02 | BTC + macro backdrop and breadth |
 | `lumi_macro_yen` | paid | $0.01 | USD/JPY, Nikkei, carry-trade risk around 155, Japan events |
 | `lumi_sentiment` | paid | $0.005 | Fear & Greed, funding read, OI, dominance, breadth |
@@ -54,15 +54,15 @@ use this package when you want paid tools to pay automatically from your own wal
 | `lumi_events_48h` | paid | $0.003 | What is scheduled in the next 48 hours (UTC + US Central), why it matters, sources |
 | `lumi_institutional_brief` | paid | $0.10 | Daily Institutional & Policy Brief: BIS, IMF, US Treasury/regulators, JPMorgan, SBI, Cross River, Securitize, R3 and others mapped to XRP, XLM, XDC, QNT, AXL, HBAR (confirmed vs indirect-alignment links, sourced). `format: "md"` for markdown. Allowed by the default caps (0.30 USD / 0.25 XRP) |
 
-**Lumi Market Ideas** (Paper-trade analysis, not investment advice. Lumi does not trade real money.)
+**Lumi Trades market readings** (Information only, not investment advice. Lumi does not trade real money.)
 
 | Tool | Paid? | Price (USD) | What you get |
 |---|---|---|---|
-| `lumi_signal` | paid | $0.01 | Buy/sell read for one coin (1h/4h/1d + indicators) |
-| `lumi_levels` | paid | $0.01 | Support/resistance, rule-based 7-day scenario levels (not forecasts), commentary for one coin |
-| `lumi_scan` | paid | $0.02 | Whole-market screen: buy/sell label, score, 1h RSI, price and 24h change for 50 large-cap coins, strongest first |
+| `lumi_signal` | paid | $0.01 | Momentum/trend bias (positive/neutral/negative) + score for one coin (1h/4h/1d + indicators) |
+| `lumi_levels` | paid | $0.01 | Support/resistance and commentary for one coin |
+| `lumi_scan` | paid | $0.02 | Whole-market screen: momentum/trend bias, score, 1h RSI, price and 24h change for 49 large-cap coins, highest score first |
 | `lumi_lite` | paid | $0.004 | Cheap headline read for one coin: label, score, 1h/4h/1d labels, price, 24h change |
-| `lumi_slate` | paid | $0.02 | Current paper-trade ideas |
+| `lumi_slate` | paid | $0.02 | Current watchlist as momentum/trend bias (no entries, stops, targets or leverage) |
 
 How to pay, in order of preference: **1. USDC on Base** (gasless, `EVM_PRIVATE_KEY`), **2. the XRP Ledger** (`XRPL_SEED`):
 RLUSD or USDC at the same USD price, or XRP at the live XRP/USD rate (quoted per call, rounded up to 0.0001 XRP).

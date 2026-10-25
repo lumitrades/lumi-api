@@ -7,11 +7,12 @@
 import type { Json } from "./data";
 import { sanitize, splitSentences } from "./sanitize";
 import { MARKET_IDEAS_KINDS, MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, TRUST_DISCLAIMER } from "./lines";
+import { BIAS_NOTE, BIAS_RULE, biasFromDirection, biasLabel, neutralText, neutralWords } from "./bias";
 
 export const SOURCE = "lumitrades.io";
 export const DISCLAIMER =
-  "Analytics and education only. Not financial advice. Trade ideas are hypothetical paper trades for illustration, " +
-  "not orders or signals to copy. Crypto is volatile and leverage can magnify losses. Do your own research.";
+  "Analytics and education only. Not financial advice and not a recommendation to buy, sell or hold any asset. " +
+  "Readings are mechanical summaries of recent price action, not forecasts. Crypto is volatile. Do your own research.";
 
 export interface CoinRef {
   id: string;
@@ -30,18 +31,23 @@ export const FALLBACK_COINS: CoinRef[] = [
   ["xdce-crowd-sale", "XDC", "XDC Network", "watchlist"],
   ["bitcoin", "BTC", "Bitcoin", "majors"],
   ["ethereum", "ETH", "Ethereum", "majors"],
-  ["solana", "SOL", "Solana", "majors"],
   ["dogecoin", "DOGE", "Dogecoin", "majors"],
   ["cardano", "ADA", "Cardano", "majors"],
   ["chainlink", "LINK", "Chainlink", "majors"],
   ["sui", "SUI", "Sui", "majors"],
 ].map(([id, symbol, name, group]) => ({ id, symbol, name, group }));
 
+/** Coins never shown in public output (no Solana). */
+export const EXCLUDED_COIN_IDS = new Set(["solana"]);
+export const EXCLUDED_SYMBOLS = new Set(["SOL"]);
+export const isExcludedCoin = (c: { id?: unknown; symbol?: unknown }) =>
+  EXCLUDED_COIN_IDS.has(String(c?.id ?? "")) || EXCLUDED_SYMBOLS.has(String(c?.symbol ?? "").toUpperCase());
+
 export function coinList(coinsJson: Json | undefined): CoinRef[] {
   const list = coinsJson?.coins;
   if (!Array.isArray(list) || list.length === 0) return FALLBACK_COINS;
   return list
-    .filter((c: Json) => c && typeof c.id === "string" && typeof c.symbol === "string")
+    .filter((c: Json) => c && typeof c.id === "string" && typeof c.symbol === "string" && !isExcludedCoin(c))
     .map((c: Json) => ({ id: c.id, symbol: String(c.symbol).toUpperCase(), name: String(c.name ?? c.symbol), group: String(c.group ?? "") }));
 }
 
@@ -58,7 +64,7 @@ export function envelope(kind: string, data: Record<string, unknown>, extra: Rec
     source: SOURCE,
     ...sanitize(data),
     ...extra,
-    // Lumi Market Ideas (signal, lite, scan, levels, slate): additive, backward-compatible label + notice.
+    // Lumi Trades market readings (signal, lite, scan, levels, slate): product line + notice.
     ...(MARKET_IDEAS_KINDS.includes(kind) ? { product_line: MARKET_IDEAS_NAME, notice: MARKET_IDEAS_NOTICE } : {}),
     // Trust responses carry the trust disclaimer (no trade-idea wording).
     disclaimer: kind === "trust_check" ? TRUST_DISCLAIMER : DISCLAIMER,
@@ -88,7 +94,8 @@ function indicatorSummary(ind: Json) {
   const pick = (k: string, fields: string[]) => {
     const x = ind[k];
     if (!x) return undefined;
-    return Object.fromEntries(fields.filter((f) => x[f] !== undefined).map((f) => [f, x[f]]));
+    // state / cross strings are reworded ("bullish momentum" -> "positive momentum")
+    return Object.fromEntries(fields.filter((f) => x[f] !== undefined).map((f) => [f, typeof x[f] === "string" ? neutralWords(x[f]) : x[f]]));
   };
   return {
     rsi: pick("rsi", ["value", "state", "points"]),
@@ -109,7 +116,7 @@ export function signalView(coin: CoinRef, signals: Json, prices: Json) {
     const t = s.timeframes?.[tf];
     if (!t) continue;
     tfs[tf] = {
-      label: t.label ?? null,
+      label: biasLabel(t.label, num(t.score)),
       score: num(t.score),
       points: num(t.points),
       max_points: num(t.max_points),
@@ -119,15 +126,15 @@ export function signalView(coin: CoinRef, signals: Json, prices: Json) {
   }
   return envelope("signal", {
     coin: coin,
-    label: s.label ?? null,
+    label: biasLabel(s.label, num(s.score)),
     score: num(s.score),
     price: priceBlock(prices, coin.id) ?? { usd: num(s.price) },
     timeframes: tfs,
     method: {
       timeframe_weights: signals?.method?.timeframe_weights ?? null,
-      labels: signals?.method?.labels ?? null,
+      labels: BIAS_RULE,
       points: signals?.method?.points ?? null,
-      note: "Mechanical indicator readings from exchange candles; not predictions.",
+      note: `Mechanical indicator readings from exchange candles. ${BIAS_NOTE}`,
     },
     generated_utc: signals?.generated_utc ?? null,
   });
@@ -139,50 +146,41 @@ export function liveSignalView(coin: CoinRef, row: Json) {
   for (const tf of ["1h", "4h", "1d"]) {
     const t = row?.timeframes?.[tf];
     if (!t) continue;
-    tfs[tf] = { label: t.label ?? null, score: num(t.score), points: num(t.points), max_points: num(t.max_points), candle_time: t.candle_time ?? null, indicators: indicatorSummary(t.indicators) };
+    tfs[tf] = { label: biasLabel(t.label, num(t.score)), score: num(t.score), points: num(t.points), max_points: num(t.max_points), candle_time: t.candle_time ?? null, indicators: indicatorSummary(t.indicators) };
   }
   const p = row?.price ?? {};
   return envelope("signal", {
     coin,
-    label: row?.label ?? null,
+    label: biasLabel(row?.label, num(row?.score)),
     score: num(row?.score),
     price: { usd: num(p.usd), change_24h_pct: num(p.change_24h_pct), high_24h: num(p.high_24h), low_24h: num(p.low_24h), volume_24h_usd: num(p.volume_24h_usd), as_of: new Date(row.computed_at).toISOString() },
     timeframes: tfs,
     method: {
       timeframe_weights: { "1h": 0.25, "4h": 0.35, "1d": 0.4 },
-      labels: "score >= 0.5 Strong Buy; >= 0.15 Buy; > -0.15 Neutral; > -0.5 Sell; else Strong Sell",
+      labels: BIAS_RULE,
       points: "RSI +-1/+-0.5, MACD hist +-1 (+-0.5 fresh cross), EMA stack +-1 (+-0.5 mixed), EMA200 +-1 (1d), Bollinger %B outside bands +-0.5, StochRSI turn +-0.5, volume >=1.5x avg +-0.5; score = points / max",
-      note: "Mechanical indicator readings computed live from public exchange candles (1h refreshed about every 13 minutes; 4h built from 1h; 1d every few hours); not predictions.",
+      note: `Mechanical indicator readings computed live from public exchange candles (1h refreshed about every 13 minutes; 4h built from 1h; 1d every few hours). ${BIAS_NOTE}`,
     },
     computed: "live",
     generated_utc: new Date(row.computed_at).toISOString(),
   });
 }
 
-/** Label carried on 7-day scenario levels wherever they appear. */
-export const SCENARIO_LABEL = "rule-based scenario levels, not forecasts";
-
+/**
+ * Support/resistance, bias note, commentary and catalysts for one coin. Scenario price levels (the site's 7-day
+ * projection) are not published; bias and commentary are reworded to neutral language and trade-plan sentences dropped.
+ */
 export function levelsBlock(a: Json) {
   if (!a) return null;
-  const scenarios = a.projection
-    ? {
-        label: SCENARIO_LABEL,
-        horizon_days: num(a.projection.horizon_days),
-        bull: num(a.projection.bull),
-        base: num(a.projection.base),
-        bear: num(a.projection.bear),
-      }
-    : null;
   return {
-    bias: a.bias ?? null,
+    bias: neutralText(a.bias),
     support: Array.isArray(a.support) ? a.support.filter((x: unknown) => num(x) !== null) : [],
     resistance: Array.isArray(a.resistance) ? a.resistance.filter((x: unknown) => num(x) !== null) : [],
-    // `scenarios` is the preferred name; `projection` is kept unchanged-in-shape for existing clients (same values, same label).
-    scenarios,
-    projection: scenarios ? { ...scenarios } : null,
-    commentary: typeof a.commentary === "string" ? a.commentary : null,
+    commentary: neutralText(a.commentary),
     catalysts: Array.isArray(a.catalysts)
-      ? a.catalysts.map((c: Json) => ({ date: c.date, kind: c.kind, text: c.text, source: c.source, url: c.url }))
+      ? a.catalysts
+          .map((c: Json) => ({ date: c.date, kind: c.kind, text: neutralText(c.text), source: c.source, url: c.url }))
+          .filter((c: Json) => c.text)
       : [],
     sources: Array.isArray(a.sources) ? a.sources.map((s: Json) => ({ title: s.title, url: s.url })) : [],
   };
@@ -196,20 +194,21 @@ export function levelsView(coin: CoinRef, analysis: Json, prices: Json) {
     price: priceBlock(prices, coin.id),
     ...levelsBlock(a),
     analysis_as_of: analysis?.as_of ?? null,
-    analysis_label: analysis?.label ?? null,
+    analysis_label: neutralText(analysis?.label),
   });
 }
 
 /**
- * Fields of a CURRENT paper-trade idea (the plan only). Source: lumitrades.io/data/ideas.json, which carries pending/open
- * ideas only (since Oct 24 2026 the trade history is private and /v1/trades is gone). Outcome and P/L fields (exit price,
- * realized or unrealized P&L, mark price, targets hit, close/cancel details) are never copied, even if present upstream.
+ * Fields of a CURRENT watchlist idea that are published. Source: lumitrades.io/data/ideas.json (pending/open ideas only).
+ * No trade plan is published: entries/entry zones, stops, targets, leverage, move-stop-to-break-even, triggers and the
+ * written reasoning (which quotes those levels) are never copied, nor any outcome or P/L field. Direction is shown as a
+ * momentum/trend bias.
  */
-export const TRADE_FIELDS = [
-  "id", "direction", "market", "leverage", "conviction", "leverage_reason", "status",
-  "entry", "planned_entry", "entry_zone", "stop", "targets", "move_stop_to_be",
-  "opened_at", "filled_at", "expiry", "fill_by", "expires", "timeframe", "timeframe_note",
-  "plan_type", "trigger", "parent_id", "reasoning",
+export const TRADE_FIELDS = ["id", "conviction", "status", "timeframe", "opened_at", "expires"] as const;
+/** Upstream fields that are never published (documented so tests can assert their absence). */
+export const STRIPPED_TRADE_FIELDS = [
+  "direction", "market", "leverage", "leverage_reason", "entry", "planned_entry", "entry_zone", "stop", "targets",
+  "move_stop_to_be", "trigger", "plan_type", "parent_id", "reasoning", "timeframe_note", "filled_at", "expiry", "fill_by",
 ] as const;
 
 export const ACTIVE_IDEA = new Set(["open", "pending"]);
@@ -222,29 +221,34 @@ export function activeIdeas(doc: Json): Json[] {
 
 export function tradeView(t: Json, coins: CoinRef[]) {
   const coin = coins.find((c) => c.id === t.coin);
-  const out: Record<string, unknown> = { coin: coin ? coin.symbol : t.coin };
+  const out: Record<string, unknown> = { coin: coin ? coin.symbol : t.coin, bias: biasFromDirection(t.direction) };
   for (const f of TRADE_FIELDS) {
     if (t[f] === undefined || t[f] === null) continue;
     out[f] = t[f];
   }
+  if (out.expires === undefined && (t.expiry ?? t.fill_by)) out.expires = t.expiry ?? t.fill_by;
   return out;
 }
 
+export const SLATE_RULES =
+  "At most one active idea per watchlist coin and at most 6 at once; each shows only a momentum/trend bias, conviction and timeframe. Coins without an active idea are listed in no_setup.";
+
 export function slateView(ideas: Json, coins: CoinRef[]) {
-  const active = activeIdeas(ideas);
-  const noSetup: Record<string, string> = {};
+  const active = activeIdeas(ideas).filter((t) => !isExcludedCoin({ id: t.coin, symbol: t.coin }));
+  const noSetup: string[] = [];
   for (const [id, entry] of Object.entries<Json>(ideas?.slate?.coins ?? {})) {
-    if (!entry?.trade_id && typeof entry?.note === "string") {
+    if (EXCLUDED_COIN_IDS.has(id)) continue;
+    if (!entry?.trade_id) {
       const c = coins.find((x) => x.id === id);
-      noSetup[c ? c.symbol : id] = entry.note;
+      noSetup.push(c ? c.symbol : id);
     }
   }
   return envelope("slate", {
     slate_as_of: ideas?.slate?.as_of ?? null,
-    rules: ideas?.slate?.rules ?? null,
+    rules: SLATE_RULES,
     ideas: active.map((t) => tradeView(t, coins)),
-    no_setup_notes: noSetup,
-    note: "Lumi's current paper-trade ideas (pending/open) only: no closed ideas, outcomes or P/L.",
+    no_setup: noSetup,
+    note: "Lumi's current watchlist ideas (pending/open) as a momentum/trend bias only: no entries, stops, targets, leverage, closed ideas, outcomes or P/L.",
     evaluated_utc: ideas?.as_of ?? null,
   });
 }
@@ -266,7 +270,7 @@ export function marketView(analysis: Json, signals: Json, prices: Json, context:
   let up = 0;
   let down = 0;
   for (const c of coins) {
-    const l = signals?.coins?.[c.id]?.label;
+    const l = biasLabel(signals?.coins?.[c.id]?.label, num(signals?.coins?.[c.id]?.score));
     if (l) labels[l] = (labels[l] ?? 0) + 1;
     const ch = num(prices?.assets?.[c.id]?.change_24h);
     if (ch !== null) ch >= 0 ? up++ : down++;
@@ -280,10 +284,10 @@ export function marketView(analysis: Json, signals: Json, prices: Json, context:
       price: priceBlock(prices, "bitcoin"),
       signal: btcSig
         ? {
-            label: btcSig.label ?? null,
+            label: biasLabel(btcSig.label, num(btcSig.score)),
             score: num(btcSig.score),
             by_timeframe: Object.fromEntries(
-              ["1h", "4h", "1d"].map((tf) => [tf, btcSig.timeframes?.[tf]?.label ?? null]),
+              ["1h", "4h", "1d"].map((tf) => [tf, biasLabel(btcSig.timeframes?.[tf]?.label, num(btcSig.timeframes?.[tf]?.score))]),
             ),
           }
         : null,

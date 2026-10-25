@@ -13,10 +13,10 @@ function setup() {
 }
 const IDEAS = ["/v1/signal/XRP", "/v1/lite/XRP", "/v1/scan", "/v1/slate", "/v1/levels/XRP"];
 
-describe("Lumi Market Ideas is separated from the trust brand", () => {
+describe("Lumi Trades market readings are separated from the trust brand", () => {
   it("market-ideas responses carry the notice (body fields + headers), additively; 402s too", async () => {
     const get = setup();
-    expect(MARKET_IDEAS_NOTICE).toBe("Paper-trade analysis, not investment advice. Lumi does not trade real money.");
+    expect(MARKET_IDEAS_NOTICE).toBe("Rule-based readings, not investment advice. Lumi does not trade real money.");
     for (const p of IDEAS) {
       const q = await get(p);
       expect(q.headers.get("X-Lumi-Product-Line"), p).toBe(MARKET_IDEAS_NAME);
@@ -75,7 +75,7 @@ describe("Lumi Market Ideas is separated from the trust brand", () => {
     expect(card.description).toContain(MARKET_IDEAS_NOTICE);
     const ideaSkills = card.skills.filter((s: any) => ["signal", "lite", "scan", "levels", "slate"].includes(s.id));
     expect(ideaSkills.length).toBe(5);
-    for (const s of ideaSkills) expect(s.name, s.id).toMatch(/^Lumi Market Ideas: /);
+    for (const s of ideaSkills) expect(s.name, s.id).toMatch(/^Lumi Trades market readings: /);
     for (const r of MARKET_IDEAS_ROUTES) {
       const b = (BAZAAR_ROUTES as any)[r];
       // Owner decision 2026-10-25: listings start "Use when", one brand ("Lumi Trades"), disclaimers at the end.

@@ -66,8 +66,8 @@ describe("A2A JSON-RPC", () => {
     const m = r.body.result.message;
     expect(m).toMatchObject({ role: "ROLE_AGENT", metadata: { skill: "coins" } });
     expect(m.contextId).toBeTruthy();
-    expect(m.parts[0].text).toMatch(/50 coins/);
-    expect(m.parts[1].data.coins).toHaveLength(50);
+    expect(m.parts[0].text).toMatch(/49 coins/);
+    expect(m.parts[1].data.coins).toHaveLength(49);
     const cat = await rpc(send1([{ data: { skill: "catalog" } }]));
     expect(cat.body.result.message.parts[1].data.networks.map((n: any) => n.network)).toEqual(["eip155:84532", "xrpl:1"]);
     expect(fac.calls).toHaveLength(0);

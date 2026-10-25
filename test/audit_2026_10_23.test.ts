@@ -121,10 +121,10 @@ describe("L-1 trial text", () => {
 });
 
 describe("L-5 agent card coin counts", () => {
-  it("says 51 coins for signals and 14 for levels (1.1.7: matches GET /v1/coins)", async () => {
+  it("says 50 coins for signals and 13 for levels (1.1.7: matches GET /v1/coins)", async () => {
     const card = await text(setup(), "/.well-known/agent-card.json");
-    expect(card).toMatch(/signals cover 51 coins/);
-    expect(card).toMatch(/14 watchlist and major coins/);
+    expect(card).toMatch(/signals cover 50 coins/);
+    expect(card).toMatch(/13 watchlist and major coins/);
     expect(card).not.toMatch(/top 50 coins|13 tracked coins/);
   });
 });
