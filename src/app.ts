@@ -238,10 +238,13 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   };
   const extraTestWallets = split(env.SALES_TEST_WALLETS);
   /** Per-request paywall deps: records the sale, then alerts in the background (waitUntil) when configured. */
+  const paidByCtx = new WeakMap<object, boolean>();
   const paywallDeps = (ctx?: WaitUntil): PaywallDeps => ({
     ...deps,
     onSale: async (sale) => {
       const row = toRow(sale, now(), extraTestWallets);
+      // Lets the request log tag this request's paid call as Lumi's own test (ctx is per request).
+      if (ctx) paidByCtx.set(ctx, row.isTest);
       const inserted = await insertWithRetry(sales, row).catch((e) => {
         // Both attempts failed: log the whole row (public addresses only, no IP) so it can be backfilled from Workers Logs.
         deps.log?.({ event: "sale_record_error", tx: row.tx, error: String(e), row });
@@ -1122,7 +1125,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         return json(401, { error: "owner_key_required", hint: "Authorization: Bearer <OWNER_MCP_KEY>" }, { "Cache-Control": "no-store", "WWW-Authenticate": "Bearer" });
       }
       const days = Number(url.searchParams.get("days") ?? "7");
-      return json(200, { ...(await trafficSummary(traffic, now(), days)), logging: trafficOn }, { "Cache-Control": "no-store" });
+      return json(200, { ...(await trafficSummary(traffic, now(), days, sales)), logging: trafficOn }, { "Cache-Control": "no-store" });
     }
     // Owner-only tier-1 delivery outcome aggregates (counters per day per seller host).
     if (path === "/v1/owner/check-outcomes") {
@@ -1473,7 +1476,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     logTraffic(request: Request, response: Response, ctx?: WaitUntil) {
       if (!trafficOn || request.method === "OPTIONS") return;
       const p = trafficRow(request, response, env.TRAFFIC_SALT || env.INVOICE_SECRET || undefined, now())
-        .then((row) => trafficBuf.add(row, now()))
+        .then((row) => trafficBuf.add(ctx && row.paid && paidByCtx.get(ctx) ? { ...row, paid_test: true } : row, now()))
         .catch(trafficErr);
       if (ctx) ctx.waitUntil(p);
     },

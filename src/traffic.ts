@@ -19,6 +19,8 @@ export interface TrafficRow {
   country: string | null;
   is_402: boolean;
   paid: boolean;
+  /** Paid by one of Lumi's own wallets (sales is_test); set by the app from the recorded sale, absent on legacy rows. */
+  paid_test?: boolean;
 }
 
 /** One flushed aggregate: every request counted in one isolate during one flush window (single UTC day). */
@@ -29,6 +31,8 @@ export interface TrafficBatch {
   requests: number;
   r402: number;
   paid: number;
+  /** Of `paid`, calls paid by Lumi's own test wallets (absent on batches written before Oct 25 2026). */
+  paid_test?: number;
   browser: number;
   /** path -> [requests, 402s, paid] */
   paths: Record<string, [number, number, number]>;
@@ -184,6 +188,7 @@ export function countRow(b: TrafficBatch, r: TrafficRow, ips?: Set<string>) {
   b.to = Math.max(b.to, r.ts);
   if (r.is_402) b.r402++;
   if (r.paid) b.paid++;
+  if (r.paid && r.paid_test) b.paid_test = (b.paid_test ?? 0) + 1;
   if (r.ua_class === "browser") b.browser++;
   const p = (b.paths[r.path] ??= [0, 0, 0]);
   p[0]++;
@@ -213,7 +218,9 @@ export class TrafficBuffer {
     if (this.open && this.open.b.day !== row.day) pending = this.flush();
     if (!this.open) this.open = { b: emptyBatch(row.day, row.ts), ips: new Set(), started: now };
     countRow(this.open.b, row, this.open.ips);
-    const due = now - this.open.started >= (this.opts.flushMs ?? TRAFFIC_FLUSH_MS) || this.open.b.requests >= (this.opts.maxRequests ?? TRAFFIC_FLUSH_MAX);
+    // A paid call flushes at once: paid calls are rare (one extra D1 row each) and often arrive in a short burst on an
+    // isolate that then idles and is evicted before the 2-minute window would flush, which silently lost them (Oct 23-25 2026).
+    const due = row.paid || now - this.open.started >= (this.opts.flushMs ?? TRAFFIC_FLUSH_MS) || this.open.b.requests >= (this.opts.maxRequests ?? TRAFFIC_FLUSH_MAX);
     if (due) {
       const f = this.flush();
       pending = pending ? Promise.all([pending, f]).then(() => {}) : f;
@@ -234,8 +241,20 @@ const topOf = (m: Map<string, number>, n: number) =>
   [...m.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, n).map(([key, requests]) => ({ key, requests }));
 const addAll = (m: Map<string, number>, o: Record<string, number>) => { for (const [k, v] of Object.entries(o)) m.set(k, (m.get(k) ?? 0) + v); };
 
-/** Owner summary over the last `days` (1-90) days: aggregate batches plus any legacy raw rows in the window. */
-export async function trafficSummary(store: TrafficStore, now: number, days: number) {
+/** Minimal view of the sales ledger (one row per settled payment) used for the authoritative paid counts. */
+export interface PaidSource {
+  since(tsMs: number): Promise<{ ts: number; isTest: boolean; usd: number | null }[]>;
+}
+
+const usd6 = (n: number) => Math.round(n * 1e6) / 1e6;
+
+/**
+ * Owner summary over the last `days` (1-90) days: aggregate batches plus any legacy raw rows in the window.
+ * With `sales`, daily and total `paid` come from the sales ledger (authoritative: one row per settled payment, UTC day of
+ * the settlement), split into paid_outside / paid_test (Lumi's own wallets) with USD; `paid_logged` keeps the request-log
+ * count. A lost isolate flush can no longer zero paid. Without `sales` (or if it fails) paid is the request-log count.
+ */
+export async function trafficSummary(store: TrafficStore, now: number, days: number, salesSrc?: PaidSource) {
   const d = Math.max(1, Math.min(TRAFFIC_RETENTION_DAYS, Math.floor(days) || 7));
   const startDay = new Date(now - (d - 1) * 86_400_000).toISOString().slice(0, 10);
   const since = Date.parse(`${startDay}T00:00:00Z`);
@@ -271,24 +290,55 @@ export async function trafficSummary(store: TrafficStore, now: number, days: num
   }
   const days_ = [...daily.entries()].sort();
   const sum = (f: (e: (typeof days_)[number][1]) => number) => days_.reduce((n, [, e]) => n + f(e), 0);
-  const requests = sum((e) => e.requests), r402 = sum((e) => e.r402), paid = sum((e) => e.paid);
+  const paidLogged = sum((e) => e.paid);
+  // Authoritative paid counts from the sales ledger (small table; one indexed range read).
+  let ledger: Map<string, { outside: number; test: number; usd_outside: number; usd_test: number }> | undefined;
+  if (salesSrc) {
+    try {
+      const rows = await salesSrc.since(since);
+      ledger = new Map(days_.map(([day]) => [day, { outside: 0, test: 0, usd_outside: 0, usd_test: 0 }]));
+      for (const r of rows) {
+        const day = new Date(r.ts).toISOString().slice(0, 10);
+        if (day < startDay) continue;
+        const e = ledger.get(day) ?? { outside: 0, test: 0, usd_outside: 0, usd_test: 0 };
+        if (r.isTest) { e.test++; e.usd_test += r.usd ?? 0; } else { e.outside++; e.usd_outside += r.usd ?? 0; }
+        ledger.set(day, e);
+      }
+    } catch {
+      ledger = undefined;
+    }
+  }
+  const paidOf = (day: string, e: (typeof days_)[number][1]) => (ledger ? (ledger.get(day)?.outside ?? 0) + (ledger.get(day)?.test ?? 0) : e.paid);
+  const requests = sum((e) => e.requests), r402 = sum((e) => e.r402), paid = days_.reduce((n, [day, e]) => n + paidOf(day, e), 0);
+  const L = (day: string) => ledger?.get(day) ?? { outside: 0, test: 0, usd_outside: 0, usd_test: 0 };
+  const ledgerTotals = ledger
+    ? days_.reduce((t, [day]) => { const x = L(day); return { outside: t.outside + x.outside, test: t.test + x.test, usd_outside: t.usd_outside + x.usd_outside, usd_test: t.usd_test + x.usd_test }; }, { outside: 0, test: 0, usd_outside: 0, usd_test: 0 })
+    : undefined;
   return {
     kind: "owner_traffic",
     generated_at: new Date(now).toISOString(),
     window: { days: d, from: startDay, to: new Date(now).toISOString().slice(0, 10) },
     truncated: legacy.length >= LIMIT,
     privacy: "No raw IPs are stored: visitors are counted with a daily-rotating keyed hash. Pathnames only (no query strings); /mcp/<key> is stored as /mcp/:key.",
+    paid_source: ledger ? "sales_ledger" : "traffic_log",
+    paid_note: "paid = settled payments in the sales ledger by UTC day (paid_outside = outside customers, paid_test = Lumi's own test wallets; usd_* at list/settled value). paid_logged = paid requests seen by the request log (best-effort; can undercount). top_paid_paths is from the request log.",
     method_note: "Since Oct 23 2026 requests are counted in memory and written as aggregate batches (about one D1 row per isolate every 2 minutes) instead of one row per request; counts held by an isolate that is evicted before it flushes are lost, so totals are a slight undercount.",
     totals: {
       requests,
       visitor_days: sum((e) => e.visitors.size),
       payment_required_402: r402,
       paid,
+      ...(ledgerTotals ? { paid_outside: ledgerTotals.outside, paid_test: ledgerTotals.test, usd_outside: usd6(ledgerTotals.usd_outside), usd_test: usd6(ledgerTotals.usd_test) } : {}),
+      paid_logged: paidLogged,
       paid_per_402: r402 ? Number((paid / r402).toFixed(4)) : null,
       by_status: Object.fromEntries(topOf(status, 20).map((x) => [x.key, x.requests])),
       by_client: Object.fromEntries(topOf(clients, 10).map((x) => [x.key, x.requests])),
     },
-    daily: days_.map(([day, e]) => ({ day, requests: e.requests, visitors: e.visitors.size, payment_required_402: e.r402, paid: e.paid, browser: e.browser, non_browser: e.requests - e.browser })),
+    daily: days_.map(([day, e]) => ({
+      day, requests: e.requests, visitors: e.visitors.size, payment_required_402: e.r402, paid: paidOf(day, e),
+      ...(ledger ? { paid_outside: L(day).outside, paid_test: L(day).test, usd_outside: usd6(L(day).usd_outside), usd_test: usd6(L(day).usd_test) } : {}),
+      paid_logged: e.paid, browser: e.browser, non_browser: e.requests - e.browser,
+    })),
     top_paths: topOf(paths, 25),
     top_402_paths: topOf(p402, 15),
     top_paid_paths: topOf(ppaid, 15),
