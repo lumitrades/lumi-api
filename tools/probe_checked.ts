@@ -20,7 +20,8 @@ const T = 10_000;
 const input = JSON.parse(readFileSync(`${PC}/targets.json`, "utf8"));
 const hosts: any[] = input.hosts;
 const limitN = Number(process.env.PC_LIMIT ?? 0);
-const work = limitN ? hosts.slice(0, limitN) : hosts;
+const eligible = hosts.filter((h) => publicHostOk(h.host));
+const work = limitN ? eligible.slice(0, limitN) : eligible;
 
 async function pool<T>(items: T[], n: number, fn: (x: T, i: number) => Promise<void>) {
   let i = 0, done = 0;
@@ -149,6 +150,9 @@ async function rpcBatch(calls: { method: string; params: any[] }[]) {
   const out: any[] = []; for (const x of j) out[x.id] = x.result ?? null; return out;
 }
 
+// Never probe IP literals, localhost or internal names: only public DNS hostnames listed publicly.
+export function publicHostOk(h: string): boolean { return /^(?=.{3,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{1,62}$/.test(h) && !/(^|\.)(localhost|local|internal|lan|home\.arpa)$/.test(h); }
+
 async function main() {
   const started = Date.now();
   console.error(`hosts ${work.length}, conc ${CONC}`);
@@ -157,7 +161,7 @@ async function main() {
   const known = new Set(hosts.map((h) => h.host));
   const extra = new Map<string, any>();
   for (const r of results) for (const u of r.wellknown?.resources ?? []) {
-    try { const h = new URL(u).hostname.toLowerCase().replace(/^www\./, ""); if (!known.has(h) && !extra.has(h)) extra.set(h, { host: h, reg: h, sources: ["wellknown"], target: { url: u, method: "GET", src: "wellknown" }, wellknown: false }); } catch { /* skip */ }
+    try { const h = new URL(u).hostname.toLowerCase().replace(/^www\./, ""); if (publicHostOk(h) && !known.has(h) && !extra.has(h)) extra.set(h, { host: h, reg: h, sources: ["wellknown"], target: { url: u, method: "GET", src: "wellknown" }, wellknown: false }); } catch { /* skip */ }
   }
   newHosts = [...extra.values()];
   await pool(newHosts, CONC, doHost);

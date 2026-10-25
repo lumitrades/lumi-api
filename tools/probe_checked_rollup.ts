@@ -100,6 +100,9 @@ const summary = {
       new_probe: cl.reduce((m: Record<string, number>, g) => ((m[pout(g)] = (m[pout(g)] ?? 0) + 1), m), {}),
       any_evidence_before: covered((g) => any(g, (s) => s.buys > 0 || s.activity || s.prodValid)),
       any_evidence_after: covered((g) => any(g, (s) => s.buys > 0 || s.activity || s.prodValid) || ["pass", "partial", "fail"].includes(pout(g))),
+      positive_before_delivered_buy: covered((g) => any(g, (s) => s.delivered > 0)),
+      positive_after_buy_or_probe_pass: covered((g) => any(g, (s) => s.delivered > 0) || pout(g) === "pass"),
+      probe_pass_no_buy_no_prior_quote_check: covered((g) => pout(g) === "pass" && !any(g, (s) => s.delivered > 0 || s.prodValid)),
       probe_pass_without_buy: covered((g) => pout(g) === "pass" && !any(g, (s) => s.delivered > 0)),
     },
     address_only_note: "On-chain recipients with no public listing or well-known file mapping them to an endpoint; counted in aggregate only, not probed.",
@@ -111,4 +114,5 @@ const rows = [...results.values()].map((r) => toRow(r, P.finished)).filter((r) =
 for (let i = 0; i * PROBE_MAX_ROWS_PER_LOAD < rows.length; i++) writeFileSync(`${OUT}/load_${String(i + 1).padStart(2, "0")}.json`, JSON.stringify({ rows: rows.slice(i * PROBE_MAX_ROWS_PER_LOAD, (i + 1) * PROBE_MAX_ROWS_PER_LOAD) }));
 writeFileSync(`${OUT}/summary.json`, JSON.stringify(summary, null, 2));
 console.log(JSON.stringify(summary, null, 2));
-console.error(`rows ${rows.length} (rejected ${results.size - rows.length})`);
+const rej: Record<string, number> = {}; for (const r of results.values()) { const x = parseProbeRow(toRow(r, P.finished)); if (typeof x === "string") rej[x] = (rej[x] ?? 0) + 1; }
+console.error(`rows ${rows.length} (rejected ${results.size - rows.length}: ${JSON.stringify(rej)})`);

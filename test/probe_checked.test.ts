@@ -12,7 +12,7 @@ import {
   evaluateQuote, eip55Ok, payToFormat, rollupSeller, evidenceWeight, historyBand, parseProbeRow, toRow, probeRowPublic, MemoryProbeStore,
   PROBE_LABEL, PROBE_MAX_WEIGHT, BUY_MIN_WEIGHT, FAIL_TEXT, type EndpointProbe,
 } from "../src/trust/probe_checked";
-import { robotsAllows } from "../tools/probe_checked";
+import { robotsAllows, publicHostOk } from "../tools/probe_checked";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch } from "./helpers";
 
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -104,6 +104,8 @@ describe("probe-checked: integrity rules", () => {
     expect(robotsAllows("User-agent: *\nDisallow: /api/\nAllow: /api/paid", "/api/paid/x")).toBe(true);
     expect(robotsAllows("User-agent: LumiTrustProbe\nDisallow: /\n\nUser-agent: *\nAllow: /", "/x")).toBe(false);
     expect(robotsAllows("", "/x")).toBe(true);
+    for (const h of ["127.0.0.1", "10.0.0.5", "localhost", "printer.local", "x.internal"]) expect(publicHostOk(h)).toBe(false);
+    expect(publicHostOk("api.example.com")).toBe(true);
   });
 });
 
