@@ -54,6 +54,8 @@ import { D1IdempotencyStore, MemoryIdempotencyStore, type IdempotencyStore } fro
 import { labelFor, LABELS, DEFINITION, FAILED_RULE, testBuyEvidence, thresholdsDoc, verdictThresholds, VERDICT_KIND, VERDICT_RULES_VERSION, DISPUTE_URL, CHECK_NOTE } from "./trust/verdict";
 import { createReviewGate, D1ReviewStore, MemoryReviewStore, appealUntil, type ReviewStore } from "./trust/reviews";
 import { relationshipConfig, relationshipFor, relationshipTag } from "./trust/relationship";
+import { D1ProbeStore, MemoryProbeStore, parseProbeRow, probeRowPublic, PROBE_MAX_ROWS_PER_LOAD, type ProbeStore } from "./trust/probe_checked";
+import { registrableDomain } from "./trust/catalog";
 import { createActivity, activityPublic, activityOwnerView, D1ActivityStore, MemoryActivityStore, type ActivityStore } from "./trust/activity";
 import { CONTACT_EMAIL } from "./trust/index";
 import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, type SalesStore, type AlertConfig } from "./sales";
@@ -96,6 +98,7 @@ export interface AppOptions {
   contributorStore?: ContributorStore;
   /** Seller customer-activity store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   activityStore?: ActivityStore;
+  probeStore?: ProbeStore;
   /** checks_failed review queue + re-test requests override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   reviewStore?: ReviewStore;
   /** Contributions write queue override (tests). Default: env.CONTRIB_QUEUE; absent = writes inline. */
@@ -303,6 +306,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   // Lumi's own sellers and wallets are never ingested (payments from Lumi's wallets are already excluded upstream).
   const lumiSelf = { domains: ["lumitrades.io"], pay_to: [config.payTo, ...xrplBuyers, ...(config.evm ? [config.evm.payTo] : []), ...(config.stellar ? [config.stellar.payTo] : []), ...evmBuyers, ...stellarBuyers] };
   const activity = createActivity(opts.activityStore ?? (env.TRUST_DB ? new D1ActivityStore(env.TRUST_DB) : new MemoryActivityStore()), now, lumiSelf);
+  // Free probe-checked tier ("checked, not test-bought"): display + check_first wording only; never verified, never checks_passed.
+  const probeStore: ProbeStore = opts.probeStore ?? (env.TRUST_DB ? new D1ProbeStore(env.TRUST_DB) : new MemoryProbeStore());
   const verdictTh = verdictThresholds(env as unknown as Record<string, string | undefined>);
   const relCfg = relationshipConfig(env as unknown as Record<string, string | undefined>);
   const reviewStore: ReviewStore = opts.reviewStore ?? (env.TRUST_DB ? new D1ReviewStore(env.TRUST_DB) : new MemoryReviewStore());
@@ -445,7 +450,10 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const relationship = relationshipFor(host, commercial, relCfg);
     const gate = host ? await reviewGate(v, exact ?? dom, host, relationshipTag(relationship)) : { review: null, retest: null };
     const tests = testBuyEvidence(exact, dom);
-    const lab = labelFor({ check: { decision: String(v.verdict), reasons: v.reasons ?? [] }, tests, now: now(), th: verdictTh });
+    const reg = host ? registrableDomain(host) : null;
+    const probeRow = reg ? await probeStore.get(reg).catch(() => null) : null;
+    const lab = labelFor({ check: { decision: String(v.verdict), reasons: v.reasons ?? [] }, tests, now: now(), th: verdictTh, probe: probeRow });
+    v.free_checks = probeRowPublic(probeRow, tests.last_delivered_at ? 1 : 0);
     v.label = lab.label;
     v.label_text = LABELS[lab.label];
     v.relationship = relationship;
@@ -823,6 +831,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       seller_replies: replies,
       score: score.value,
       observed_onchain_payments: act,
+      free_checks: check.free_checks ?? null,
       relationship,
       commercial_relationship: check.commercial_relationship ?? [],
       check: { decision: checkBody.decision, label: checkBody.label, reasons: checkBody.reasons, matched: checkBody.matched ?? null },
@@ -1060,6 +1069,25 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       if (r) return r;
     }
     // Owner-only (Authorization: Bearer <OWNER_MCP_KEY>): observed on-chain payments ingest / read, checks_failed review queue.
+    if (path === "/v1/owner/probe-checked") {
+      const noStore = { "Cache-Control": "no-store" };
+      if (!(await ownerReq(request))) return json(401, { error: "owner_key_required", hint: "Authorization: Bearer <OWNER_MCP_KEY>" }, { ...noStore, "WWW-Authenticate": "Bearer" });
+      if (request.method === "GET") {
+        const s = url.searchParams.get("seller")?.trim().toLowerCase().slice(0, 253);
+        return json(200, s ? { row: await probeStore.get(s) } : { rows: await probeStore.count() }, noStore);
+      }
+      if (request.method !== "POST") return json(405, { error: "method_not_allowed" }, { Allow: "GET, POST" });
+      const text = await request.text().catch(() => "");
+      if (text.length > 2_000_000) return json(413, { error: "body_too_large", max_bytes: 2_000_000 }, noStore);
+      let body: any = null; try { body = JSON.parse(text); } catch { /* invalid */ }
+      const rows = Array.isArray(body?.rows) ? body.rows : null;
+      if (!rows) return json(400, { error: "rows_required" }, noStore);
+      if (rows.length > PROBE_MAX_ROWS_PER_LOAD) return json(400, { error: "too_many_rows", max: PROBE_MAX_ROWS_PER_LOAD }, noStore);
+      const ok: any[] = []; let skippedSelf = 0; const rejected: { index: number; error: string }[] = [];
+      rows.forEach((x: any, i: number) => { const r = parseProbeRow(x); if (typeof r === "string") rejected.push({ index: i, error: r }); else if (r.seller !== "lumitrades.io") ok.push(r); else skippedSelf++; });
+      const written = await probeStore.put(ok);
+      return json(200, { ok: true, received: rows.length, valid: ok.length, skipped_self: skippedSelf, written, rejected: rejected.slice(0, 50) }, noStore);
+    }
     if (path === "/v1/owner/activity" || path === "/v1/owner/reviews") {
       const noStore = { "Cache-Control": "no-store" };
       if (!(await ownerReq(request))) return json(401, { error: "owner_key_required", hint: "Authorization: Bearer <OWNER_MCP_KEY>" }, { ...noStore, "WWW-Authenticate": "Bearer" });

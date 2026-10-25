@@ -101,6 +101,8 @@ export function checkPayload(o: {
     // Disclosure only (M13/M14): never an input to the decision or label.
     relationship: v.relationship ?? null,
     commercial_relationship: v.commercial_relationship ?? [],
+    // Free probe-checked tier: always labelled "checked, not test-bought" unless Lumi has a delivered test-buy; verified is always false.
+    free_checks: v.free_checks ?? null,
     paid: o.paid,
   };
 }

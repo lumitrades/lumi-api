@@ -27,7 +27,7 @@ export const DECISION_TO_LABEL: Record<string, Label> = { block: "checks_failed"
 
 export const VERDICT_KIND = "lumi_verdict";
 /** Bump when the mapping, thresholds or wording change, so signed responses say which rules produced them. */
-export const VERDICT_RULES_VERSION = "2026-10-25.2";
+export const VERDICT_RULES_VERSION = "2026-10-25.3";
 export const DISPUTE_URL = "https://lumitrades.io/contact/";
 export const DEFINITION =
   "This is a summary of Lumi's own dated observations of this endpoint, not a rating of the business or a statement about its honesty. checks_failed means that, in the window shown, at least two of Lumi's paid test-buys on different days paid and got no usable data, a confirming re-buy failed too, no later buy succeeded and a person at Lumi reviewed it (or the quote paid an unlisted address, an address that is not the seller's, a higher price than listed, or an address on the OFAC SDN list). no_data means Lumi has too little evidence and is not a negative signal. Sellers can reply or ask for a re-test at hello@lumitrades.io, https://lumitrades.io/contact/ or /v1/trust/replies; an open re-test request pauses checks_failed for up to 72 hours while Lumi re-buys. Paying Lumi never changes this result.";
@@ -118,6 +118,8 @@ export const WORDING: Record<string, (t: TestBuyEvidence, th: VerdictThresholds)
   no_recent_xrpl_buy: () => "Lumi has not test-bought this seller on XRPL in the last 30 days.",
   resource_not_listed: () => "This exact URL is not listed, but other listings on the same domain are; check the exact resource URL.",
   untested: () => "Listing and quote checks agree, but Lumi has not completed a paid test-buy of this seller yet.",
+  // Free probe checks passed (checked, not test-bought). Still check_first: a probe never substitutes for a delivered test-buy.
+  probe_checked_only: () => "Checked, not test-bought: Lumi's free checks passed (valid x402 payment response, reachable, TLS, listing), but Lumi has not paid this seller, so nothing is known about what a paid call returns.",
   old_evidence: (t) => `Lumi's newest test-buy evidence for this seller (${day(t.last_at)}) is more than ${EVIDENCE_AGE.noDataAfterDays} days old, so it no longer supports a label. This is not a negative signal.`,
   stale_test: (t, th) => `Lumi's last delivered test-buy was on ${day(t.last_delivered_at)}, more than ${th.payMaxAgeDays} days ago.`,
   // no_data
@@ -179,16 +181,18 @@ export function testBuyEvidence(exact: any, dom: any): TestBuyEvidence {
 export interface LabelResult { label: Label; reason_code: string; reason: string }
 
 /** The whole mapping from the shared check result (+ Lumi's own test-buy dates) to a label. Nothing else is an input. */
-export function labelFor(o: { check: CheckLike; tests: TestBuyEvidence; now: number; th: VerdictThresholds }): LabelResult {
+export function labelFor(o: { check: CheckLike; tests: TestBuyEvidence; now: number; th: VerdictThresholds; probe?: { outcome: string } | null }): LabelResult {
   const { check, tests, th } = o;
   const codes = new Set(check.reasons.map((r) => r.code));
   const say = (label: Label, code: string): LabelResult => ({ label, reason_code: code, reason: (WORDING[code] ?? WORDING[label === "checks_failed" ? "generic_block" : "generic_warn"])(tests, th) });
   const pick = (order: string[], sev?: string) => { const xs = check.reasons.filter((r) => !sev || r.severity === sev).map((r) => r.code); return order.find((c) => xs.includes(c)) ?? xs[0]; };
   if (check.decision === "block") return say("checks_failed", pick(BLOCK_PRIORITY, "block") ?? "generic_block");
   if (check.decision === "warn") return say("check_first", pick(WARN_PRIORITY, "warn") ?? "generic_warn");
+  // Not in the catalog yet, but Lumi's free probe passed: "checked, not test-bought" (check_first), never checks_passed.
+  if (check.decision === "unknown" && o.probe?.outcome === "pass" && !codes.has("lumi_itself")) return say("check_first", "probe_checked_only");
   if (check.decision === "unknown") return say("no_data", NO_DATA_PRIORITY.find((c) => codes.has(c)) ?? "not_observed");
   if (codes.has("lumi_itself")) return say("no_data", "lumi_itself");
-  if (!tests.last_delivered_at) return say("check_first", "untested");
+  if (!tests.last_delivered_at) return say("check_first", o.probe?.outcome === "pass" ? "probe_checked_only" : "untested");
   if ((o.now - Date.parse(tests.last_delivered_at)) / 86_400_000 > EVIDENCE_AGE.noDataAfterDays) return say("no_data", "old_evidence");
   if (!((o.now - Date.parse(tests.last_delivered_at)) / 86_400_000 <= th.payMaxAgeDays)) return say("check_first", "stale_test");
   return say("checks_passed", "delivered_recently");
