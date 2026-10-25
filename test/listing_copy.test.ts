@@ -52,3 +52,16 @@ describe("Bazaar listing copy (owner-approved cleanup 2026-10-25)", () => {
     expect(errorDocs("verdict").map((e) => e.status)).toContain(400);
   });
 });
+
+import { qualifyOrganicPayers, ORGANIC_QUALIFIED_NOTE } from "../src/trust/activity";
+describe("qualifyOrganicPayers", () => {
+  const R = [{ code: "organic_payers", severity: "info", detail: "Base payTo 0xabc: 40 organic payer cluster(s)." }, { code: "bazaar_usage", severity: "info", detail: "x" }];
+  it("leaves reasons alone without the flag", () => expect(qualifyOrganicPayers(R, [])).toBe(R));
+  it("qualifies with neutral wording when flagged", () => {
+    const out = qualifyOrganicPayers(R, ["self_funded_loop"]);
+    expect(out.map((r) => r.code)).toEqual(["organic_payers_qualified", "bazaar_usage", "self_funded_loop"]);
+    expect(out.every((r) => r.severity === "info")).toBe(true);
+    expect(out[0].detail).toContain(ORGANIC_QUALIFIED_NOTE);
+    expect(JSON.stringify(out)).not.toMatch(/scam|fraud|fake/i);
+  });
+});

@@ -54,7 +54,7 @@ import { D1IdempotencyStore, MemoryIdempotencyStore, type IdempotencyStore } fro
 import { labelFor, LABELS, DEFINITION, FAILED_RULE, testBuyEvidence, thresholdsDoc, verdictThresholds, VERDICT_KIND, VERDICT_RULES_VERSION, DISPUTE_URL, CHECK_NOTE } from "./trust/verdict";
 import { createReviewGate, D1ReviewStore, MemoryReviewStore, appealUntil, type ReviewStore } from "./trust/reviews";
 import { relationshipConfig, relationshipFor, relationshipTag } from "./trust/relationship";
-import { createActivity, activityPublic, activityOwnerView, D1ActivityStore, MemoryActivityStore, type ActivityStore } from "./trust/activity";
+import { createActivity, activityPublic, activityOwnerView, activityFlags, qualifyOrganicPayers, D1ActivityStore, MemoryActivityStore, type ActivityStore } from "./trust/activity";
 import { CONTACT_EMAIL } from "./trust/index";
 import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, type SalesStore, type AlertConfig } from "./sales";
 
@@ -440,10 +440,23 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
    * The rest of the ONE check core, shared by /v1/check, /v1/trust/check and /v1/verdict: human review / re-test gate, then the
    * shared label. The relationship disclosure is computed here but only attached for display: labelFor() never sees it.
    */
+  /** payTos Lumi has on record for a seller (catalog listing + curated vendor), never the quoted payTo. */
+  const recordedPayTos = (exact: any, dom: any): string[] => [
+    ...((exact?.catalog?.entries?.[0]?.pay_to ?? dom?.catalog?.entries?.[0]?.pay_to ?? []) as any[]).map((p) => String(p?.pay_to ?? p ?? "")),
+    ...VENDORS.filter((v) => [...(exact?.curated ?? []), ...(dom?.curated ?? [])].some((c: any) => c?.id === v.id)).flatMap((v) => [...v.pay_to.xrpl, ...(v.pay_to.evm ?? [])]),
+  ].filter(Boolean);
+
   async function finishCheck(v: Record<string, any>, exact: any, dom: any, host: string | null) {
     const commercial = ((exact?.commercial_relationship ?? dom?.commercial_relationship ?? null) as unknown[] | null);
     const relationship = relationshipFor(host, commercial, relCfg);
     const gate = host ? await reviewGate(v, exact ?? dom, host, relationshipTag(relationship)) : { review: null, retest: null };
+    // organic_payers is qualified (never a label input) when the seller's activity row is flagged self_funded_loop.
+    if (Array.isArray(v.reasons) && v.reasons.some((r: any) => r?.code === "organic_payers")) {
+      try {
+        const row = await activity.lookup(host, recordedPayTos(exact, dom));
+        if (row) v.reasons = qualifyOrganicPayers(v.reasons, activityFlags(row, verdictTh));
+      } catch { /* activity is optional */ }
+    }
     const tests = testBuyEvidence(exact, dom);
     const lab = labelFor({ check: { decision: String(v.verdict), reasons: v.reasons ?? [] }, tests, now: now(), th: verdictTh });
     v.label = lab.label;
@@ -790,10 +803,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const key = await signKey();
     const checkReceipt = await signResponse("lumi_check", checkBody, key, t, CHECK_SIGNED_TTL_SEC);
     // Observed on-chain payments: keys are the host and the payTos Lumi has on record (never the quoted payTo). Display only.
-    const recorded = [
-      ...((exact?.catalog?.entries?.[0]?.pay_to ?? dom?.catalog?.entries?.[0]?.pay_to ?? []) as any[]).map((p) => String(p?.pay_to ?? p ?? "")),
-      ...VENDORS.filter((v) => [...(exact?.curated ?? []), ...(dom?.curated ?? [])].some((c: any) => c?.id === v.id)).flatMap((v) => [...v.pay_to.xrpl, ...(v.pay_to.evm ?? [])]),
-    ].filter(Boolean);
+    const recorded = recordedPayTos(exact, dom);
     const act = activityPublic(await activity.lookup(host, recorded), t, verdictTh);
     // Seller replies: a re-test request's reply text (email / contact form, entered by the owner) and verified curated-vendor replies.
     const curatedId = [...(exact?.curated ?? []), ...(dom?.curated ?? [])][0]?.id as string | undefined;

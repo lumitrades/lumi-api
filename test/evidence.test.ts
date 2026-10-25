@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
 import { MemoryCatalogStore } from "../src/trust/catalog";
 import { buyCandidate } from "../src/trust/catalog_service";
+import { MemoryActivityStore, createActivity } from "../src/trust/activity";
 import { MemoryEvidenceStore, classifyPayers, xrplCensus, baseLogs, vet402View, parseVet402, X402_SOURCE_TAG, VET402 } from "../src/trust/evidence";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor } from "./helpers";
 
@@ -135,10 +136,10 @@ const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA
 const owner = { Authorization: "Bearer " + "k".repeat(52), "Content-Type": "application/json" };
 
 describe("evidence: lookups and trust/check", () => {
-  async function setup() {
+  async function setup(activityStore?: MemoryActivityStore) {
     const ev = new MemoryEvidenceStore();
     ev.resources = new Set(ITEMS.map((i) => i.resource));
-    const app = createApp(ENV as any, { fetch: appFetch(), now: () => NOW, catalogStore: new MemoryCatalogStore(), evidenceStore: ev });
+    const app = createApp(ENV as any, { fetch: appFetch(), now: () => NOW, catalogStore: new MemoryCatalogStore(), evidenceStore: ev, ...(activityStore ? { activityStore } : {}) });
     await app.scheduled();
     const req = (p: string, init: RequestInit = {}) => app.fetch(new Request("http://lumi.test" + p, init));
     const get = async (p: string, h: Record<string, string> = {}) => { const r = await req(p, { headers: h }); return { status: r.status, body: (await r.json()) as any }; };
@@ -161,6 +162,29 @@ describe("evidence: lookups and trust/check", () => {
     expect(paid.status).toBe(200);
     expect(paid.body.reasons.map((r: any) => r.code)).toEqual(expect.arrayContaining(["bazaar_usage", "organic_payers"]));
     expect(JSON.stringify(paid.body)).not.toMatch(/\bscam\b/i);
+  });
+
+  it("organic_payers is qualified (not counted as independent demand) when the seller is flagged self_funded_loop", async () => {
+    const store = new MemoryActivityStore();
+    const r = await createActivity(store, () => NOW).ingest({ rows: [{ seller: "xseller", domains: ["api.xseller.com"], payers_30d: 40, payments_30d: 900, outside_share: 0.025, window_end: NOW - 86_400_000 }] });
+    expect(r).toMatchObject({ valid: 1 });
+    const { get, buy } = await setup(store);
+    const url = encodeURIComponent("https://api.xseller.com/v1/q");
+    const paid = await buy("/v1/trust/check?url=" + url);
+    const codes = paid.body.reasons.map((x: any) => x.code);
+    expect(codes).not.toContain("organic_payers");
+    expect(codes).toEqual(expect.arrayContaining(["organic_payers_qualified", "self_funded_loop"]));
+    const q = paid.body.reasons.find((x: any) => x.code === "organic_payers_qualified");
+    expect(q.severity).toBe("info");
+    expect(q.detail).toMatch(/may not show independent demand/);
+    expect(JSON.stringify(paid.body)).not.toMatch(/\bscam|fraud/i);
+    const free = await get("/v1/check?url=" + url);
+    expect(free.body.reasons.map((x: any) => x.code)).toEqual(expect.arrayContaining(["organic_payers_qualified", "self_funded_loop"]));
+    expect(free.body.reasons.map((x: any) => x.code)).not.toContain("organic_payers");
+    // Unflagged seller: unchanged.
+    const plain = await (await setup()).get("/v1/check?url=" + url);
+    expect(plain.body.reasons.map((x: any) => x.code)).toContain("organic_payers");
+    expect(plain.body.decision).toBe(free.body.decision);
   });
 
   it("vet402 import is attributed and separate; a suspicious paid check queues a test-buy (not inline)", async () => {
