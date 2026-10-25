@@ -20,8 +20,8 @@ async function listTools() {
   return tools;
 }
 
-test("0.9.6: versions agree across package.json, server.json and the server", () => {
-  assert.equal(VERSION, "0.9.6");
+test("0.9.7: versions agree across package.json, server.json and the server", () => {
+  assert.equal(VERSION, "0.9.7");
   assert.equal(pkg.version, VERSION);
   assert.equal(srv.version, VERSION);
   assert.equal(srv.packages[0].version, VERSION);
