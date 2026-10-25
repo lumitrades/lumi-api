@@ -18,7 +18,7 @@ import { agentCard, handleA2a, A2A_CORS } from "./a2a";
 import {
   coinList, resolveCoin, signalView, liveSignalView, levelsView, slateView, marketView, DISCLAIMER, SOURCE, type CoinRef,
 } from "./views";
-import { staleInputs, hasContent, fileMeta, withMeta, isoTimestamps, metaFrom, nextHalfHour } from "./freshness";
+import { staleInputs, hasContent, DAILY_ROUTE_MAX_AGE_HOURS, fileMeta, withMeta, isoTimestamps, metaFrom, nextHalfHour } from "./freshness";
 import { briefView, yenView, sentimentView, eventsView } from "./products";
 import { institutionalView } from "./institutional";
 import { handleMcp, isOwnerKey, MCP_CORS, type McpDeps } from "./mcp";
@@ -614,13 +614,14 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       return notForSale("data_unavailable", String((err as Error).message), 30, null);
     }
     const t = now();
-    const stale = staleInputs(loaded, NEEDS[route], t, config.dataMaxAgeHours);
+    const floorH = DAILY_ROUTE_MAX_AGE_HOURS[route] ?? 0;
+    const stale = staleInputs(loaded, NEEDS[route], t, config.dataMaxAgeHours, floorH);
     if (stale.length) {
       const asOfs = stale.map((x) => Date.parse(String(x.as_of ?? ""))).filter((v) => Number.isFinite(v));
       return notForSale("stale_data", "Lumi's published data is missing or out of date, so this call is not for sale right now.", 300, asOfs.length ? ageSeconds(Math.min(...asOfs), t) : null, { inputs: stale });
     }
     // Optional inputs that are stale are dropped (their fields are omitted), never served as current.
-    for (const f of OPTIONAL[route] ?? []) if (staleInputs(loaded, [f], t, config.dataMaxAgeHours).length) delete loaded[f];
+    for (const f of OPTIONAL[route] ?? []) if (staleInputs(loaded, [f], t, config.dataMaxAgeHours, floorH).length) delete loaded[f];
     const list = await siteCoins();
     const body = buildBody(route, coin, loaded, list, t);
     if (body && !hasContent(route, body)) {
@@ -631,7 +632,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         ? { ok: false, status: 404, error: { error: "no_data_for_coin", coin: coin.symbol, note: "Not charged." } }
         : notForSale("data_unavailable", `no ${route} data published right now`, 300, null);
     }
-    const meta = fileMeta(loaded, NEEDS[route], t, config.dataMaxAgeHours);
+    const meta = fileMeta(loaded, NEEDS[route], t, config.dataMaxAgeHours, floorH);
     return { ok: true, route, coin, body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)) };
   }
 

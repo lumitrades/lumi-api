@@ -206,3 +206,44 @@ describe("rules", () => {
     expect(fundingRead(null)).toBeNull();
   });
 });
+
+describe("slate and brief accept once-a-day data (up to 30 h), still 503 beyond", () => {
+  const H = 3_600_000;
+  const PRICES_TS = Date.parse("2026-10-22T10:50:38Z"); // oldest brief input in the fixtures
+  const IDEAS_TS = Date.parse("2026-10-22T11:17:26.463Z");
+
+  it.each([
+    ["/v1/brief", PRICES_TS],
+    ["/v1/slate", IDEAS_TS],
+  ])("%s: 29 h old -> 402 then 200 with as_of / data_age_seconds / stale_after", async (path, ts) => {
+    const fac = happyFacilitator();
+    const { get } = setup({ fac, now: ts + 29 * H });
+    const r402 = await get(path);
+    expect(r402.status).toBe(402);
+    const req = (await r402.json()).accepts[0];
+    const r = await get(path, { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
+    expect(r.status).toBe(200);
+    const b = await r.json();
+    expect(b.as_of).toBe(new Date(Math.floor(ts / 1000) * 1000).toISOString().replace(".000Z", "Z"));
+    expect(b.data_age_seconds).toBeGreaterThanOrEqual(29 * 3600 - 1);
+    expect(Date.parse(b.stale_after)).toBeLessThanOrEqual(ts + 30 * H);
+    expect(Date.parse(b.stale_after)).toBeGreaterThan(ts + 29 * H);
+  });
+
+  it.each([
+    ["/v1/brief", PRICES_TS],
+    ["/v1/slate", IDEAS_TS],
+  ])("%s: 31 h old -> 503 Not charged, no facilitator call", async (path, ts) => {
+    const fac = happyFacilitator();
+    const { get } = setup({ fac, now: ts + 31 * H });
+    const r = await get(path);
+    expect(r.status).toBe(503);
+    expect(await r.json()).toMatchObject({ error: "stale_data", note: "Not charged." });
+    expect(fac.calls.length).toBe(0);
+  });
+
+  it("other routes keep the 12 h rule (/v1/signal/btc at 13 h -> 503)", async () => {
+    const { get } = setup({ now: PRICES_TS + 13 * H, override: { live: null } });
+    expect((await get("/v1/signal/btc")).status).toBe(503);
+  });
+});
