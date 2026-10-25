@@ -4,7 +4,7 @@ import { createApp } from "../src/app";
 import { MemoryTrustStore } from "../src/trust/store";
 import { MemoryCatalogStore } from "../src/trust/catalog";
 import { MemoryOutcomeStore, D1OutcomeStore, parseOutcome, OUTCOME_FIELDS, createOutcomes, type OutcomeStore } from "../src/trust/outcomes";
-import { NOW, PAY_TO, FACILITATOR, DATA, happyFacilitator, makeFetch } from "./helpers";
+import { NOW, PAY_TO, FACILITATOR, DATA, happyFacilitator, makeFetch, miniflareD1Options } from "./helpers";
 
 const BASE = "https://api.lumitrades.io";
 const OWNER = "owner-key-for-tests-0123456789-abcdefghijklmnop";
@@ -72,8 +72,8 @@ describe("Lumi Check tier 1: anonymous delivery outcomes", () => {
   });
 
   it("D1 store: migration 0018 applies and counters accumulate (miniflare)", async () => {
-    const { Miniflare } = await import("miniflare");
-    const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('') } }", d1Databases: ["DB"] });
+    const { Miniflare, convertV4MiniflareOptions } = await import("miniflare") as any;
+    const mf = new Miniflare(miniflareD1Options(convertV4MiniflareOptions));
     try {
       const db: any = await mf.getD1Database("DB");
       for (const st of (readFileSync("migrations/0018_check_outcomes.sql", "utf8") + ";" + readFileSync("migrations/0019_check_outcome_rollup.sql", "utf8")).replace(/--.*$/gm, "").split(";").map((x) => x.trim()).filter(Boolean)) await db.prepare(st).run();
@@ -196,8 +196,8 @@ describe("Lumi Check tier 1: nightly rollup (summaries kept forever) + 90-day ra
   });
 
   it("D1 store: migrations 0018 + 0019 apply; rollup, idempotence, dirty re-roll and safe purge in SQL (miniflare)", async () => {
-    const { Miniflare } = await import("miniflare");
-    const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('') } }", d1Databases: ["DB"] });
+    const { Miniflare, convertV4MiniflareOptions } = await import("miniflare") as any;
+    const mf = new Miniflare(miniflareD1Options(convertV4MiniflareOptions));
     try {
       const db: any = await mf.getD1Database("DB");
       const sql = (readFileSync("migrations/0018_check_outcomes.sql", "utf8") + ";" + readFileSync("migrations/0019_check_outcome_rollup.sql", "utf8")).replace(/--.*$/gm, "");
