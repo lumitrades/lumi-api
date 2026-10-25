@@ -465,7 +465,7 @@ The Worker serves a remote MCP endpoint (Streamable HTTP, stateless, JSON respon
 plus the legacy `initialize` handshake for `2024-11-05` .. `2025-11-25` clients). Paste the URL into any client that takes a remote MCP
 server URL (e.g. a Grok, Claude or ChatGPT connector, or `npx @modelcontextprotocol/inspector`).
 
-- Same tool names and descriptions as the stdio package below: free `lumi_catalog`, `lumi_coins`, `lumi_samples`, `lumi_quote`, `lumi_vendor_scores`; paid Lumi Trust `lumi_trust_check`, `lumi_vendor_report`;
+- Same tool names and descriptions as the stdio package below: free `lumi_catalog`, `lumi_coins`, `lumi_samples`, `lumi_quote`, `lumi_verdict`, `lumi_vendor_scores`; paid Lumi Trust `lumi_trust_check`, `lumi_vendor_report`;
   paid market data `lumi_brief`, `lumi_market`, `lumi_macro_yen`, `lumi_sentiment`, `lumi_events`, `lumi_institutional_brief`; paid **Lumi Market Ideas** `lumi_signal`, `lumi_lite`, `lumi_scan`, `lumi_levels`, `lumi_slate`
   (titled "Lumi Market Ideas: …"; paper-trade analysis, not investment advice; Lumi does not trade real money).
 - A remote connector has no wallet, so a paid tool returns a normal tool result with the price and the two ways to pay: x402 at the

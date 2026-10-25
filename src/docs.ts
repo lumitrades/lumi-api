@@ -4,7 +4,7 @@ import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPri
 import { WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
 import { EXPLORERS, dropsToXrp } from "./config";
-import { PAID_ENDPOINTS, priceTable, EXAMPLE_COIN } from "./catalog";
+import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable, EXAMPLE_COIN } from "./catalog";
 import { BAZAAR_ROUTES, TRUST_ROUTES, VENDOR_ID_PATTERN, serviceNameFor } from "./bazaar";
 import { DISCLAIMER, SOURCE, type CoinRef } from "./views";
 import { RECEIPT_OUTCOMES } from "./trust/receipts";
@@ -168,6 +168,8 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       { method: "GET", path: "/.well-known/agents.json", summary: "agents.json (v0.1.0) flows over /openapi.json, trust check first" },
       { method: "GET", path: "/openapi.json", summary: "OpenAPI 3.1 description with x-payment-info" },
       { method: "GET", path: "/v1/coins", summary: "Supported coins" },
+      ...(cfg.verdictPaid ? [] : [{ method: "GET", path: "/v1/verdict?url=", summary: "Free (rate-limited) pre-payment check, one signed label from the same data as /v1/check: checks_passed (Delivered in recent checks) / check_first (Check first) / checks_failed (Recent checks failed) / no_data (Not enough data), with dates, evidence window, sample count, reason codes, evidence and appeal links. Paying Lumi never changes a result" }]),
+      { method: "GET", path: "/v1/verdict/rules", summary: "Verdict labels, public names, the allow/warn/block to label mapping, thresholds and definitions" },
       { method: "GET", path: "/v1/samples", summary: "Free truncated SAMPLE of every paid product (lists cut to 2, up to 10 min old) with USD price and full URL" },
       { method: "GET", path: "/v1/trust/vendors", summary: "Lumi's automated observations of other x402 vendors (402-quote checks every 30 min, paid test-buys with tx evidence, sample sizes)" },
       { method: "GET", path: "/v1/trust/vendors?url=|domain=|payTo=", summary: "Look up any x402 seller before you pay it: the full CDP Bazaar catalog, with free 402-quote checks on a rotating schedule ('quote-verified, low confidence'; not every listing is checked yet, see catalog.coverage: 'N resources across M domains indexed, X quote-verified, Y purchase-verified on Base (USDC); separately, Z XRPL endpoints from the curated list') and Lumi's on-chain-confirmed test-buys ('purchase-verified', counted per chain)" },
@@ -205,7 +207,7 @@ export function wellKnownX402(cfg: Config, base: string) {
     kind: "resource-server",
     name: "Lumi API",
     description: `Pay-per-call reads from lumitrades.io, settled in ${settledIn(cfg)}, in three groups: Lumi Trust (an x402 pay-check and a detailed x402 vendor report from Lumi's trust observations); market data (macro, daily brief, yen carry-trade watch, sentiment, funding, Fear & Greed, events and a 48h window, and a daily policy brief); and ${MARKET_IDEAS_NAME} (signals, all-coins scan, lite reads, levels, paper-trade ideas and history; ${MARKET_IDEAS_NOTICE}). Each resource carries product_line. Also: seller monitoring plans (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d; Audit $99; free tier and 14-day trial) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
-    resources: PAID_ENDPOINTS.map((e) => ({
+    resources: paidEndpoints(cfg).map((e) => ({
       name: e.name,
       url: `${base}${e.example}`,
       template: `${base}${e.template}`,
@@ -302,7 +304,27 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
     ...trustPaths(),
     ...commerceOpenApiPaths(cfg, base),
   };
-  for (const e of PAID_ENDPOINTS) {
+  const verdictParams = [
+    { name: "url", in: "query", required: true, description: "The x402 resource URL, or the seller's bare domain, you are about to pay", schema: { type: "string", maxLength: 500 }, example: "https://api.example.com/v1/data" },
+    { name: "payTo", in: "query", required: false, description: "The payTo address in its 402 quote (EVM 0x... or XRPL r...)", schema: { type: "string", maxLength: 120 } },
+    { name: "amount", in: "query", required: false, description: "The quoted price in USD (decimal)", schema: { type: "string", maxLength: 20 } },
+  ];
+  paths["/v1/verdict/rules"] = { get: { tags: ["trust"], security: [], summary: "Verdict labels, public names, allow/warn/block mapping, thresholds and definitions (free)", responses: { "200": { description: "OK" } } } };
+  if (!cfg.verdictPaid) {
+    paths["/v1/verdict"] = {
+      get: {
+        operationId: "verdict",
+        tags: ["trust"],
+        security: [],
+        summary: "Pre-payment check, one label (free, rate-limited alias of /v1/check)",
+        description: VERDICT_ENDPOINT.summary + " Signed (Ed25519, kind lumi_verdict, embedded lumi_check receipt). Labels and the allow/warn/block mapping: GET /v1/verdict/rules.",
+        parameters: verdictParams,
+        "x-example-url": `${base}/v1/verdict?url=${encodeURIComponent("https://api.example.com/v1/data")}`,
+        responses: { "200": { description: "OK" }, "400": { description: "Missing or invalid url" }, "429": { description: "Rate limited" } },
+      },
+    };
+  }
+  for (const e of paidEndpoints(cfg)) {
     paths[e.template] = {
       get: {
         operationId: e.route,
@@ -315,6 +337,8 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
           ? [e.route === "levels" ? levelsCoinParam : coinParam]
           : e.template.includes("{id}")
           ? [{ name: "id", in: "path", required: true, description: "Vendor id from GET /v1/trust/vendors (free)", schema: { type: "string", pattern: VENDOR_ID_PATTERN }, example: "printmoneylab", examples: { printmoneylab: { value: "printmoneylab" } } }]
+          : e.route === "verdict"
+          ? verdictParams
           : e.route === "trust_check"
           ? [
               { name: "url", in: "query", required: true, description: "The x402 resource URL you are about to pay (http/https)", schema: { type: "string", maxLength: 500 }, example: "https://api.example.com/v1/data" },
@@ -328,7 +352,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
           ? { "x-example-url": `${base}${e.template.replace("{coin}", EXAMPLE_COIN)}` }
           : e.template.includes("{id}")
           ? { "x-example-url": `${base}${e.template.replace("{id}", "printmoneylab")}` }
-          : e.route === "trust_check"
+          : e.route === "trust_check" || e.route === "verdict"
           ? { "x-example-url": `${base}${e.template}?url=${encodeURIComponent("https://api.example.com/v1/data")}` }
           : {}),
         "x-free-trial": trialEligible(e.route, Number(usdPrice(cfg, e.route))) ? { eligible: true, free_calls_per_wallet: TRIAL_LIMITS.perWallet, opt_in_header: `${TRIAL_OPT_IN_HEADER}: 1`, header: SIWX_HEADER, extension: SIWX_KEY } : { eligible: false },
@@ -897,7 +921,7 @@ print(decode_payment_response(r.headers["PAYMENT-RESPONSE"]))
 ## MCP
 
 - **Remote MCP server:** \`${base}/mcp\` (Streamable HTTP, stateless; protocol 2026-07-28 and 2025-03-26 .. 2025-11-25).
-  Add it as a remote MCP connector URL. Free tools: \`lumi_catalog\`, \`lumi_coins\`, \`lumi_samples\`, \`lumi_quote\`, \`lumi_vendor_scores\`. Paid tools
+  Add it as a remote MCP connector URL. Free tools: \`lumi_catalog\`, \`lumi_coins\`, \`lumi_samples\`, \`lumi_quote\`, \`lumi_verdict\`, \`lumi_vendor_scores\`. Paid tools
   return the price and how to pay, since a remote connector has no wallet:
   Lumi Trust \`lumi_trust_check\`, \`lumi_vendor_report\`; market data \`lumi_brief\`, \`lumi_market\`, \`lumi_macro_yen\`, \`lumi_sentiment\`, \`lumi_funding\`,
   \`lumi_fear_greed\`, \`lumi_events\`, \`lumi_events_48h\`, \`lumi_institutional_brief\`; ${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}) \`lumi_signal\`, \`lumi_lite\`,
@@ -934,6 +958,13 @@ Scores are observations with sample sizes, not ratings; few samples are marked l
 - **Paid pay-check ($0.004 per call):** \`GET ${base}/v1/trust/check?url=<resource>[&payTo=<address>][&amount=<USD>]\`: one verdict, \`allow\`, \`warn\` or \`block\`,
   with coded reasons (\`pay_to_mismatch\`, \`price_above_listing\`, \`paid_no_data\`, \`not_observed\`, \`unreliable_quotes\`, \`slow\`, \`young_domain\` ...), a confidence label,
   and links to the free lookup and (for curated vendors) the $0.02 report. A bad or missing \`url\` gets 400 before any quote. MCP: \`lumi_trust_check\`. A2A: \`trust_check\`.
+- **Pre-payment check, one label (${cfg.verdictPaid ? "paid, at most $0.004" : "free, rate-limited"}):** \`GET ${base}/v1/verdict?url=<resource or seller domain>[&payTo=<address>][&amount=<USD>]\`.
+  Same data and signing key as \`/v1/check\` (embedded signed \`check_receipt\`), signed as \`lumi_verdict\`. Labels: \`checks_passed\` "Delivered in recent checks",
+  \`check_first\` "Check first", \`checks_failed\` "Recent checks failed", \`no_data\` "Not enough data" (not a negative signal). Mapping from the older
+  \`decision\`: allow -> checks_passed, warn -> check_first, block -> checks_failed, unknown -> no_data. Every answer carries \`as_of\`, \`evidence_window\`,
+  \`n_conclusive\`, \`last_delivered_at\`, \`last_failed_at\`, \`reason_codes\`, evidence and reply/appeal links (https://lumitrades.io/contact/) and
+  \`commercial_relationship\` (disclosure only). Paying Lumi, including seller monitoring, never changes a result. Thresholds and definitions:
+  \`GET ${base}/v1/verdict/rules\`. MCP: \`lumi_verdict\`.
 - **Report a call you paid for:** \`POST ${base}/v1/reports\` with \`{vendor_id, network, tx_hash, reporter, outcome, signature}\`, where \`signature\` signs
   \`lumi-report:<network>:<tx_hash>\` with the paying key. Only reports with an on-ledger payment and a valid signature are shown or scored.
 - **Private tips:** \`POST ${base}/v1/tips\` \`{text, coins?, source_urls?}\`. Stored privately; never published or returned.

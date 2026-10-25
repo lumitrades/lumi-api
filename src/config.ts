@@ -68,6 +68,18 @@ export interface Env {
   /** Tested-by-Lumi badge thresholds. Defaults (approved): score 80 and 3 conclusive paid Lumi test-buys. */
   BADGE_MIN_SCORE?: string;
   BADGE_MIN_PAID_TESTS?: string;
+  /** /v1/verdict pricing: "free" (alias of /v1/check) or "paid" (x402 at DEFAULT_PRICES.verdict, <= $0.004). Default VERDICT_PRICING below. */
+  VERDICT_PRICING?: string;
+  /** Label thresholds (src/trust/verdict.ts VERDICT_DEFAULTS): checks_passed needs a delivered test-buy within N days (default 30);
+   * observed on-chain payments: fewest payer groups shown (default 5, never lower), concentration flag at top-payer share >= N%
+   * (default 60), rows older than N days are marked stale (default 14). */
+  VERDICT_PAY_MAX_AGE_DAYS?: string;
+  VERDICT_ACTIVITY_MIN_GROUPS?: string;
+  VERDICT_CONCENTRATION_PCT?: string;
+  /** Extra competitor domains (comma-separated) and Lumi-customer seller domains for the relationship disclosure (never a label input). */
+  VERDICT_COMPETITOR_DOMAINS?: string;
+  VERDICT_CUSTOMER_DOMAINS?: string;
+  VERDICT_ACTIVITY_MAX_AGE_DAYS?: string;
   /** Lumi Check v0: separate admin credential for the owner contributor routes (/v1/owner/contributors*); never the signing key. Falls back to OWNER_MCP_KEY when unset. Set at deploy time with `wrangler secret put CONTRIB_ADMIN_KEY`. */
   CONTRIB_ADMIN_KEY?: string;
   /** Public base URL used in docs/discovery (e.g. https://api.lumitrades.io). */
@@ -183,7 +195,7 @@ export interface KVLike {
 }
 
 export type PaidRoute = "signal" | "levels" | "slate" | "market" | "brief" | "yen" | "sentiment" | "events" | "institutional" | "vendor_report"
-  | "scan" | "lite" | "trust_check" | "funding" | "fear_greed" | "events_48h";
+  | "scan" | "lite" | "trust_check" | "funding" | "fear_greed" | "events_48h" | "verdict";
 
 /**
  * Default prices per route: XRP and USD-stablecoin (RLUSD/USDC). Override with PRICE_<ROUTE>_XRP / _RLUSD / _USDC
@@ -213,7 +225,16 @@ export const DEFAULT_PRICES: Record<PaidRoute, { xrp: string; usd: string }> = {
   funding: { xrp: "0.0023", usd: "0.003" },
   fear_greed: { xrp: "0.0023", usd: "0.003" },
   events_48h: { xrp: "0.0023", usd: "0.003" },
+  // GET /v1/verdict when VERDICT_PRICING = "paid": $0.004 (legal review M3 cap: at or below $0.004; test/verdict.test.ts checks it).
+  verdict: { xrp: "0.003", usd: "0.004" },
 };
+/**
+ * ONE-LINE SWITCH (legal review M3): "free" = GET /v1/verdict is a free, rate-limited alias of /v1/check (no 402, not listed
+ * as a paid resource); "paid" = sold over x402 at DEFAULT_PRICES.verdict. Env VERDICT_PRICING overrides per deployment.
+ */
+export const VERDICT_PRICING: "free" | "paid" = "free";
+export const VERDICT_MAX_USD = 0.004;
+export const verdictPaid = (env: { VERDICT_PRICING?: string } = {}) => ((env.VERDICT_PRICING ?? "").trim().toLowerCase() || VERDICT_PRICING) === "paid";
 export const PAID_ROUTES = Object.keys(DEFAULT_PRICES) as PaidRoute[];
 
 export interface Config {
@@ -236,6 +257,8 @@ export interface Config {
   evm?: EvmOption;
   /** Stellar USDC option (x402 `exact`, SEP-41 transfer, facilitator-sponsored fees), offered after Base. Undefined = off. */
   stellar?: StellarOption;
+  /** GET /v1/verdict sold over x402 (VERDICT_PRICING = "paid"); false = free alias of /v1/check, not listed as a paid resource. */
+  verdictPaid?: boolean;
   /** USD list price per route (the stablecoin price); live XRP pricing targets exactly this. */
   usdPrices: Record<PaidRoute, string>;
   /** fixed = PRICE_<R>_XRP; live = usdPrices / live XRP-USD rate (pricesDrops is updated in place per request). */
@@ -513,6 +536,7 @@ export function loadConfig(env: Env): Config {
   }
 
   return {
+    verdictPaid: verdictPaid(env as any),
     network,
     networkName,
     payTo,
@@ -521,7 +545,11 @@ export function loadConfig(env: Env): Config {
     invoiceSecretIsDevDefault,
     sourceTag,
     pricesDrops: Object.fromEntries(
-      PAID_ROUTES.map((r) => [r, xrpToDrops((env as Record<string, string | undefined>)[`PRICE_${r.toUpperCase()}_XRP`] || DEFAULT_PRICES[r].xrp)]),
+      PAID_ROUTES.map((r) => {
+        const x = (env as Record<string, string | undefined>)[`PRICE_${r.toUpperCase()}_XRP`] || DEFAULT_PRICES[r].xrp;
+        // M3 cap: a fixed XRP verdict price above the default (~$0.004) falls back to the default.
+        return [r, xrpToDrops(r === "verdict" && !(Number(x) <= Number(DEFAULT_PRICES.verdict.xrp)) ? DEFAULT_PRICES.verdict.xrp : x)];
+      }),
     ) as Record<PaidRoute, string>,
     ious: [
       iouConfig(env, network, "RLUSD", RLUSD_CURRENCY, RLUSD_ISSUERS),
@@ -538,7 +566,9 @@ export function loadConfig(env: Env): Config {
       PAID_ROUTES.map((r) => {
         const R = r.toUpperCase();
         const e = env as Record<string, string | undefined>;
-        return [r, iouValue(e[`PRICE_${R}_BASE_USDC`] || e[`PRICE_${R}_USDC`] || e[`PRICE_${R}_RLUSD`] || DEFAULT_PRICES[r].usd)];
+        const v = iouValue(e[`PRICE_${R}_BASE_USDC`] || e[`PRICE_${R}_USDC`] || e[`PRICE_${R}_RLUSD`] || DEFAULT_PRICES[r].usd);
+        // M3 cap: the verdict is never sold above VERDICT_MAX_USD, whatever the env says.
+        return [r, r === "verdict" && !(Number(v) <= VERDICT_MAX_USD) ? DEFAULT_PRICES.verdict.usd : v];
       }),
     ) as Record<PaidRoute, string>,
     xrpPricing: (env.XRP_PRICING || "").trim().toLowerCase() === "live" ? "live" : "fixed",

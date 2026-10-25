@@ -8,6 +8,7 @@ import { band } from "./feeds";
 import type { LiveRow } from "./live";
 import { VENDORS, vendorById, vendorPayTos } from "./vendors";
 import { sanctionedReason, type SanctionsScreen } from "./sanctions";
+import { failureStreak, FAILED_RULE, EVIDENCE_AGE } from "./trust/verdict";
 
 type Json = any;
 const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
@@ -145,9 +146,16 @@ const conclusive = (p: Json) => p?.delivery !== "inconclusive" && p?.data_return
 const inconclusiveText = (p: Json, what: string) =>
   `Lumi's latest ${what} (${p.at}, tx ${p.tx_hash}) paid ${p.amount} ${p.asset}, but Lumi recorded no HTTP response (${p.inconclusive_reason ?? "no_http_response"}): delivery unknown. This was a Lumi-side failure and is not counted against the seller.`;
 
-export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: Json | null, base: string, sanctions?: Pick<SanctionsScreen, "check" | "checkAny">) {
+/** Evidence older than this supports at most check_first, and older than NO_DATA_AFTER_DAYS at most no_data (legal review §3.3). */
+export const EVIDENCE_CAUTION_AFTER_DAYS = EVIDENCE_AGE.checkFirstAfterDays;
+export const EVIDENCE_NO_DATA_AFTER_DAYS = EVIDENCE_AGE.noDataAfterDays;
+/** Reason codes that mean "Lumi has no evidence about this seller": alone they give decision "unknown" (label no_data), not warn (M2). */
+export const NO_DATA_CODES = ["not_observed", "not_quote_checked"];
+
+export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: Json | null, base: string, sanctions?: Pick<SanctionsScreen, "check" | "checkAny">, now = Date.now()) {
   const reasons: Reason[] = [];
   const add = (code: string, severity: Reason["severity"], detail: string) => reasons.push({ code, severity, detail });
+  let confirmRebuy = false;
   const exactEntries: Json[] = exact?.catalog?.entries ?? [];
   const domEntries: Json[] = domainDoc?.catalog?.entries ?? [];
   const self = exact?.self ?? domainDoc?.self;
@@ -157,7 +165,7 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
   if (self) {
     add("lumi_itself", "info", "This is Lumi's own API; Lumi does not score itself.");
   } else if (!e && !domEntries.length && !curated.length) {
-    add("not_observed", "warn", "Not in the CDP x402 Bazaar catalog Lumi ingests (refreshed daily) or Lumi's curated list. No observation is not proof of a problem, but there is no evidence either.");
+    add("not_observed", "info", "Not in the CDP x402 Bazaar catalog Lumi ingests (refreshed daily) or Lumi's curated list. Lumi has no evidence either way; this is not a negative signal.");
   } else if (!e && !domEntries.length) {
     add("curated_vendor", "info", `In Lumi's curated XRPL vendor list (${curated[0].name}), which Lumi probes every 30 minutes and test-buys; see ${curated[0].detail}.`);
     const xps: Json[] = curated[0].purchases ?? [];
@@ -200,7 +208,7 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
       add("price_above_listing", "block", `You were quoted $${input.amountUsd}, more than the listed $${e.listed_price_usd}.`);
     }
     const q = e.quote_checks;
-    if (!q) add("not_quote_checked", "warn", "Listed, but Lumi has not quote-checked it yet.");
+    if (!q) add("not_quote_checked", "info", "Listed, but Lumi has not quote-checked it yet. Not a negative signal.");
     else {
       if (q.last_valid_quote === false) add("last_quote_invalid", "warn", `Lumi's last free quote check (${q.last_checked_at}) did not get a valid x402 quote${q.last_note ? `: ${String(q.last_note).slice(0, 120)}` : ""}.`);
       if (q.last_quote_pays_listed_address === false) add("quote_pays_unlisted_address", "block", "At Lumi's last check the live 402 quote paid an address that is not in the listing.");
@@ -212,7 +220,16 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
     const last = ps.find(conclusive);
     if (ps[0] && !conclusive(ps[0])) add("purchase_inconclusive", "info", inconclusiveText(ps[0], "test-buy"));
     if (last) {
-      if (last.data_returned === false) add("paid_no_data", "block", `Lumi's latest test-buy (${last.at}, tx ${last.tx_hash}) paid and got no usable data (HTTP ${last.http_status}).`);
+      if (last.data_returned === false) {
+        // M1 (legal review 2026-10-25): checks_failed from test-buys only after failed buys on >= 2 UTC days within 14 days, no
+        // success since, and a confirming re-buy. Otherwise check_first and a confirm re-buy is requested. Old evidence is capped.
+        const st = failureStreak(ps, now);
+        const ageDays = (now - Date.parse(last.at)) / 86_400_000;
+        const facts = `Lumi's latest test-buy (${last.at}, tx ${last.tx_hash}) paid and got no usable data (HTTP ${last.http_status}); ${st.failed} failed in a row, ${st.failedInWindow} on ${st.failedDays} UTC day(s) in the last ${FAILED_RULE.windowDays} days.`;
+        if (ageDays > EVIDENCE_NO_DATA_AFTER_DAYS) add("old_buy_failed", "info", `${facts} This is more than ${EVIDENCE_NO_DATA_AFTER_DAYS} days old and no longer counts.`);
+        else if (st.qualifies && ageDays <= EVIDENCE_CAUTION_AFTER_DAYS) add("paid_no_data", "block", `${facts} This includes a confirming re-buy and no later buy succeeded.`);
+        else { add("recent_buy_failed", "warn", `${facts} Lumi needs failed buys on ${FAILED_RULE.minFailedDays} different days within ${FAILED_RULE.windowDays} days plus a confirming re-buy before reporting checks_failed; a re-buy is requested.`); confirmRebuy = st.confirmDue && ageDays <= FAILED_RULE.windowDays; }
+      }
       else add("purchase_verified", "info", `Lumi paid ${last.amount} ${last.asset} on ${last.at} and got data back (tx ${last.tx_hash}).`);
     }
     if (e.listed_until) add("delisted", "warn", `No longer in the Bazaar listing (last seen ${e.listed_until}).`);
@@ -242,7 +259,7 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
     if (v.l1) add("vet402_l1", "info", `vet402 (third party) recorded ${v.l1.purchase_attempts} purchase attempt(s), ${v.l1.settled} settled, ${v.l1.settled_with_2xx} with a 2xx response (last ${day(v.l1.last_at)}). Not counted in Lumi's own test-buys.`);
   }
 
-  const verdict = sanctionedHit ? "block" : self ? "allow" : reasons.some((r) => r.severity === "block") ? "block" : reasons.some((r) => r.severity === "warn") ? "warn" : "allow";
+  const verdict = sanctionedHit ? "block" : self ? "allow" : reasons.some((r) => r.severity === "block") ? "block" : reasons.some((r) => r.severity === "warn") ? "warn" : reasons.some((r) => NO_DATA_CODES.includes(r.code)) ? "unknown" : "allow";
   if (verdict === "allow" && e && !reasons.some((r) => r.code === "purchase_verified")) add("quote_verified", "info", "Listed in the Bazaar and its recent free quote checks are valid.");
   const confidence = self ? "n/a" : (e?.purchases ?? []).some(conclusive) || (!e && curated.length) ? "medium" : e?.quote_checks ? "low" : "very low";
   const cur = curated[0];
@@ -251,11 +268,12 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
     verdict,
     confidence,
     reasons,
+    confirm_rebuy: confirmRebuy || undefined,
     matched: ref ? compact({ resource: ref.resource, domain: ref.domain, tier: ref.tier, listed_price_usd: ref.listed_price_usd, pay_to: (ref.pay_to ?? []).slice(0, 4), last_quote_check: ref.quote_checks?.last_checked_at, exact: !!e }) : null,
     next_steps: compact({
       free_lookup: `${base}/v1/trust/vendors?url=${encodeURIComponent(input.url)}`,
       full_report: cur?.id ? { url: `${base}/v1/trust/vendors/${cur.id}/report`, price_usd: "0.02", what: "every quote check and paid test-buy with tx hashes, latency trend, uptime %" } : null,
     }),
-    note: "Observations, not a rating or a guarantee. block = a concrete mismatch or failed paid call; warn = not enough evidence; allow = listing and recent checks agree.",
+    note: "Observations, not a rating or a guarantee. label: checks_passed / check_first / checks_failed / no_data (verdict is the older allow / warn / block / unknown name for the same result; see /v1/verdict/rules).",
   }));
 }

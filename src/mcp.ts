@@ -15,7 +15,7 @@
 import { TRIAL_SHORT } from "./trial";
 import type { Config, PaidRoute } from "./config";
 import { atomicToUsdc, dropsToXrp } from "./config";
-import { PAID_ENDPOINTS } from "./catalog";
+import { PAID_ENDPOINTS, endpointFor } from "./catalog";
 import { indexDoc, VERSION } from "./docs";
 import { DISCLAIMER, type CoinRef } from "./views";
 import { MARKET_IDEAS_NAME, MARKET_IDEAS_NOTICE, MARKET_IDEAS_ROUTES, TRUST_DISCLAIMER } from "./lines";
@@ -220,6 +220,22 @@ function toolList() {
       annotations: ro,
     },
     {
+      name: "lumi_verdict",
+      title: "Lumi: one-label pre-payment check (free)",
+      description:
+        "Free (rate-limited). Before paying an x402 URL or seller domain: one label from the same data and signing key as /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Paying Lumi never changes a result. Observations, not a guarantee.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string", maxLength: 500, description: "The x402 resource URL (or the seller's domain) you are about to pay" },
+          payTo: { type: "string", maxLength: 120, description: "Optional: the payTo address in its 402 quote" },
+          amount: { type: "string", maxLength: 20, description: "Optional: the quoted price in USD, e.g. 0.01" },
+        },
+        required: ["url"],
+      },
+      annotations: ro,
+    },
+    {
       name: "lumi_seller_monitoring",
       title: "Lumi: seller monitoring plans and monitored sellers (free)",
       description:
@@ -247,11 +263,11 @@ function toolList() {
 }
 
 const INSTRUCTIONS =
-  "Lumi Trades (lumitrades.io), three groups. Lumi Trust: lumi_trust_check (should I pay this x402 URL? allow/warn/block), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
+  "Lumi Trades (lumitrades.io), three groups. Lumi Trust: lumi_verdict (free one-label pre-payment check: checks_passed / check_first / checks_failed / no_data), lumi_trust_check (paid, full coded reasons), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
   "Market data: daily brief, BTC/macro backdrop, yen carry-trade watch, sentiment, funding rates, Fear & Greed, events and the next 48h, and a daily policy brief " +
   "(BIS, IMF, US regulators, major banks and tokenization firms mapped to XRP, XLM, XDC, QNT, AXL, HBAR). " +
   `${MARKET_IDEAS_NAME} (${MARKET_IDEAS_NOTICE}): live signals for 51 coins (lumi_signal, cheap lumi_lite, or all at once with lumi_scan), lumi_levels support/resistance, lumi_slate current paper-trade ideas. ` +
-  "Free: lumi_catalog, lumi_coins, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d, Audit $99, free tier and 14-day trial) and lumi_trust_feed (free 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d); lumi_vendor_report is the paid full history for one vendor ($0.02). " +
+  "Free: lumi_catalog, lumi_coins, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_verdict, lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (Watch $5, Watch Plus $12, Watch Pro $20 per endpoint per 30d, Audit $99, free tier and 14-day trial) and lumi_trust_feed (free 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d); lumi_vendor_report is the paid full history for one vendor ($0.02). " +
   "Paid tools cost $0.003 to $0.10 per call (the daily policy brief is $0.10, everything else $0.02 or less) via x402; paid in XRP, RLUSD or USDC on the XRP Ledger or USDC on Base or Stellar; " + TRIAL_SHORT + "; without access they return the price and how to pay. " +
   PAID_TOOLS_NOTE + " Analytics and education only, not financial advice. Cite 'Lumi Trades (lumitrades.io)'.";
 
@@ -537,6 +553,14 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
         if (entry.status !== 200) return text({ status: entry.status, body: entry.body }, true);
         return text({ ...entry.body, badge: badge.body });
       }
+      case "lumi_verdict": {
+        const u = str(args.url)?.trim();
+        if (!u) return text({ error: "missing required argument: url (the x402 resource URL or seller domain you are about to pay)" }, true);
+        const qs = new URLSearchParams(Object.entries({ url: u, payTo: str(args.payTo), amount: args.amount === undefined ? undefined : String(args.amount) }).filter(([, v]) => v) as [string, string][]);
+        // Free alias by default; when the owner switches /v1/verdict to paid this returns the x402 price terms instead.
+        const r = await deps.quote(`/v1/verdict?${qs}`);
+        return text(r.body, r.status !== 200 && r.status !== 402);
+      }
       case "lumi_trust_feed": {
         const [doc, lic] = await Promise.all([deps.quote("/v1/feed"), deps.quote("/v1/feed/license")]);
         return text({ ...(doc.body ?? {}), license_terms: lic.body }, doc.status !== 200);
@@ -614,7 +638,7 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
 }
 
 function paymentRequired(tool: PaidTool, restUrl: string, cfg: Config, base: string): ToolResult {
-  const endpoint = PAID_ENDPOINTS.find((e) => e.route === tool.route)!;
+  const endpoint = endpointFor(tool.route);
   const xrp = dropsToXrp(cfg.pricesDrops[tool.route]);
   const prices: Record<string, unknown>[] = [
     { asset: "XRP", amount: xrp, network: cfg.network },
@@ -673,7 +697,7 @@ function paymentRequired(tool: PaidTool, restUrl: string, cfg: Config, base: str
               note: "Runs locally over stdio and pays from your wallet within per-call caps and a session budget.",
             },
           ],
-          free_tools: ["lumi_catalog", "lumi_coins", "lumi_samples", "lumi_quote", "lumi_vendor_scores", "lumi_seller_monitoring", "lumi_trust_feed"],
+          free_tools: ["lumi_catalog", "lumi_coins", "lumi_samples", "lumi_quote", "lumi_verdict", "lumi_vendor_scores", "lumi_seller_monitoring", "lumi_trust_feed"],
           free_sample: `${base}/v1/samples`,
           disclaimer: tool.route === "trust_check" || tool.route === "vendor_report" ? TRUST_DISCLAIMER : DISCLAIMER,
           ...(MARKET_IDEAS_ROUTES.includes(tool.route) ? { product_line: MARKET_IDEAS_NAME, notice: MARKET_IDEAS_NOTICE } : {}),

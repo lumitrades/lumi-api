@@ -53,7 +53,7 @@ export function registerContribTools(server, settings, { env = process.env, fetc
       description:
         "Free. Call before paying an x402 seller. Returns allow / warn / block with reasons, the seller's current Lumi score and a link to the live report card. " +
         "The verdict is signed by Lumi and verified locally against the Lumi keys pinned in this package (other keys are rejected). Only the URL's origin + path is sent. For MCP tool payments pass pay_to alone. " +
-        "If Lumi cannot be reached within 2.5 s the answer is warn (fail-open). Paying Lumi never changes a score, tier, ranking or badge.",
+        "If Lumi cannot be reached within 2.5 s the answer is warn (fail-open). Paying Lumi never changes a score, tier, ranking or 'Tested by Lumi' result. The paid 'Monitored by Lumi' badge is separate and labelled as paid.",
       inputSchema: {
         url: z.string().max(500).optional().describe("The x402 resource URL you are about to pay"),
         pay_to: z.string().max(100).optional().describe("The payTo address from the 402 quote"),

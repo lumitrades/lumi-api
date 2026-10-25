@@ -30,6 +30,7 @@ use this package when you want paid tools to pay automatically from your own wal
 
 | Tool | Paid? | Price (USD) | What you get |
 |---|---|---|---|
+| `lumi_verdict` | free (switchable, max $0.004) | `url` `payTo?` `amount?` | One label before paying, same data and signing as `/v1/check`: `checks_passed` (Delivered in recent checks) / `check_first` (Check first) / `checks_failed` (Recent checks failed) / `no_data` (Not enough data), with dates, evidence window, sample count, reason codes, evidence and appeal links. Paying Lumi never changes a result |
 | `lumi_vendor_scores` | free | `url?` `domain?` `payTo?` `vendor_id?` | Look up any x402 seller before paying: tier (catalogued / quote-verified, low confidence / purchase-verified), last free 402-quote check, price and payTo vs its Bazaar listing, on-chain test-buy evidence. No args: Lumi's curated vendor scores |
 | `lumi_seller_monitoring` | free | `enrollment_id?` | Seller monitoring plans (per endpoint per 30d: Watch $5, Watch Plus $12, Watch Pro $20; 10+ endpoints -20% or 3 terms prepaid -10%, not stacked; Audit $99 one-off; free Watch tier; 14-day Watch Plus trial), enrolment steps; with an id, that seller's public entry and badge. Paying never changes a score |
 | `lumi_trust_feed` | free | – | Trust data feed plans (free key 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d) and licence terms |
