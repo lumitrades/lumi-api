@@ -7,7 +7,7 @@ import { canonicalJson, json, requirePayment, assetLabel, paymentRequiredRespons
 import { verifyXrplSignature, xrplAddressOf } from "../trust/verify";
 import { explorerFor } from "../trust/catalog";
 import { sendPlainEmail } from "../sales";
-import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, SOLD_MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, type PlanId, type WatchTier } from "./plans";
+import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, SOLD_MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, budgetBaseUsd, type PlanId, type WatchTier } from "./plans";
 import { MONITOR_METHODOLOGY, MONITOR_SAFEGUARDS, MONITOR_TERMS } from "./policy";
 import { makeChallenge, verifyProof } from "./proof";
 import { NO_STORE, acceptAsset, acceptUsd, bad, bearer, parse402, readJson, safeEmail, safeHttpsUrl, type CommerceDeps, type WaitUntil } from "./common";
@@ -16,7 +16,7 @@ import type { EndpointChain, Enrollment, FindingRow, MonitorEndpoint, PlanRow, R
 const ENROLL_ID_RE = /^men_[a-f0-9]{24}$/;
 const OK_OUTCOMES = new Set(["delivered"]);
 /** Plans whose rows earn a badge and run test-buys over a term (Audit is one-off; the free tier has neither). */
-const MONITORING = new Set(["monitor", "monitor_plus", "watch", "watch_plus", "watch_pro", "watch_plus_trial"]);
+const MONITORING = new Set(["monitor", "monitor_plus", "watch", "watch_plus", "watch_plus_founder", "watch_pro", "watch_plus_trial"]);
 /** Unpaid tiers: rows with usd 0 and a synthetic paid_tx. Shown publicly but never listed as paying sellers. */
 const UNPAID = new Set(["watch_free", "watch_plus_trial"]);
 /** Plans whose rows are quote-probed by the box runner, with the cadence of the strongest active tier. */
@@ -81,7 +81,7 @@ export function watchEconomics(e: Enrollment, plan: PlanId, endpoints: number, t
   const spend = eps.map((ep) => watchEndpointSpend(ep, e, tier));
   const buyable = spend.filter((x) => x.buyable).length;
   const est = spend.reduce((s, x) => s + x.est, 0);
-  const budget = Math.round(price.per_term_usd * MONITOR_LIMITS.budgetShare * 1e6) / 1e6;
+  const budget = Math.round(budgetBaseUsd(plan, price.per_term_usd, endpoints) * MONITOR_LIMITS.budgetShare * 1e6) / 1e6;
   const eligible = buyable > 0 && est <= budget + 1e-9;
   return {
     price_usd: price.total_usd, price_per_endpoint_usd: PLANS[plan].usd, endpoints, terms,
@@ -129,7 +129,7 @@ export function planEconomics(e: Enrollment, qty: { endpoints?: number; terms?: 
 
 const badgeFreshMs = (plan: string) => watchTier(plan)?.badgeFreshMs ?? MONITOR_LIMITS.badgeFreshMs[plan as "monitor"] ?? 0;
 /** Paid tiers outrank the trial for which row the badge reports. */
-const tierRank = (plan: string) => ({ watch_pro: 6, watch_plus: 5, monitor_plus: 4, watch: 3, monitor: 2, watch_plus_trial: 1 } as Record<string, number>)[plan] ?? 0;
+const tierRank = (plan: string) => ({ watch_pro: 6, watch_plus: 5, watch_plus_founder: 5, monitor_plus: 4, watch: 3, monitor: 2, watch_plus_trial: 1 } as Record<string, number>)[plan] ?? 0;
 
 export function badgeStatus(e: Enrollment, plans: PlanRow[], runs: RunRow[], now: number) {
   const active = plans.filter((p) => MONITORING.has(p.plan) && p.starts_at <= now && now < p.ends_at).sort((a, b) => tierRank(b.plan) - tierRank(a.plan))[0];
@@ -408,6 +408,12 @@ export function createMonitor(deps: CommerceDeps) {
     }
     const sx = await sanctioned("monitor_subscribe", e.pay_to, { enrollment_id: e.id });
     if (sx) return sanctionedRes(sx); // before any 402 or settlement
+    if (def.founder && !e.is_test) {
+      const f = def.founder;
+      const used = (await store.plansFor(e.id)).filter((p) => p.plan === plan && !p.is_test).length;
+      if (!used && (await store.founderSellers(plan)) >= f.seats) return json(409, { error: "founder_offer_full", plan, detail: `The founder offer is limited to the first ${f.seats} sellers and all places are taken. Watch Plus at list price: ${base}${PLANS[f.listPlan].path}?enrollment=${e.id}${qs}`, note: "Not charged." }, NO_STORE);
+      if (used + qty.terms > f.lockedTerms) return json(409, { error: "founder_terms_used", plan, detail: `The founder price is kept for ${f.lockedTerms} terms per seller; this enrolment has used ${used}. Watch Plus at list price: ${base}${PLANS[f.listPlan].path}?enrollment=${e.id}${qs}`, terms_left: Math.max(0, f.lockedTerms - used), note: "Not charged." }, NO_STORE);
+    }
     const econ = (per ? watchEconomics(e, plan, qty.endpoints, qty.terms) : planEconomics(e)[plan]) as { eligible: boolean; reason?: string };
     if (!econ.eligible) return json(409, { error: "plan_not_eligible", plan, reason: econ.reason, enrollment_id: e.id, ...(per ? { endpoints: qty.endpoints, terms: qty.terms } : {}), note: "Not charged." }, NO_STORE);
     const usd = planPriceUsd(plan, e.is_test, deps.testPriceUsd, qty);
@@ -422,7 +428,8 @@ export function createMonitor(deps: CommerceDeps) {
       for (let k = 1; k <= qty.terms; k++) {
         // Watch: the fee is split evenly over the prepaid terms; each term's test-buy budget is 50% of its share.
         const termUsd = wp ? Number(usd) / qty.terms : Number(usd);
-        const budget = wp ? Math.round(wp.per_term_usd * MONITOR_LIMITS.budgetShare * 1e6) / 1e6 : Number(def.usd) * MONITOR_LIMITS.budgetShare;
+        // Founder plans: the budget comes from the list price of the tier (full test-buys), not the founder fee.
+        const budget = wp ? Math.round(budgetBaseUsd(plan, wp.per_term_usd, qty.endpoints) * MONITOR_LIMITS.budgetShare * 1e6) / 1e6 : Number(def.usd) * MONITOR_LIMITS.budgetShare;
         rows.push({
           id: `mpl_${randHex(10)}`, enrollment_id: e.id, plan, starts_at: start, ends_at: start + 30 * DAY_MS, paid_tx: k === 1 ? tx : `${tx}#${k}`,
           paid_network: s.network, paid_asset: assetLabel(req), paid_amount: k === 1 ? String(req.amount) : "0", payer: s.payer ?? null, usd: Math.round(termUsd * 1e6) / 1e6,

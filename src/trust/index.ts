@@ -455,6 +455,10 @@ export const FREE_LIMITS = {
   catalog: { perMinute: 10, perDay: 40, globalPerDay: 20_000 },
   lookup: { perMinute: 30, perDay: 300, globalPerDay: 60_000 },
 } as const;
+/** Free lookups are also limited per caller key or wallet (same 30 a minute / 300 a day), so rotating IPs does not lift the limit. */
+export const KEY_LIMIT_HEADERS = ["X-Lumi-Key", "X-Wallet", "X-Lumi-Wallet"] as const;
+/** Shown on a free-lookup 429: where to go for volume. */
+export const FREE_LIMIT_MORE = "Free lookups are limited to 30 a minute and 300 a day per IP and per key or wallet. For more: the $0.02 live check (/v1/trust/check, x402, no account), or a Feed key and the platform licence (see /v1/feed).";
 
 /** Free, answer-only view of a paid test-buy: outcome only; tx hashes and explorer links of the history are in the paid vendor report. */
 function obsFreeView(o: ObservationRow) {
@@ -921,6 +925,26 @@ export function createTrust(deps: TrustDeps): Trust {
   }
 
   const READ_ONLY_BUCKETS = new Set(["catalog"]);
+  /** Hashed caller key or wallet (X-Lumi-Key, X-Wallet / X-Lumi-Wallet, or a non-owner Bearer token); null when none is sent. */
+  async function keyHash(request: Request): Promise<string | null> {
+    let k = "";
+    for (const h of KEY_LIMIT_HEADERS) { k = request.headers.get(h)?.trim() ?? ""; if (k) break; }
+    if (!k) k = (request.headers.get("Authorization") ?? "").match(/^Bearer\s+(\S+)$/i)?.[1] ?? "";
+    if (!k) return null;
+    return hmacHex(deps.ipSecret, `key:${k.slice(0, 200).toLowerCase()}`);
+  }
+
+  /** The free lookup limit: per hashed IP, plus per hashed key / wallet when one is sent. */
+  async function lookupLimit(request: Request): Promise<Response | null> {
+    const l = FREE_LIMITS.lookup;
+    const byIp = await limited("lookup", await ipHash(request), l.perMinute, l.perDay, l.globalPerDay);
+    const kh = byIp ? null : await keyHash(request);
+    const hit = byIp ?? (kh ? await limited("lookup_key", kh, l.perMinute, l.perDay, l.globalPerDay) : null);
+    if (!hit) return null;
+    const body = (await hit.json().catch(() => ({}))) as Record<string, unknown>;
+    return json(429, { ...body, more: FREE_LIMIT_MORE }, Object.fromEntries(hit.headers));
+  }
+
   async function limited(bucket: string, who: string, perMinute: number, perDay: number, globalPerDay: number): Promise<Response | null> {
     const t = now();
     const checks: [string, number, number][] = [
@@ -1394,7 +1418,7 @@ export function createTrust(deps: TrustDeps): Trust {
         if (err) return json(400, err, { "Cache-Control": "no-store" });
         if (q) {
           if (q.domain) q.domain = q.domain.replace(/^https?:\/\//i, "").split(/[/?#]/)[0].replace(/:\d+$/, "").toLowerCase();
-          const lim = await limited("lookup", await ipHash(request), FREE_LIMITS.lookup.perMinute, FREE_LIMITS.lookup.perDay, FREE_LIMITS.lookup.globalPerDay);
+          const lim = await lookupLimit(request);
           if (lim) return lim;
           const doc = await lookup(q, base, { free: true });
           if (deps.onFreeCheck) {
@@ -1444,8 +1468,7 @@ export function createTrust(deps: TrustDeps): Trust {
   }
 
   async function freeLimit(request: Request, bucket: "lookup") {
-    const l = FREE_LIMITS[bucket];
-    return limited(bucket, await ipHash(request), l.perMinute, l.perDay, l.globalPerDay);
+    return lookupLimit(request);
   }
 
   return { handle, runProbes, vendorsDoc, vendorDoc, vendorReport, lookup, vendorScore, freeLimit, vendorReplies: (id: string) => store.verifiedReplies(id) };

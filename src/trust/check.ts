@@ -103,6 +103,9 @@ export function checkPayload(o: {
     commercial_relationship: v.commercial_relationship ?? [],
     // Free probe-checked tier: always labelled "Checked, not test-bought" unless Lumi has a delivered test-buy; verified is always false.
     free_checks: v.free_checks ?? null,
+    // Cached-data age, and any safety change a live check found (shown free, at once).
+    data_age: v.data_age ?? null,
+    live_alert: v.live_alert ?? null,
     paid: o.paid,
   };
 }

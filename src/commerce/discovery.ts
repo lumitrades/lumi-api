@@ -2,10 +2,10 @@
 import type { Config } from "../config";
 import { dropsToXrp } from "../config";
 import { usdToDrops } from "../pricing";
-import { FEED_LIMITS, MONITOR_LIMITS, PLANS, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TIERS, WATCH_TRIAL, WATCH_PRO_BUYS, WATCH_TRIAL_END, type PlanId } from "./plans";
+import { FEED_LIMITS, MONITOR_LIMITS, PLANS, PLATFORM_LICENCE, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TIERS, WATCH_TRIAL, WATCH_PRO_BUYS, WATCH_TRIAL_END, watchTier, type PlanId } from "./plans";
 
 /** Listed (sold) plans, in discovery order. Monitor / Monitor Plus were retired 2026-10-25: not listed, never quoted (410). */
-export const PLAN_ORDER: PlanId[] = ["watch", "watch_plus", "watch_pro", "audit", "feed", "feed_pro", "feed_credits"];
+export const PLAN_ORDER: PlanId[] = ["watch", "watch_plus", "watch_plus_founder", "watch_pro", "audit", "feed", "feed_pro", "feed_credits"];
 
 /** Extra query parameters of the per-endpoint Watch subscribe paths. */
 export const WATCH_QTY_PARAMS = [
@@ -18,6 +18,7 @@ const WATCH_ENROLL = "Enrollment id from POST /v1/monitor/enroll (free, requires
 const PLAN_PARAM: Record<PlanId, { name: string; required: boolean; desc: string }> = {
   watch: { name: "enrollment", required: true, desc: WATCH_ENROLL },
   watch_plus: { name: "enrollment", required: true, desc: WATCH_ENROLL },
+  watch_plus_founder: { name: "enrollment", required: true, desc: WATCH_ENROLL },
   watch_pro: { name: "enrollment", required: true, desc: WATCH_ENROLL },
   monitor: { name: "enrollment", required: true, desc: "Legacy plan (grandfathered; prefer Watch). Enrollment id from POST /v1/monitor/enroll (free, requires a payTo signature). Without it the path quotes the list price; a payment is refused before settlement." },
   monitor_plus: { name: "enrollment", required: true, desc: "Legacy plan (grandfathered; prefer Watch Plus). Enrollment id from POST /v1/monitor/enroll. Without it the path quotes the list price; a payment is refused before settlement." },
@@ -127,7 +128,7 @@ export function commerceOpenApiPaths(cfg: Config, base: string) {
         operationId: `plan_${id}`,
         tags: p.family === "monitor" ? tagM : tagF,
         summary: `${p.name}${p.perEndpoint ? " (priced per endpoint" : " ("}${p.days ? `${p.perEndpoint ? ", " : ""}${p.days}-day term, no auto-renew` : "one-off"})${p.legacy ? " [legacy, grandfathered]" : ""}`,
-        description: `${p.summary} Paid via x402 (XRPL XRP/RLUSD/USDC or Base USDC). Renew by paying again.${p.perEndpoint ? ` The amount below is for 1 endpoint × 1 term; the 402 for ?endpoints=N&terms=T quotes per-endpoint price × N × T less discounts (${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms -${WATCH_DISCOUNTS.prepay * 100}%; only the larger applies, they do not stack).` : ""}${p.family === "monitor" ? ` Test-buys are seller-funded from the fee, capped at ${p.perEndpoint ? WATCH_TIERS[p.id as "watch"].maxBuyUsd : MONITOR_LIMITS.maxBuyUsd} USD each and ${MONITOR_LIMITS.budgetShare * 100}% of the fee in total; ineligible plans return 409 before any quote.` : ""}`,
+        description: `${p.summary} Paid via x402 (XRPL XRP/RLUSD/USDC or Base USDC). Renew by paying again.${p.founder ? ` The amount below is for 1 endpoint × 1 term; the 402 for ?endpoints=N&terms=T quotes per-endpoint price × N × T (no further discounts). Open to the first ${p.founder.seats} sellers; at most ${p.founder.lockedTerms} terms per seller (409 before any quote otherwise).` : ""}${p.perEndpoint && !p.founder ? ` The amount below is for 1 endpoint × 1 term; the 402 for ?endpoints=N&terms=T quotes per-endpoint price × N × T less discounts (${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms -${WATCH_DISCOUNTS.prepay * 100}%; only the larger applies, they do not stack).` : ""}${p.family === "monitor" ? ` Test-buys are seller-funded from the fee, capped at ${p.perEndpoint ? watchTier(p.id)!.maxBuyUsd : MONITOR_LIMITS.maxBuyUsd} USD each and ${MONITOR_LIMITS.budgetShare * 100}% of the ${p.founder ? "Watch Plus list price" : "fee"} in total; ineligible plans return 409 before any quote.` : ""}`,
         parameters: [
           { name: q.name, in: "query", required: q.required, description: q.desc, schema: { type: "string" } },
           ...(p.perEndpoint ? WATCH_QTY_PARAMS.map((x) => ({ name: x.name, in: "query", required: x.required, description: x.desc, schema: { type: "integer" } })) : []),
@@ -160,11 +161,13 @@ export function commerceSkillMd(base: string): string {
 Docs: \`GET ${base}/v1/monitor\`. Plans priced **per endpoint per 30 days**, paid via x402 (XRPL XRP/RLUSD/USDC or Base USDC), no auto-renew, terms stack:
 - **Watch** ${m("watch")}/endpoint: hourly quote checks, a weekly test-buy (≤ $${WATCH_TIERS.watch.maxBuyUsd} per buy), alerts, status page and badge.
 - **Watch Plus** ${m("watch_plus")}/endpoint: quote checks every 30 min, a daily test-buy (≤ $${WATCH_TIERS.watch_plus.maxBuyUsd}) rotating across chains, schema and p95-latency alerts, 90-day history.
+- **Watch Plus founder** ${m("watch_plus_founder")}/endpoint (list ${m("watch_plus")}): the first ${PLANS.watch_plus_founder.founder!.seats} sellers get Watch Plus at this price for up to ${PLANS.watch_plus_founder.founder!.lockedTerms} terms, with the full Watch Plus test-buys (budget from the list price). No volume or prepay discount on top.
 - **Watch Pro** ${m("watch_pro")}/endpoint: quote checks every 15 min, ${WATCH_PRO_BUYS}, a monthly report signed by Lumi's wallet.
 - ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints: -${WATCH_DISCOUNTS.volume * 100}%. Prepay ${WATCH_DISCOUNTS.prepayTerms} terms: -${WATCH_DISCOUNTS.prepay * 100}%. Discounts do not stack: only the larger applies.
 - **Audit** ${m("audit")} one-off: a test-buy of every listed endpoint, full report signed by Lumi's XRPL wallet.
 - **Free Watch**: $0, ${WATCH_FREE.endpoints} endpoint, a daily quote check, no test-buys, no badge (\`POST /v1/monitor/free\`).
 - **${WATCH_TRIAL.days}-day Watch Plus trial**: one per seller (prove the domain and the payTo wallet), test-buys capped at $${WATCH_TRIAL.capUsd} total, no card, never auto-converts. ${WATCH_TRIAL_END}
+- **Platform licence** (wallets, facilitators, directories): from $${PLATFORM_LICENCE.from_usd} per 30 days, quoted per platform, contact to buy (${PLATFORM_LICENCE.contact}). ${PLATFORM_LICENCE.free_tier_terms}
 - The old **Monitor** and **Monitor Plus** plans are no longer sold (their subscribe paths answer 410, never charged); terms bought before 2026-10-25 run to their end.
 
 Steps: \`GET /v1/monitor/challenge?pay_to=<payTo>\` → sign it with the payTo wallet (XRPL: ripple-keypairs; Base: EIP-191) → \`POST /v1/monitor/enroll\` with endpoints and a webhook URL and/or email → pay \`GET /v1/monitor/subscribe/{watch|watch_plus|watch_pro|audit}?enrollment=<id>&endpoints=<N>&terms=<1|3>\`. Each test-buy is capped at $${MONITOR_LIMITS.maxBuyUsd} (Watch: $${WATCH_TIERS.watch.maxBuyUsd}); test-buys never exceed ${MONITOR_LIMITS.budgetShare * 100}% of the fee. Public status page: \`/v1/monitor/status/<id>\`. Alerts: paid but no/invalid data, 5xx/timeouts, payTo change, price change, schema change, recovery. Paying never changes a score; seller-funded tests are labelled; findings can be replied to, not removed; the badge (\`/v1/monitor/badge/<id>.svg\`) is removed automatically on failure or lapse; corrections: \`/v1/monitor/corrections\`.

@@ -1,7 +1,7 @@
 /** Free, human- and agent-facing documents: index, skill.md, discovery manifests, OpenAPI. */
 
 import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPriceTable, planResources } from "./commerce/discovery";
-import { WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
+import { PLATFORM_LICENCE, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
 import { EXPLORERS, dropsToXrp } from "./config";
 import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable } from "./catalog";
@@ -199,6 +199,7 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
     paid_endpoints: priceTable(cfg),
     product_lines: productLinesDoc(),
     plans: planPriceTable(base),
+    platform_licence: { ...PLATFORM_LICENCE },
     docs: `${base}/skill.md`,
     disclaimer: DISCLAIMER,
   };

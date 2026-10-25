@@ -9,7 +9,7 @@ import { catalogFreeView, catalogView, urlVariants, type CatalogRow } from "../t
 import { vet402View, VET402 } from "../trust/evidence";
 import { VENDORS } from "../vendors";
 import { XRPL_ADDR_RE, EVM_ADDR_RE } from "../trust/verify";
-import { DAY_MS, FEED_LIMITS, FEED_PLANS, PLANS, TEST_PRICE_USD, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, type PlanId } from "./plans";
+import { DAY_MS, FEED_LIMITS, FEED_PLANS, PLANS, TEST_PRICE_USD, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, PLATFORM_LICENCE, type PlanId } from "./plans";
 import { FEED_LICENSE } from "./policy";
 import { makeChallenge, verifyProof } from "./proof";
 import { NO_STORE, bad, bearer, monthKey, readJson, safeHttpsUrl, type CommerceDeps, type WaitUntil } from "./common";
@@ -71,7 +71,9 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
         { plan: "feed_credits", price_usd: PLANS.feed_credits.usd, lookups: `${FEED_LIMITS.creditsPerPurchase} prepaid, never expire`, evidence: "answer-only", rate_limit_per_min: FEED_LIMITS.perMinute.credits, pay: `${base}/v1/feed/credits?key_id=<key id>` },
         { plan: "feed", price_usd: PLANS.feed.usd, term_days: 30, lookups: `${FEED_LIMITS.included.feed.toLocaleString("en-US")} per term`, evidence: "full (tx hashes, receipts)", delta: true, rate_limit_per_min: FEED_LIMITS.perMinute.feed, pay: `${base}/v1/feed/subscribe/feed?key_id=<key id> (omit key_id to get a new key)` },
         { plan: "feed_pro", price_usd: PLANS.feed_pro.usd, term_days: 30, lookups: `${FEED_LIMITS.included.feed_pro.toLocaleString("en-US")} per term`, evidence: "full (tx hashes, receipts)", delta: true, snapshot: true, webhooks: true, rate_limit_per_min: FEED_LIMITS.perMinute.feed_pro, pay: `${base}/v1/feed/subscribe/feed_pro?key_id=<key id>` },
+        { plan: PLATFORM_LICENCE.id, price_from_usd: PLATFORM_LICENCE.from_usd, term_days: PLATFORM_LICENCE.term_days, how_to_buy: `contact ${PLATFORM_LICENCE.contact}`, summary: PLATFORM_LICENCE.summary },
       ],
+      free_tier_terms: PLATFORM_LICENCE.free_tier_terms,
       metering: "Lookups beyond the included amount use prepaid credits ($1.50 per 1,000). Without credits the request is refused (HTTP 429) and nothing is charged.",
       auth: "Authorization: Bearer <api key> (or X-Lumi-Key). Keys are shown once; Lumi stores only a SHA-256 hash.",
       endpoints: {

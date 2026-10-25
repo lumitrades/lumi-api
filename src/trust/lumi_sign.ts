@@ -17,7 +17,7 @@ import { LUMI_SIGNING_KEYS, pinnedKey } from "./lumi_keys";
 export const SIGNED_TYPE = "lumi_signed_response";
 export const SIGNED_VERSION = "0.1";
 export const SIGNED_KEY_TYPE = "lumi-ed25519";
-export type SignedKind = "lumi_check" | "trust_check" | "tested_badge" | "lumi_verdict";
+export type SignedKind = "lumi_check" | "trust_check" | "tested_badge" | "lumi_verdict" | "live_check";
 
 export interface SigningKey { seed: Uint8Array; public_key: string; key_id: string }
 export interface SignedResponse {

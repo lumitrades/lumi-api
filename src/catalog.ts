@@ -114,7 +114,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     path: "/v1/trust/check",
     template: "/v1/trust/check",
     summary:
-      "Use this before your agent pays an unfamiliar x402 URL: allow / warn / block with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). Query: url (required), payTo and amount (optional: the payTo address and USD price you were quoted, to catch address or price mismatches). block = a concrete mismatch or a paid call that returned nothing; warn = not enough evidence; allow = listing and recent checks agree. Links the free lookup and, for curated vendors, the $0.02 full report. Observations, not a guarantee. Not charged on bad input.",
+      "Use this before your agent pays an unfamiliar x402 URL: allow / warn / block with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). Query: url (required), payTo and amount (optional: the payTo address and USD price you were quoted, to catch address or price mismatches). block = a concrete mismatch or a paid call that returned nothing; warn = not enough evidence; allow = listing and recent checks agree. Live: after payment Lumi contacts the seller once (an unpaid request; Lumi never pays the seller) and compares its current quote, price, payTo and TLS with Lumi's record; the result is in live, signed as live_evidence. A safety change it finds also shows on the free /v1/check at once. Links the free lookup and, for curated vendors, the $0.02 full report. Observations, not a guarantee. Not charged on bad input.",
     example: "/v1/trust/check?url=https://api.example.com/v1/data",
   },
   {
@@ -144,7 +144,7 @@ export const VERDICT_ENDPOINT: PaidEndpoint = {
   path: "/v1/verdict",
   template: "/v1/verdict",
   summary:
-    "Use this before your agent pays an x402 URL or seller domain: one label from the same data and signing key as the free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as_of, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Paying Lumi never changes a result. Observations, not a guarantee. Not charged on bad input.",
+    "Use this before your agent pays an x402 URL or seller domain: one label from the same data and signing key as the free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as_of, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. When paid it is the one-word version of the live check: label_live is the same label after Lumi contacts the seller once at call time (an unpaid request; Lumi never pays the seller) and compares its quote, price, payTo and TLS with Lumi's record, with signed live_evidence. Paying Lumi never changes a result. Observations, not a guarantee. Not charged on bad input.",
   example: "/v1/verdict?url=https://api.example.com/v1/data",
 };
 

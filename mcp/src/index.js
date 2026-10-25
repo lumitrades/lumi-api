@@ -54,6 +54,7 @@ export const PAID_TOOLS = [
     },
     description:
       "Should I pay this x402 URL? allow / warn / block with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
+      "Live: after payment Lumi contacts the seller once (an unpaid request; Lumi never pays the seller) and compares its current quote, price, payTo and TLS with Lumi's record, returned as live with signed live_evidence; the free check is cached and shows data_age. " +
       "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Links the free lookup and, for curated vendors, the $0.02 full report. " +
       "Observations, not a guarantee. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger).",
   },
@@ -156,7 +157,7 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: one-label pre-payment check",
       description:
-        "Before paying an x402 URL or seller domain: one label from the same data and signing key as Lumi's free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Costs $0.01 per call, paid with your wallet within the configured caps. Paying Lumi never changes a result. Observations, not a guarantee.",
+        "Before paying an x402 URL or seller domain: one label from the same data and signing key as Lumi's free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. It is the one-word version of the live check: label_live is the label after Lumi contacts the seller at call time (an unpaid request) and compares its quote, price, payTo and TLS with Lumi's record, with signed live_evidence. Costs $0.01 per call, paid with your wallet within the configured caps. Paying Lumi never changes a result. Observations, not a guarantee.",
       inputSchema: {
         url: z.string().min(1).max(500).describe("The x402 resource URL (or the seller's domain) you are about to pay"),
         payTo: z.string().max(120).optional().describe("Optional: the payTo address in its 402 quote"),

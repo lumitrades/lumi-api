@@ -67,7 +67,7 @@ describe("not scored until a conclusive paid test-buy", () => {
   });
 
   it("rules are versioned and explain not_scored and probe scope; no_data is not a negative finding", () => {
-    expect(VERDICT_RULES_VERSION).toBe("2026-10-25.5");
+    expect(VERDICT_RULES_VERSION).toBe("2026-10-25.6");
     const d = thresholdsDoc(VERDICT_DEFAULTS);
     expect(d.not_scored).toMatch(/conclusive Lumi paid test-buy/);
     expect(d.not_scored).toMatch(/0\.25/);

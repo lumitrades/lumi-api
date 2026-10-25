@@ -67,8 +67,8 @@ describe("free endpoints", () => {
     expect(skill).toContain("/v1/market");
     const wk = await (await get("/.well-known/x402")).json();
     expect(wk).toMatchObject({ x402Version: 2, kind: "resource-server" });
-    expect(wk.resources).toHaveLength(18); // 2026-10-25: per-coin readings, slate, scan and brief retired (410); Monitor and Monitor Plus no longer sold
-    expect(wk.resources.filter((r: any) => r.plan).map((r: any) => r.url)).toEqual(["watch", "watch_plus", "watch_pro", "audit"].map((p) => `${BASE}/v1/monitor/subscribe/${p}`).concat([`${BASE}/v1/feed/subscribe/feed`, `${BASE}/v1/feed/subscribe/feed_pro`, `${BASE}/v1/feed/credits`]));
+    expect(wk.resources).toHaveLength(19); // 2026-10-25: + Watch Plus founder. 2026-10-25: per-coin readings, slate, scan and brief retired (410); Monitor and Monitor Plus no longer sold
+    expect(wk.resources.filter((r: any) => r.plan).map((r: any) => r.url)).toEqual(["watch", "watch_plus", "watch_plus_founder", "watch_pro", "audit"].map((p) => `${BASE}/v1/monitor/subscribe/${p}`).concat([`${BASE}/v1/feed/subscribe/feed`, `${BASE}/v1/feed/subscribe/feed_pro`, `${BASE}/v1/feed/credits`]));
     expect(wk.resources.map((r: any) => r.url)).toContain(`${BASE}/v1/macro/yen`);
     const oa = await (await get("/openapi.json")).json();
     expect(oa.paths["/v1/macro/yen"].get["x-payment-info"].price).toEqual({ mode: "fixed", currency: "USD", amount: "0.010000" });

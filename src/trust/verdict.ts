@@ -27,7 +27,7 @@ export const DECISION_TO_LABEL: Record<string, Label> = { block: "checks_failed"
 
 export const VERDICT_KIND = "lumi_verdict";
 /** Bump when the mapping, thresholds or wording change, so signed responses say which rules produced them. */
-export const VERDICT_RULES_VERSION = "2026-10-25.5";
+export const VERDICT_RULES_VERSION = "2026-10-25.6";
 export const DISPUTE_URL = "https://lumitrades.io/contact/";
 export const DEFINITION =
   "This is a summary of Lumi's own dated observations of this endpoint, not a rating of the business or a statement about its honesty. checks_failed means that, in the window shown, at least two of Lumi's paid test-buys on different days paid and got no usable data, a confirming re-buy failed too, no later buy succeeded and a person at Lumi reviewed it (or the quote paid an unlisted address, an address that is not the seller's, a higher price than listed, or an address on the OFAC SDN list). no_data means Lumi has too little evidence and is not a negative finding. Sellers can reply or ask for a re-test at hello@lumitrades.io, https://lumitrades.io/contact/ or /v1/trust/replies; an open re-test request pauses checks_failed for up to 72 hours while Lumi re-buys. Paying Lumi never changes this result.";
@@ -127,6 +127,7 @@ export const WORDING: Record<string, (t: TestBuyEvidence, th: VerdictThresholds)
   not_quote_checked: () => "Listed in the x402 Bazaar, but Lumi has not checked it yet. This is not a negative finding.",
   lumi_itself: () => "This is Lumi's own API; Lumi does not rate itself.",
   // checks_passed
+  live_check_safety_change: () => "A live check in the last 48 hours found a safety-relevant change at this seller (a payment address Lumi has not seen, a much higher price, or a failed TLS connection). Confirm with the seller before paying; this clears when a live check finds the quote matches Lumi's record again.",
   probe_failed_on_bought_endpoint: (t) => `Lumi's paid test-buy on ${day(t.last_delivered_at)} delivered, but a newer free probe of that same endpoint did not get a valid x402 payment request. Check again before paying; this clears when a probe or test-buy succeeds.`,
   delivered_recently: (t) => `Lumi's paid test-buy on ${day(t.last_delivered_at)} delivered, and the listing and quote checks agree.`,
   generic_block: () => "Lumi's check found a concrete mismatch; see the evidence link.",
@@ -182,13 +183,15 @@ export function testBuyEvidence(exact: any, dom: any): TestBuyEvidence {
 export interface LabelResult { label: Label; reason_code: string; reason: string }
 
 /** The whole mapping from the shared check result (+ Lumi's own test-buy dates) to a label. Nothing else is an input. */
-export function labelFor(o: { check: CheckLike; tests: TestBuyEvidence; now: number; th: VerdictThresholds; probe?: { outcome: string; checked_at?: number } | null; probeScope?: string | null }): LabelResult {
+export function labelFor(o: { check: CheckLike; tests: TestBuyEvidence; now: number; th: VerdictThresholds; probe?: { outcome: string; checked_at?: number } | null; probeScope?: string | null; liveAlert?: boolean }): LabelResult {
   const { check, tests, th } = o;
   const codes = new Set(check.reasons.map((r) => r.code));
   const say = (label: Label, code: string): LabelResult => ({ label, reason_code: code, reason: (WORDING[code] ?? WORDING[label === "checks_failed" ? "generic_block" : "generic_warn"])(tests, th) });
   const pick = (order: string[], sev?: string) => { const xs = check.reasons.filter((r) => !sev || r.severity === sev).map((r) => r.code); return order.find((c) => xs.includes(c)) ?? xs[0]; };
   if (check.decision === "block") return say("checks_failed", pick(BLOCK_PRIORITY, "block") ?? "generic_block");
   if (check.decision === "warn") return say("check_first", pick(WARN_PRIORITY, "warn") ?? "generic_warn");
+  // Safety findings of a paid live check reach the free answer at once (never held behind payment).
+  if (o.liveAlert) return say("check_first", "live_check_safety_change");
   // Not in the catalog yet, but Lumi's free probe passed: "Checked, not test-bought" (check_first), never checks_passed.
   if (check.decision === "unknown" && o.probe?.outcome === "pass" && !codes.has("lumi_itself")) return say("check_first", "probe_checked_only");
   if (check.decision === "unknown") return say("no_data", NO_DATA_PRIORITY.find((c) => codes.has(c)) ?? "not_observed");
@@ -215,6 +218,7 @@ export function thresholdsDoc(th: VerdictThresholds) {
     checks_passed: `The check found no warning, a Lumi paid test-buy delivered within ${th.payMaxAgeDays} days, and no newer free probe of that same bought endpoint failed.`,
     no_data: `Lumi has no observations (or has not checked this listing yet), its newest test-buy evidence is more than ${EVIDENCE_AGE.noDataAfterDays} days old, or it is Lumi itself. Not a negative finding.`,
     not_scored: "A vendor score (0-100) exists only after at least one conclusive Lumi paid test-buy. Until then the score is null with status not_scored and a plain reason, and the label is check_first (untested, or probe_checked_only when the free probe passed). Free probes never produce a score on their own; with a test-buy they count for at most 0.25 of one.",
+    live_check: "The paid /v1/trust/check ($0.02) contacts the seller at call time (one unpaid request; Lumi never pays the seller in a live check) and compares the quote, price, payTo and TLS with Lumi's record. A safety-relevant change (a payTo Lumi has not seen, a price more than double the listed one, or TLS failing where it worked) sets check_first with live_check_safety_change on every check, free included, for 48 hours or until a live check matches the record again. The free /v1/check is cached and says how old its data is (data_age).",
     probe_scope: "When a free probe fails on a seller Lumi has test-bought with delivery, free_checks.failure_scope says where: bought_endpoint (the same endpoint; newer than the last delivered buy makes the label check_first), other_endpoint (a different endpoint of the domain; label unchanged, explained) or endpoint_not_recorded (older run; label unchanged, explained). Probes test the bought endpoint first.",
     evidence_age: EVIDENCE_AGE,
     failed_rule: FAILED_RULE,

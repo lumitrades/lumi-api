@@ -57,6 +57,7 @@ import { createReviewGate, D1ReviewStore, MemoryReviewStore, appealUntil, type R
 import { relationshipConfig, relationshipFor, relationshipTag } from "./trust/relationship";
 import { D1ProbeStore, MemoryProbeStore, parseProbeRow, probeRowPublic, probeScope, PROBE_MAX_ROWS_PER_LOAD, type ProbeStore } from "./trust/probe_checked";
 import { registrableDomain } from "./trust/catalog";
+import { liveProbe, liveAlertView, LIVE_ALERT_PREFIX, LIVE_CHECK_NOTE, type LiveBaseline } from "./trust/live_check";
 import { createActivity, activityPublic, activityOwnerView, activityFlags, qualifyOrganicPayers, D1ActivityStore, MemoryActivityStore, type ActivityStore } from "./trust/activity";
 import { CONTACT_EMAIL } from "./trust/index";
 import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, type SalesStore, type AlertConfig } from "./sales";
@@ -127,7 +128,7 @@ export function priorityCap(v: string | undefined): number {
 }
 
 export type Prepared =
-  | { ok: true; route: PaidRoute; coin?: CoinRef; body: Record<string, unknown>; onServed?: () => Promise<unknown> }
+  | { ok: true; route: PaidRoute; coin?: CoinRef; body: Record<string, unknown>; onServed?: () => Promise<unknown>; /** Runs only once the call is paid (or a trial/owner call is granted): adds fields such as the live check. Never before payment. */ enrich?: () => Promise<Record<string, unknown>> }
   | { ok: false; status: number; error: Record<string, unknown>; headers?: Record<string, string> };
 
 export interface App {
@@ -459,6 +460,13 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     return [...new Set([...fromBuys, ...fromCurated])];
   };
 
+  /** How old the evidence behind a cached answer is (newest of: last delivered test-buy, last free probe, last catalog quote check). */
+  const dataAge = (ts: (number | null)[], t: number) => {
+    const xs = ts.filter((x): x is number => typeof x === "number" && Number.isFinite(x));
+    const at = xs.length ? Math.max(...xs) : null;
+    return { cached: true, as_of: at == null ? null : new Date(at).toISOString(), age_seconds: at == null ? null : Math.max(0, Math.round((t - at) / 1000)), live_check: "/v1/trust/check (x402, $0.02) contacts the seller now and returns signed fresh evidence" };
+  };
+
   async function finishCheck(v: Record<string, any>, exact: any, dom: any, host: string | null) {
     const commercial = ((exact?.commercial_relationship ?? dom?.commercial_relationship ?? null) as unknown[] | null);
     const relationship = relationshipFor(host, commercial, relCfg);
@@ -474,7 +482,10 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const reg = host ? registrableDomain(host) : null;
     const probeRow = reg ? await probeStore.get(reg).catch(() => null) : null;
     const scope = probeScope(probeRow, boughtEndpoints(exact, dom), tests.last_delivered_at ? 1 : 0);
-    const lab = labelFor({ check: { decision: String(v.verdict), reasons: v.reasons ?? [] }, tests, now: now(), th: verdictTh, probe: probeRow, probeScope: scope });
+    const liveAlert = host ? liveAlertView(await catalogStore.getMeta(LIVE_ALERT_PREFIX + host).catch(() => null), now()) : null;
+    const lab = labelFor({ check: { decision: String(v.verdict), reasons: v.reasons ?? [] }, tests, now: now(), th: verdictTh, probe: probeRow, probeScope: scope, liveAlert: !!liveAlert });
+    v.live_alert = liveAlert;
+    v.data_age = dataAge([tests.last_delivered_at ? Date.parse(tests.last_delivered_at) : null, probeRow?.checked_at ?? null, Date.parse(exact?.catalog?.entries?.[0]?.quote_checks?.last_checked_at ?? dom?.catalog?.entries?.[0]?.quote_checks?.last_checked_at ?? "")], now());
     v.free_checks = probeRowPublic(probeRow, tests.last_delivered_at ? 1 : 0, scope);
     v.label = lab.label;
     v.label_text = LABELS[lab.label];
@@ -710,6 +721,40 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     return notForSale("stale_data", `the ${route === "funding" ? "funding-rate" : "Fear & Greed"} feed is not fresh right now`, 300, ageSeconds(row?.fetched_at, t));
   }
 
+  /** What Lumi had on record for this seller before a live check (catalog listing, curated vendor, last free probe). */
+  async function liveBaseline(exact: any, dom: any, host: string, url: string): Promise<LiveBaseline> {
+    const entry = exact?.catalog?.entries?.[0] ?? dom?.catalog?.entries?.[0];
+    const qc = entry?.quote_checks;
+    const reg = registrableDomain(host);
+    const probe = reg ? await probeStore.get(reg).catch(() => null) : null;
+    const quoteOk = qc?.last_valid_quote ?? (probe ? probe.outcome === "pass" : null);
+    return {
+      pay_tos: [...new Set(recordedPayTos(exact, dom))].slice(0, 12),
+      price_usd: entry?.listed_price_usd ?? null,
+      quote_ok: quoteOk ?? null,
+      https: quoteOk === true ? url.startsWith("https://") : null,
+      as_of: qc?.last_checked_at ?? (probe?.checked_at ? new Date(probe.checked_at).toISOString() : null),
+      source: entry ? "catalog listing and Lumi's last quote check" : probe ? "Lumi's last free probe" : "curated vendor record",
+    };
+  }
+
+  /** The paid live part of /v1/trust/check: one unpaid request to the seller now, compared with the record, signed. */
+  async function liveCheck(url: string, host: string, exact: any, dom: any, query: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const baseline = await liveBaseline(exact, dom, host, url);
+    const live = await liveProbe((u, init) => (ownHosts.has(host) ? handle(new Request(u as string, init)) : doFetch(u as any, init)), url, baseline, now);
+    const key = LIVE_ALERT_PREFIX + host;
+    try {
+      if (live.safety_change) await catalogStore.setMeta(key, JSON.stringify({ checked_at: live.checked_at, url, changes: live.changes }));
+      else if (live.outcome === "unchanged") {
+        // Clear only an alert raised for this same URL (another endpoint of the host may still differ).
+        const prev = await catalogStore.getMeta(key);
+        if (prev && (() => { try { return JSON.parse(prev).url === url; } catch { return true; } })()) await catalogStore.setMeta(key, "");
+      }
+    } catch (e) { deps.log?.({ event: "live_alert_store_error", error: String(e) }); }
+    const evidence = await signResponse("live_check", { query, live }, await signKey(), now(), CHECK_SIGNED_TTL_SEC);
+    return { live, live_evidence: evidence, live_note: LIVE_CHECK_NOTE };
+  }
+
   /** "Should I pay this x402 URL?" Validated before any quote; the verdict reads the trust catalog (same data as the free lookup). */
   async function prepareTrustCheck(qs: string, base: string): Promise<Prepared> {
     const sp = new URLSearchParams(qs);
@@ -737,7 +782,10 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       (body as any).lumi_receipt = await signResponse("trust_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
       const meta = metaFrom(t, t + 86_400_000, t + 30 * 60_000, t);
       // Runs once the check is served, paid or free trial: the same priority signal either way.
-      return { ok: true, route: "trust_check", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)), onServed: () => prioritySignal(body, exact, "trust_check") };
+      return {
+        ok: true, route: "trust_check", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)), onServed: () => prioritySignal(body, exact, "trust_check"),
+        enrich: () => liveCheck(clean, host, exact, dom, { url: clean, payTo, amountUsd, network }),
+      };
     } catch (e) {
       return notForSale("data_unavailable", "the trust catalog is unavailable right now", 60, null);
     }
@@ -749,7 +797,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
    * what /v1/check signs at the same moment. Free alias by default; paid ($0.01) when VERDICT_PRICING = "paid".
    * Never an input: monitoring/commercial status, relationship flags, payment for this call, observed on-chain payments.
    */
-  type VerdictOut = { ok: true; body: Record<string, unknown>; t: number; onServed: () => Promise<unknown> } | { ok: false; status: number; error: Record<string, unknown> };
+  type VerdictOut = { ok: true; body: Record<string, unknown>; t: number; onServed: () => Promise<unknown>; live: () => Promise<Record<string, unknown>> } | { ok: false; status: number; error: Record<string, unknown> };
   async function buildVerdict(qs: string, base: string, paid: boolean): Promise<VerdictOut> {
     const sp = new URLSearchParams(qs);
     let raw = sp.get("url")?.trim() || sp.get("domain")?.trim() || "";
@@ -832,7 +880,15 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       check_receipt: { ...checkBody, receipt: checkReceipt },
       note: "Same data, label and signing key as the free GET /v1/check. Paying for this, or paying Lumi for monitoring or reports, never changes a score, tier, ranking, label or 'Tested by Lumi' result. Observed on-chain payments are information only (ranges; no payer addresses, no seller income).",
     };
-    return { ok: true, body, t, onServed: () => prioritySignal(check, exact, "verdict") };
+    // Paid verdict only (after payment): the one-word version of the live check. label stays the signed record-based label;
+    // label_live is the same word after the live comparison (a safety change turns checks_passed / no_data into check_first).
+    const live = async () => {
+      const r = await liveCheck(clean, host, exact, dom, { url: clean, payTo, amountUsd, network });
+      const lv = r.live as any;
+      const word = lv?.safety_change && lab.label !== "checks_failed" ? "check_first" : lab.label;
+      return { label_live: word, live: { outcome: lv?.outcome, safety_change: !!lv?.safety_change, changes: lv?.changes ?? [], checked_at: lv?.checked_at }, live_evidence: r.live_evidence };
+    };
+    return { ok: true, body, t, onServed: () => prioritySignal(check, exact, "verdict"), live };
   }
 
   async function prepareVerdict(qs: string, base: string): Promise<Prepared> {
@@ -840,7 +896,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const r = await buildVerdict(qs, base, true);
       if (!r.ok) return r;
       const meta = metaFrom(r.t, r.t + 86_400_000, r.t + 30 * 60_000, r.t);
-      return { ok: true, route: "verdict", body: isoTimestamps(withMeta(r.body, meta)), onServed: r.onServed };
+      return { ok: true, route: "verdict", body: isoTimestamps(withMeta(r.body, meta)), onServed: r.onServed, enrich: r.live };
     } catch {
       return notForSale("data_unavailable", "the trust catalog is unavailable right now", 60, null);
     }
@@ -1391,13 +1447,15 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
               headers: { "Content-Type": "text/markdown; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" },
             });
           }
-          return json(200, { ...body, access }, { "Cache-Control": "no-store" });
+          const extra = prep.enrich ? await prep.enrich().catch((e) => ({ live: null, live_error: String((e as Error)?.message ?? e) })) : {};
+          return json(200, { ...body, ...extra, access }, { "Cache-Control": "no-store" });
         }
         quote.trial = { granted: false, reason: r.reason, detail: "Free trial not granted for this request; pay with any accepts[] option instead. Not charged." };
       }
     }
 
-    return requirePayment(request, config, paywallDeps(ctx), quote, (s: Settlement, paid: PaymentRequirements) => {
+    return requirePayment(request, config, paywallDeps(ctx), quote, async (s: Settlement, paid: PaymentRequirements) => {
+      const extra = prep.enrich ? await prep.enrich().catch((e) => ({ live: null, live_error: String((e as Error)?.message ?? e) })) : {};
       if (prep.onServed) {
         // Demand-driven test-buys: a served trust/check only queues the resource for the daily routine (caps apply there).
         const p = prep.onServed().catch((e) => deps.log?.({ event: "buy_queue_error", error: String(e) }));
@@ -1442,7 +1500,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           headers: { "Content-Type": "text/markdown; charset=utf-8", "Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "PAYMENT-RESPONSE" },
         });
       }
-      return json(200, { ...body, payment });
+      return json(200, { ...body, ...extra, payment });
     });
   }
 

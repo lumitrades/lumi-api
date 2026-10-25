@@ -14,7 +14,7 @@ import { usdToDrops } from "../pricing";
 import type { Quote } from "../x402";
 import { SERVICE_ICON, TRUST_SERVICE_NAME } from "../bazaar";
 
-export type PlanId = "monitor" | "monitor_plus" | "audit" | "watch" | "watch_plus" | "watch_pro" | "feed" | "feed_pro" | "feed_credits";
+export type PlanId = "monitor" | "monitor_plus" | "audit" | "watch" | "watch_plus" | "watch_plus_founder" | "watch_pro" | "feed" | "feed_pro" | "feed_credits";
 /** Monitoring tiers that are never paid: stored as plan rows with usd 0 and a synthetic paid_tx (free_… / trial_…). */
 export type FreeTierId = "watch_free" | "watch_plus_trial";
 
@@ -31,6 +31,9 @@ export interface PlanDef {
   perEndpoint?: boolean;
   /** Grandfathered 2026-10-22 plan ids (Monitor / Monitor Plus), superseded by Watch; retired 2026-10-25 (see `retired`). */
   legacy?: boolean;
+  /** Founder offer: a fixed price (no volume/prepay discount) for the first `seats` sellers, kept for up to `lockedTerms` terms
+   *  per seller. The test-buy budget is set from the list price of `listPlan` (so founders get that tier's full test-buys). */
+  founder?: { seats: number; lockedTerms: number; listPlan: PlanId };
   /** Set to true to stop selling a legacy id (subscribe answers 410 plan_retired); existing rows keep working to term end. */
   retired?: boolean;
 }
@@ -43,6 +46,7 @@ export const PLANS: Record<PlanId, PlanDef> = {
   monitor_plus: { id: "monitor_plus", name: "Monitor Plus", usd: "29", days: TERM_DAYS, family: "monitor", legacy: true, retired: true, path: "/v1/monitor/subscribe/monitor_plus", summary: "30 days: weekly seller-funded test-buys of up to 20 endpoints + alerts." },
   watch: { id: "watch", name: "Watch", usd: "5", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch", summary: "Per endpoint per 30 days: hourly quote checks, a weekly seller-funded test-buy (small per-buy cap), alerts, 30-day history, status page and badge." },
   watch_plus: { id: "watch_plus", name: "Watch Plus", usd: "12", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch_plus", summary: "Per endpoint per 30 days: quote checks every 30 min, a daily seller-funded test-buy (capped per buy) rotating across the chains the endpoint accepts, schema and p95-latency alerts, 90-day history." },
+  watch_plus_founder: { id: "watch_plus_founder", name: "Watch Plus founder", usd: "5", days: TERM_DAYS, family: "monitor", perEndpoint: true, founder: { seats: 10, lockedTerms: 12, listPlan: "watch_plus" }, path: "/v1/monitor/subscribe/watch_plus_founder", summary: "Founder offer for the first 10 sellers: Watch Plus per endpoint per 30 days at a founder price kept for 12 terms. Everything in Watch Plus, including the full daily test-buys: the test-buy budget is set from the Watch Plus list price, not the founder price." },
   watch_pro: { id: "watch_pro", name: "Watch Pro", usd: "20", days: TERM_DAYS, family: "monitor", perEndpoint: true, path: "/v1/monitor/subscribe/watch_pro", summary: "Per endpoint per 30 days: quote checks every 15 min, daily buys on up to 3 chains, limited by the test-buy budget (seller-funded, capped per buy), all Watch Plus alerts, 90-day history and a monthly report signed by Lumi's wallet." },
   audit: { id: "audit", name: "Audit", usd: "99", days: null, family: "monitor", path: "/v1/monitor/subscribe/audit", summary: "One-off: one seller-funded test-buy of every listed endpoint of the seller, with a full report signed by Lumi's wallet." },
   feed: { id: "feed", name: "Feed", usd: "99", days: TERM_DAYS, family: "feed", path: "/v1/feed/subscribe/feed", summary: "30 days: 100,000 bulk lookups, delta feed, full evidence and receipts." },
@@ -51,10 +55,10 @@ export const PLANS: Record<PlanId, PlanDef> = {
 };
 /** Paid monitoring ids the subscribe route knows: the per-endpoint Watch tiers, Audit, and the retired Monitor ids
  *  (which answer 410 plan_retired, never quoted; rows bought before 2026-10-25 keep running to their term end). */
-export const MONITOR_PLANS: PlanId[] = ["watch", "watch_plus", "watch_pro", "audit", "monitor", "monitor_plus"];
+export const MONITOR_PLANS: PlanId[] = ["watch", "watch_plus", "watch_plus_founder", "watch_pro", "audit", "monitor", "monitor_plus"];
 /** Monitoring ids that are sold (listed and quoted). */
 export const SOLD_MONITOR_PLANS: PlanId[] = MONITOR_PLANS.filter((id) => !PLANS[id].retired);
-export const WATCH_PLANS: PlanId[] = ["watch", "watch_plus", "watch_pro"];
+export const WATCH_PLANS: PlanId[] = ["watch", "watch_plus", "watch_plus_founder", "watch_pro"];
 export const LEGACY_MONITOR_PLANS: PlanId[] = ["monitor", "monitor_plus"];
 export const FEED_PLANS: PlanId[] = ["feed", "feed_pro"];
 
@@ -105,7 +109,28 @@ export const WATCH_TIERS: Record<"watch_free" | "watch" | "watch_plus" | "watch_
   watch_pro: { name: "Watch Pro", probeEveryMs: 15 * MIN, buyEveryMs: DAY_MS, buysPerTerm: 30, maxBuyUsd: 0.1, chains: 3, historyDays: 90, badge: true, schemaAlerts: true, latencyAlerts: true, signedReport: true, badgeFreshMs: 2 * DAY_MS, maxEndpoints: 20 },
   watch_plus_trial: { name: "Watch Plus free trial", probeEveryMs: 30 * MIN, buyEveryMs: DAY_MS, buysPerTerm: 14, maxBuyUsd: 0.1, chains: "rotate", historyDays: 90, badge: true, schemaAlerts: true, latencyAlerts: true, signedReport: false, badgeFreshMs: 2 * DAY_MS, maxEndpoints: 3 },
 };
-export function watchTier(plan: string): WatchTier | null { return (WATCH_TIERS as Record<string, WatchTier>)[plan] ?? null; }
+export function watchTier(plan: string): WatchTier | null {
+  const f = (PLANS as Record<string, PlanDef>)[plan]?.founder;
+  return (WATCH_TIERS as Record<string, WatchTier>)[f ? f.listPlan : plan] ?? null;
+}
+/** Per-term fee the test-buy budget is computed from: the fee paid, or for a founder plan the list price of its tier
+ *  (endpoints × list unit), so a founder gets the same test-buys as a list-price buyer. */
+export function budgetBaseUsd(plan: PlanId, perTermUsd: number, endpoints: number): number {
+  const f = PLANS[plan]?.founder;
+  return f ? Number(PLANS[f.listPlan].usd) * endpoints : perTermUsd;
+}
+
+/** Platform licence (contact to buy; not sold through x402). Listed so the price is public before any deal. */
+export const PLATFORM_LICENCE = {
+  id: "platform_licence",
+  name: "Platform licence",
+  from_usd: "499",
+  term_days: TERM_DAYS,
+  how_to_buy: "contact",
+  contact: "hello@lumitrades.io",
+  summary: "For wallets, facilitators and directories: the right to redistribute Lumi's checks and evidence inside your product, bulk and delta access, an uptime SLA, and evidence packs your guarantee partner can use. Quoted per platform, from $499 per 30 days. Lumi supplies evidence, not insurance; any payment guarantee stays with the licensed partner.",
+  free_tier_terms: "The free checks are free to use and to quote with credit to Lumi. Reselling, redistributing or bulk-mirroring the data needs a licence (Feed for your own use, the platform licence for redistribution).",
+} as const;
 
 export const WATCH_FREE = { endpoints: 1, termDays: TERM_DAYS, label: "free tier, no test-buys" };
 export const WATCH_TRIAL = { days: 14, capUsd: 0.25, endpoints: WATCH_TIERS.watch_plus_trial.maxEndpoints, label: "Watch Plus free trial" };
@@ -132,7 +157,8 @@ export interface WatchPrice {
 }
 const cents = (x: number) => Math.round(x * 100) / 100;
 /** The single discount for N endpoints × T terms: the larger of the eligible volume / prepay discounts (no stacking). */
-export function watchDiscount(endpoints: number, terms: number): { rate: number; kind: "volume" | "prepay" | null; not_stacked?: "volume" | "prepay" } {
+export function watchDiscount(endpoints: number, terms: number, plan?: PlanId): { rate: number; kind: "volume" | "prepay" | null; not_stacked?: "volume" | "prepay" } {
+  if (plan && PLANS[plan]?.founder) return { rate: 0, kind: null };
   const vol = endpoints >= WATCH_DISCOUNTS.volumeMinEndpoints ? WATCH_DISCOUNTS.volume : 0;
   const pre = terms === WATCH_DISCOUNTS.prepayTerms ? WATCH_DISCOUNTS.prepay : 0;
   if (!vol && !pre) return { rate: 0, kind: null };
@@ -147,7 +173,7 @@ export function watchPrice(plan: PlanId, endpoints: number, terms = 1): WatchPri
   if (!Number.isInteger(endpoints) || endpoints < 1 || endpoints > WATCH_DISCOUNTS.maxEndpoints) return null;
   if (terms !== 1 && terms !== WATCH_DISCOUNTS.prepayTerms) return null;
   const unit = Number(p.usd);
-  const d = watchDiscount(endpoints, terms);
+  const d = watchDiscount(endpoints, terms, plan);
   const list = unit * endpoints * terms;
   const total = cents(list * (1 - d.rate));
   return { plan, endpoints, terms, unit_usd: unit, list_usd: list, discount: d.rate, discount_applied: d.kind,
@@ -187,7 +213,7 @@ export function planPriceUsd(plan: PlanId, test: boolean, testPrice = TEST_PRICE
 export function planQuote(cfg: Config, plan: PlanId, subject: string, usd: string, resourceUrl: string, test: boolean, qty: { endpoints?: number; terms?: number } = {}): Quote {
   const p = PLANS[plan];
   const n = qty.endpoints ?? 1, terms = qty.terms ?? 1;
-  const qtyText = p.perEndpoint ? ` ${n} endpoint${n === 1 ? "" : "s"} × ${terms} term${terms === 1 ? "" : "s"} of 30 days, priced per endpoint per term${(() => { const d = watchDiscount(n, terms); return d.kind ? `, -${d.rate * 100}% ${d.kind}${d.not_stacked ? " (discounts do not stack)" : ""}` : ""; })()}.` : "";
+  const qtyText = p.perEndpoint ? ` ${n} endpoint${n === 1 ? "" : "s"} × ${terms} term${terms === 1 ? "" : "s"} of 30 days, priced per endpoint per term${(() => { const d = watchDiscount(n, terms, plan); return d.kind ? `, -${d.rate * 100}% ${d.kind}${d.not_stacked ? " (discounts do not stack)" : ""}` : ""; })()}.` : "";
   const rate = cfg.xrpRate?.usd ?? cfg.xrpUsdFallback;
   const amountsIou: Record<string, string> = {};
   for (const o of cfg.ious) amountsIou[o.symbol] = usd;
@@ -207,7 +233,10 @@ export function planQuote(cfg: Config, plan: PlanId, subject: string, usd: strin
 
 /** Public, apolitical price table for discovery docs. */
 export function planTable() {
-  return Object.values(PLANS).filter((p) => !p.retired).map((p) => ({ plan: p.id, name: p.name, price_usd: p.usd, ...(p.perEndpoint ? { per: "endpoint" } : {}), ...(p.legacy ? { legacy: true } : {}), term_days: p.days, auto_renew: false, path: p.path, summary: p.summary }));
+  return [
+    ...Object.values(PLANS).filter((p) => !p.retired).map((p) => ({ plan: p.id, name: p.name, price_usd: p.usd, ...(p.perEndpoint ? { per: "endpoint" } : {}), ...(p.founder ? { founder: { seats: p.founder.seats, locked_terms: p.founder.lockedTerms, list_price_usd: PLANS[p.founder.listPlan].usd } } : {}), ...(p.legacy ? { legacy: true } : {}), term_days: p.days, auto_renew: false, path: p.path, summary: p.summary })),
+    { plan: PLATFORM_LICENCE.id, name: PLATFORM_LICENCE.name, price_from_usd: PLATFORM_LICENCE.from_usd, term_days: PLATFORM_LICENCE.term_days, auto_renew: false, how_to_buy: `contact ${PLATFORM_LICENCE.contact}`, summary: PLATFORM_LICENCE.summary },
+  ];
 }
 
 /** Shared random id/token helpers. */
