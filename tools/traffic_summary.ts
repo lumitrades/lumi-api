@@ -28,12 +28,12 @@ async function main() {
   }
   const t = s.totals;
   console.log(`Lumi API traffic ${s.window.from} .. ${s.window.to} (${s.window.days} d), generated ${s.generated_at}${s.truncated ? " [truncated]" : ""}${s.logging ? "" : " [logging OFF]"}`);
-  console.log(`Requests ${t.requests}, visitor-days ${t.visitor_days}, 402s ${t.payment_required_402}, paid ${t.paid}${t.paid_per_402 != null ? ` (${(t.paid_per_402 * 100).toFixed(1)}% of 402s)` : ""}`);
+  console.log(`Requests ${t.requests}, visitor-days ${t.visitor_days}, 402s ${t.payment_required_402}, paid ${t.paid}${t.paid_outside != null ? ` (outside ${t.paid_outside}, $${t.usd_outside}; Lumi tests ${t.paid_test})` : ""}${t.paid_per_402 != null ? ` (${(t.paid_per_402 * 100).toFixed(1)}% of 402s)` : ""}`);
   console.log(`By client: ${Object.entries(t.by_client).map(([k, v]) => `${k} ${v}`).join(", ") || "-"}`);
   console.log(`By status: ${Object.entries(t.by_status).map(([k, v]) => `${k} ${v}`).join(", ") || "-"}`);
   console.log("\nDaily:");
-  console.log("  day          requests visitors   402s  paid  browser  other");
-  for (const d of s.daily) console.log(`  ${d.day}  ${String(d.requests).padStart(8)} ${String(d.visitors).padStart(8)} ${String(d.payment_required_402).padStart(6)} ${String(d.paid).padStart(5)} ${String(d.browser).padStart(8)} ${String(d.non_browser).padStart(6)}`);
+  console.log("  day          requests visitors   402s  paid  outside  test  outside$  browser  other");
+  for (const d of s.daily) console.log(`  ${d.day}  ${String(d.requests).padStart(8)} ${String(d.visitors).padStart(8)} ${String(d.payment_required_402).padStart(6)} ${String(d.paid).padStart(5)} ${String(d.paid_outside ?? "-").padStart(8)} ${String(d.paid_test ?? "-").padStart(5)} ${String(d.usd_outside ?? "-").padStart(9)} ${String(d.browser).padStart(8)} ${String(d.non_browser).padStart(6)}`);
   const list = (title: string, rows: any[]) => {
     console.log(`\n${title}:`);
     if (!rows.length) console.log("  -");
