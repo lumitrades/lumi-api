@@ -112,7 +112,56 @@ describe("Watch Plus founder offer (Phase 2)", () => {
     // test rows do not take a seat
     const store2 = new MemoryCommerceStore();
     for (let i = 0; i < 10; i++) await store2.addPlan({ id: `p${i}`, enrollment_id: `t${i}`, plan: "watch_plus_founder", paid_tx: `t${i}`, is_test: true } as any);
-    expect(await store2.founderSellers("watch_plus_founder")).toBe(0);
+    expect(await store2.founderHolders("watch_plus_founder")).toEqual([]);
+  });
+});
+
+describe("founder places: one per payTo wallet and per domain", () => {
+  const fp = (i: number, enrollment_id: string) => ({ id: `fp${enrollment_id}${i}`, enrollment_id, plan: "watch_plus_founder", starts_at: NOW, ends_at: NOW + 30 * DAY, paid_tx: `tx${enrollment_id}${i}`, paid_network: "xrpl:1", paid_asset: "XRP", paid_amount: "1", payer: null, usd: 5, budget_usd: 6, spent_usd: 0, is_test: false, reminded: 0, created_at: NOW, endpoints: 1, unit_usd: 5 }) as any;
+  const en = (id: string, pay_to: string, domain: string | null, url = `https://api.${id}.com/x`) => ({ id, network: "xrpl:1", pay_to, pay_to_lc: pay_to.toLowerCase(), domain, proof: "", nonce: id, endpoints: [{ url, method: "GET", price_usd: null, asset: null, amount: null, checked_at: null, source: "seller" }], webhook_url: null, webhook_secret: null, email: null, token_hash: "h" + id, is_test: false, created_at: NOW }) as any;
+  const path = (id: string, extra = "") => `/v1/monitor/subscribe/watch_plus_founder?enrollment=${id}&endpoints=1${extra}`;
+  async function fill(store: MemoryCommerceStore, n: number, start = 0) {
+    for (let i = start; i < start + n; i++) { await store.addEnrollment(en(`co${i}`, `rCompany${i}xxxxxxxxxxxxxxxxxxxx`, null)); await store.addPlan(fp(0, `co${i}`)); }
+  }
+  it("a second enrolment with the same payTo shares the place (not taken when full) and its 12 terms", async () => {
+    const store = new MemoryCommerceStore();
+    await fill(store, 9);
+    await store.addEnrollment(en("mineOld", SELLER, null, "https://api.mineold.com/x"));
+    for (let i = 0; i < 12; i++) await store.addPlan(fp(i, "mineOld"));
+    const s = setup({}, store);
+    const e = await enroll(s);
+    const q = await quote(s, path(e.enrollment_id));
+    expect(q.status).toBe(409);
+    expect(q.body).toMatchObject({ error: "founder_terms_used", terms_left: 0 }); // not founder_offer_full: same place
+  });
+  it("a different payTo on the same domain shares the place and its terms", async () => {
+    const store = new MemoryCommerceStore();
+    await fill(store, 9);
+    await store.addEnrollment(en("sameDomain", "rSomeOtherWalletxxxxxxxxxxxxxxx", null, `${BASE}/v1/events`));
+    for (let i = 0; i < 10; i++) await store.addPlan(fp(i, "sameDomain"));
+    const s = setup({}, store);
+    const e = await enroll(s); // endpoint on lumi.test, a different wallet would be another company only with another domain
+    const three = await quote(s, path(e.enrollment_id, "&terms=3"));
+    expect(three.status).toBe(409);
+    expect(three.body).toMatchObject({ error: "founder_terms_used", terms_left: 2 });
+    expect((await quote(s, path(e.enrollment_id))).status).toBe(402); // the shared terms that are left
+  });
+  it("the enrolled domain counts too; enrolments sharing a wallet or domain count as one place", async () => {
+    const store = new MemoryCommerceStore();
+    await fill(store, 8);
+    // two enrolments of one company (same wallet), then a third of the same company by domain: one place between them
+    await store.addEnrollment(en("a1", "rSharedWalletxxxxxxxxxxxxxxxxxx", "shared.io", "https://api.shared.io/a"));
+    await store.addEnrollment(en("a2", "rSharedWalletxxxxxxxxxxxxxxxxxx", null, "https://api.other1.com/a"));
+    await store.addEnrollment(en("a3", "rThirdWalletxxxxxxxxxxxxxxxxxxx", "shared.io", "https://api.other2.com/a"));
+    for (const id of ["a1", "a2", "a3"]) await store.addPlan(fp(0, id));
+    const s = setup({}, store);
+    const e = await enroll(s);
+    expect((await quote(s, path(e.enrollment_id))).status).toBe(402); // 9 places taken, the 10th is free
+    await store.addEnrollment(en("co99", "rCompany99xxxxxxxxxxxxxxxxxxxx", null));
+    await store.addPlan(fp(0, "co99"));
+    const full = await quote(s, path(e.enrollment_id));
+    expect(full.status).toBe(409);
+    expect(full.body.error).toBe("founder_offer_full");
   });
 });
 

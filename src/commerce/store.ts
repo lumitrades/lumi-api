@@ -45,7 +45,8 @@ export interface CommerceStore {
   addPlan(p: PlanRow): Promise<"inserted" | "duplicate">;
   plansFor(enrollmentId: string): Promise<PlanRow[]>;
   /** Distinct non-test enrolments that ever bought `plan` (founder seat count). */
-  founderSellers(plan: string): Promise<number>;
+  /** Non-test enrolments holding a founder plan, with the terms each has bought (places are grouped per payTo and per domain by the caller). */
+  founderHolders(plan: string): Promise<{ enrollment_id: string; terms: number }[]>;
   plansEndingAfter(t: number): Promise<PlanRow[]>;
   setReminded(planId: string, n: number): Promise<void>;
   addSpent(planId: string, usd: number): Promise<void>;
@@ -119,7 +120,11 @@ export class MemoryCommerceStore implements CommerceStore {
   async enrollmentsByPayTo(lc: string[]) { return [...this.enrolls.values()].filter((e) => lc.includes(e.pay_to_lc)); }
   async enrollments(limit: number) { return [...this.enrolls.values()].sort((a, b) => b.created_at - a.created_at).slice(0, limit); }
   async addPlan(p: PlanRow) { if (this.plans.some((x) => x.paid_tx === p.paid_tx)) return "duplicate" as const; this.plans.push({ ...p }); return "inserted" as const; }
-  async founderSellers(plan: string) { return new Set(this.plans.filter((p) => p.plan === plan && !p.is_test).map((p) => p.enrollment_id)).size; }
+  async founderHolders(plan: string) {
+    const m = new Map<string, number>();
+    for (const p of this.plans) if (p.plan === plan && !p.is_test) m.set(p.enrollment_id, (m.get(p.enrollment_id) ?? 0) + 1);
+    return [...m].map(([enrollment_id, terms]) => ({ enrollment_id, terms }));
+  }
   async plansFor(id: string) { return this.plans.filter((p) => p.enrollment_id === id).sort((a, b) => b.starts_at - a.starts_at); }
   async plansEndingAfter(t: number) { return this.plans.filter((p) => p.ends_at > t); }
   async setReminded(id: string, n: number) { const p = this.plans.find((x) => x.id === id); if (p) p.reminded = n; }
@@ -200,7 +205,10 @@ export class D1CommerceStore implements CommerceStore {
     );
     return (r?.meta?.changes ?? 1) > 0 ? ("inserted" as const) : ("duplicate" as const);
   }
-  async founderSellers(plan: string) { return Number((await this.first<any>("SELECT COUNT(DISTINCT enrollment_id) AS n FROM monitor_plans WHERE plan = ?1 AND is_test = 0", plan))?.n ?? 0); }
+  async founderHolders(plan: string) {
+    const r = await this.db.prepare("SELECT enrollment_id, COUNT(*) AS terms FROM monitor_plans WHERE plan = ?1 AND is_test = 0 GROUP BY enrollment_id").bind(plan).all<any>();
+    return (r.results ?? []).map((x: any) => ({ enrollment_id: String(x.enrollment_id), terms: Number(x.terms) }));
+  }
   async plansFor(id: string) { return (await this.all<any>("SELECT * FROM monitor_plans WHERE enrollment_id = ?1 ORDER BY starts_at DESC LIMIT 50", id)).map(planFrom); }
   async plansEndingAfter(t: number) { return (await this.all<any>("SELECT * FROM monitor_plans WHERE ends_at > ?1 ORDER BY ends_at LIMIT 500", t)).map(planFrom); }
   async setReminded(id: string, n: number) { await this.run("UPDATE monitor_plans SET reminded = ?2 WHERE id = ?1", id, n); }

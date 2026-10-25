@@ -220,4 +220,70 @@ describe("free limits per IP and per wallet / key (Phase 2)", () => {
     // another key on the same rotating IPs is not affected
     expect((await s.req("/v1/check?url=" + enc(R(2)), { headers: { "X-Wallet": "rOther" } })).status).toBe(200);
   });
+  it("safety is never withheld: a 429 still carries an active payTo change (live alert) without the normal answer", async () => {
+    const s = await setup();
+    await s.buy(1, NOW - 2 * DAY, true);
+    seller.payTo = "0x" + "9".repeat(40);
+    expect((await s.trustCheck(R(1))).body.live.safety_change).toBe(true);
+    const h = { "X-Wallet": "rWalletSafety" };
+    let last: Response | null = null;
+    for (let i = 0; i < 31; i++) last = await s.req("/v1/check?url=" + enc(R(1)), { headers: h });
+    expect(last!.status).toBe(429);
+    const b: any = await last!.json();
+    expect(b.safety).toMatchObject({ checked: true, active: true });
+    expect(b.safety.findings.map((f: any) => f.code)).toContain("live_pay_to_change");
+    expect(b.safety.live_alert).toMatchObject({ changes: [{ field: "pay_to" }] });
+    // no normal answer on the 429
+    for (const k of ["verdict", "decision", "score", "label", "receipt", "signed", "reasons"]) expect(b).not.toHaveProperty(k);
+    expect(b.safety).not.toHaveProperty("decision");
+  });
+  it("safety on a 429 from the free /v1/verdict: a price jump found by a live check is carried", async () => {
+    const s = await setup({ VERDICT_PRICING: "free" });
+    await s.buy(1, NOW - 2 * DAY, true);
+    seller.amount = "50000";
+    expect((await s.trustCheck(R(1))).body.live.changes.map((c: any) => c.field)).toContain("price");
+    const h = { "X-Wallet": "rWalletSafetyV" };
+    let last: Response | null = null;
+    for (let i = 0; i < 31; i++) last = await s.req("/v1/verdict?url=" + enc(R(1)), { headers: h });
+    expect(last!.status).toBe(429);
+    const b: any = await last!.json();
+    expect(b.safety.findings.map((f: any) => f.code)).toContain("live_price_change");
+    expect(b).not.toHaveProperty("label");
+  });
+  it("safety on a 429: a quoted payTo that differs from the record is a finding; a clean URL says active false", async () => {
+    const s = await setup();
+    await s.buy(1, NOW - 2 * DAY, true);
+    const h = { "X-Wallet": "rWalletSafety2" };
+    for (let i = 0; i < 30; i++) await s.req("/v1/check?url=" + enc(R(1)), { headers: h });
+    const bad: any = await (await s.req("/v1/check?url=" + enc(R(1)) + "&payTo=0x" + "8".repeat(40), { headers: h })).json();
+    expect(bad.error ?? bad.more).toBeTruthy();
+    expect(bad.safety.active).toBe(true);
+    expect(bad.safety.findings.some((f: any) => ["pay_to_mismatch", "pay_to_unrecognised", "quote_pays_unlisted_address"].includes(f.code))).toBe(true);
+    const ok = await s.req("/v1/check?url=" + enc(R(1)), { headers: h });
+    expect(ok.status).toBe(429);
+    const okb: any = await ok.json();
+    expect(okb.safety).toMatchObject({ checked: true, active: false, findings: [] });
+  });
+  it("safety on a 429: 'Recent checks failed' is carried; the free trust lookup 429 carries it too", async () => {
+    const s = await setup();
+    await s.buy(1, NOW - 3 * DAY, false);
+    await s.buy(1, NOW - 2 * DAY, false);
+    await s.buy(1, NOW - 1 * DAY, false);
+    await s.rescan();
+    const free: any = await s.check(R(1));
+    const h = { "X-Wallet": "rWalletSafety3" };
+    let last: Response | null = null;
+    for (let i = 0; i < 31; i++) last = await s.req("/v1/check?url=" + enc(R(1)), { headers: h });
+    expect(last!.status).toBe(429);
+    const b: any = await last!.json();
+    // the free answer shows failed recent checks (pending review); the 429 carries the same findings
+    expect(free.reasons.map((r: any) => r.code)).toContain("paid_no_data");
+    expect(b.safety.active).toBe(true);
+    expect(b.safety.findings.map((f: any) => f.code)).toEqual(expect.arrayContaining(["paid_no_data", "checks_failed_pending_review"]));
+    let lk: Response | null = null;
+    for (let i = 0; i < 31; i++) lk = await s.req("/v1/trust/vendors?url=" + enc(R(1)), { headers: { "X-Wallet": "rWalletSafety4" } });
+    expect(lk!.status).toBe(429);
+    const lb: any = await lk!.json();
+    expect(lb.safety.active).toBe(true);
+  });
 });

@@ -979,7 +979,7 @@ ${commerceSkillMd(base)}
 const LOGO = "https://lumitrades.io/assets/icon-512.png";
 /** Social / x402scan card for api.lumitrades.io (the page <title> stays descriptive). */
 export const OG_TITLE = "Lumi Trades: check x402 sellers before you pay";
-export const OG_DESC = "Lumi Check: free signed allow/warn/block for x402 sellers, backed by paid test-buys on XRPL, Base and Stellar. Plus a daily policy brief.";
+export const OG_DESC = "Lumi Check: free signed allow/warn/block for x402 sellers, backed by paid test-buys on XRPL, Base and Stellar.";
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** Human quickstart served at `/` when the client asks for text/html (browsers, x402scan's page fetcher). */

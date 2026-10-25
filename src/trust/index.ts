@@ -75,6 +75,8 @@ export interface TrustDeps {
   annotate?: (doc: Record<string, unknown>, payTos: string[]) => Promise<Record<string, unknown>>;
   /** A free lookup was served (after rate limits): the same test-buy priority signal as a paid trust/check. Never changes the answer. */
   onFreeCheck?: (q: LookupQuery, base: string) => Promise<unknown>;
+  /** Active safety findings for a lookup, attached to a free-limit 429 (safety is never withheld, only the normal answer is). */
+  safetyFor?: (q: LookupQuery, base: string) => Promise<Record<string, unknown>>;
 }
 
 /** Every payTo-looking string under `pay_to` keys of a lookup doc (catalog entries + curated vendors). */
@@ -511,6 +513,14 @@ function probeView(p: ProbeRow) {
 }
 
 // ---------------------------------------------------------------- factory
+
+/** A free-limit 429 with the active safety findings added (the normal answer stays withheld). */
+export async function withSafety(lim: Response, safety: Record<string, unknown>): Promise<Response> {
+  const body = (await lim.clone().json().catch(() => ({}))) as Record<string, unknown>;
+  const headers = new Headers(lim.headers);
+  headers.set("Cache-Control", "no-store");
+  return new Response(JSON.stringify({ ...body, safety }), { status: lim.status, headers });
+}
 
 export function createTrust(deps: TrustDeps): Trust {
   const { store, now } = deps;
@@ -1419,7 +1429,7 @@ export function createTrust(deps: TrustDeps): Trust {
         if (q) {
           if (q.domain) q.domain = q.domain.replace(/^https?:\/\//i, "").split(/[/?#]/)[0].replace(/:\d+$/, "").toLowerCase();
           const lim = await lookupLimit(request);
-          if (lim) return lim;
+          if (lim) return deps.safetyFor ? withSafety(lim, await deps.safetyFor(q, base)) : lim;
           const doc = await lookup(q, base, { free: true });
           if (deps.onFreeCheck) {
             const p = deps.onFreeCheck(q, base).catch((e) => deps.log({ event: "buy_queue_error", source: "free_lookup", error: String(e) }));

@@ -41,7 +41,13 @@ import { applyRate, createXrpPricer, type XrpPricer } from "./pricing";
 import { D1TrafficStore, MemoryTrafficStore, TRAFFIC_RETENTION_DAYS, TrafficBuffer, trafficRow, trafficSummary, type TrafficStore } from "./traffic";
 import { D1FeedStore, MemoryFeedStore, FEEDS, dueFeed, refreshFeed, feedFresh, type FeedStore } from "./feeds";
 import { fundingView, fearGreedView, fearGreedFromContext, events48View, trustVerdict } from "./quick";
-import { lookupError } from "./trust/index";
+import { lookupError, withSafety } from "./trust/index";
+
+/**
+ * Warn-level reasons that are safety findings: an address that differs from the record, a price jump, and recent paid checks
+ * that failed (also while a person reviews them before checks_failed is shown). Every block reason is one too.
+ */
+const SAFETY_WARN_CODES = new Set(["pay_to_unrecognised", "quoted_price_differs", "paid_no_data", "xrpl_paid_no_data", "recent_buy_failed", "checks_failed_pending_review"]);
 import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
 import { signingSecretSeparate } from "./trust/lumi_keys";
 import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
@@ -392,6 +398,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     stellarHorizon,
     annotate: (doc, payTos) => commerce.annotate(doc, payTos),
     // Free lookups by exact URL feed the same test-buy priority signal as the paid trust/check (payment never changes the order).
+    safetyFor: (q, base) => safetyFindings(q.url ? { url: q.url, payTo: q.payTo } : q.domain ? { url: `https://${q.domain}/`, payTo: q.payTo } : { payTo: q.payTo }, base),
     onFreeCheck: (q, base) => (q.url ? checkSignal({ url: q.url, ...(q.payTo ? { payTo: q.payTo } : {}) }, base, "free_lookup") : Promise.resolve(null)),
   });
   const badges = createBadges({
@@ -460,6 +467,33 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     return [...new Set([...fromBuys, ...fromCurated])];
   };
 
+  /**
+   * Safety findings that are never withheld, even when the free limit is hit: an address that differs from the record, a
+   * price jump, a TLS failure or other live-check safety change, a sanctions match, and "Recent checks failed". Built from the
+   * same check core as /v1/check; a free-limit 429 carries this instead of the normal answer. Never throws.
+   */
+  async function safetyFindings(input: { url?: string; payTo?: string; amountUsd?: number; network?: string }, base: string): Promise<Record<string, unknown>> {
+    const t = now();
+    try {
+      let clean: string | null = null;
+      if (input.url) { try { clean = originPath(input.url); } catch { clean = null; } }
+      if (!clean && !input.payTo) return { checked: false, active: false, findings: [], note: "No URL or payTo to check." };
+      const { verdict: v } = clean ? await checkVerdict({ url: clean, payTo: input.payTo, amountUsd: input.amountUsd, network: input.network }, base, false) : await payToVerdict({ payTo: input.payTo!, amountUsd: input.amountUsd, network: input.network }, base);
+      const findings: { code: string; detail: string }[] = [];
+      for (const r of (v?.reasons ?? []) as any[]) if (r?.severity === "block" || SAFETY_WARN_CODES.has(r?.code)) findings.push({ code: String(r.code), detail: String(r.detail ?? "") });
+      for (const c of ((v?.live_alert as any)?.changes ?? []) as any[]) findings.push({ code: `live_${c.field}_change`, detail: String(c.text ?? "") });
+      if (v?.label === "checks_failed" && !findings.some((f) => f.code === "paid_no_data")) findings.push({ code: "checks_failed", detail: LABELS.checks_failed });
+      return {
+        checked: true, active: findings.length > 0, as_of: new Date(t).toISOString(),
+        findings, live_alert: v?.live_alert ?? null,
+        note: "Safety findings are never withheld: they are shown even when the free limit is reached. Only the normal answer waits for the limit to reset.",
+      };
+    } catch (e) {
+      deps.log?.({ event: "safety_on_limit_error", error: String(e) });
+      return { checked: false, active: null, findings: [], note: "Lumi could not read the safety record right now; this is not an all-clear. Retry after the limit resets." };
+    }
+  }
+
   /** How old the evidence behind a cached answer is (newest of: last delivered test-buy, last free probe, last catalog quote check). */
   const dataAge = (ts: (number | null)[], t: number) => {
     const xs = ts.filter((x): x is number => typeof x === "number" && Number.isFinite(x));
@@ -522,9 +556,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (lerr) return json(400, lerr, noStore);
     if (amountRaw && !(amountUsd !== undefined && Number.isFinite(amountUsd) && amountUsd >= 0 && amountUsd < 1e6)) return bad("amount must be a USD number, e.g. 0.01.");
     // One free limit for everyone: contributors get no rate-limit or other perk.
-    const limit = await trust.freeLimit(request, "lookup");
-    if (limit) return limit;
     const network = sp.get("network")?.slice(0, 40) || undefined;
+    const limit = await trust.freeLimit(request, "lookup");
+    if (limit) return withSafety(limit, await safetyFindings({ url: clean || undefined, payTo, amountUsd, network }, base));
     // One check core for /v1/check, /v1/trust/check and /v1/verdict: the same full catalog lookup and the same trustVerdict, so
     // the free check, the paid check and the verdict can never disagree for the same seller at the same time. Only the
     // response shape differs (checkPayload is answer-only).
@@ -906,7 +940,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   async function freeVerdict(request: Request, url: URL, base: string, ctx?: WaitUntil): Promise<Response> {
     const noStore = { "Cache-Control": "no-store" };
     const limit = await trust.freeLimit(request, "lookup");
-    if (limit) return limit;
+    if (limit) {
+      const sp = url.searchParams;
+      const amt = Number((sp.get("amount") ?? "").replace(/^\$/, ""));
+      return withSafety(limit, await safetyFindings({ url: sp.get("url")?.trim() || undefined, payTo: sp.get("payTo")?.trim() || sp.get("pay_to")?.trim() || undefined, amountUsd: sp.get("amount") && Number.isFinite(amt) ? amt : undefined }, base));
+    }
     try {
       const r = await buildVerdict(url.search, base, false);
       if (!r.ok) return json(r.status, r.error, noStore);

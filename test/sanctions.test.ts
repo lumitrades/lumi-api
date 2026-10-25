@@ -151,6 +151,17 @@ async function setup() {
 const refusals = (logs: any[]) => logs.filter((l) => l?.event === "sanctioned_address_refused");
 
 describe("sanctions: app hooks", () => {
+  it("a free-limit 429 on /v1/check still carries a sanctions hit (safety is never withheld)", async () => {
+    const { req } = await setup();
+    const h = { headers: { "X-Wallet": "rSanctionsLimit" } };
+    let last: Response | null = null;
+    for (let i = 0; i < 31; i++) last = await req("/v1/check?url=" + encodeURIComponent(BAD), h);
+    expect(last!.status).toBe(429);
+    const b: any = await last!.json();
+    expect(b.safety.active).toBe(true);
+    expect(b.safety.findings[0].code).toBe(SANCTIONS_REASON);
+    expect(b).not.toHaveProperty("verdict");
+  });
   it("/v1/trust/check blocks a listed payTo with sanctioned_address, logs it, and queues no test-buy", async () => {
     const { ev, logs, buy } = await setup();
     const r = await buy("/v1/trust/check?url=" + encodeURIComponent(BAD) + "&pay_to=" + SDN_EVM);

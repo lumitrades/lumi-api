@@ -5,7 +5,7 @@
  */
 import { canonicalJson, json, requirePayment, assetLabel, paymentRequiredResponse, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, type Settlement, type PaymentRequirements } from "../x402";
 import { verifyXrplSignature, xrplAddressOf } from "../trust/verify";
-import { explorerFor } from "../trust/catalog";
+import { explorerFor, registrableDomain } from "../trust/catalog";
 import { sendPlainEmail } from "../sales";
 import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, SOLD_MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, budgetBaseUsd, type PlanId, type WatchTier } from "./plans";
 import { MONITOR_METHODOLOGY, MONITOR_SAFEGUARDS, MONITOR_TERMS } from "./policy";
@@ -410,9 +410,24 @@ export function createMonitor(deps: CommerceDeps) {
     if (sx) return sanctionedRes(sx); // before any 402 or settlement
     if (def.founder && !e.is_test) {
       const f = def.founder;
-      const used = (await store.plansFor(e.id)).filter((p) => p.plan === plan && !p.is_test).length;
-      if (!used && (await store.founderSellers(plan)) >= f.seats) return json(409, { error: "founder_offer_full", plan, detail: `The founder offer is limited to the first ${f.seats} sellers and all places are taken. Watch Plus at list price: ${base}${PLANS[f.listPlan].path}?enrollment=${e.id}${qs}`, note: "Not charged." }, NO_STORE);
-      if (used + qty.terms > f.lockedTerms) return json(409, { error: "founder_terms_used", plan, detail: `The founder price is kept for ${f.lockedTerms} terms per seller; this enrolment has used ${used}. Watch Plus at list price: ${base}${PLANS[f.listPlan].path}?enrollment=${e.id}${qs}`, terms_left: Math.max(0, f.lockedTerms - used), note: "Not charged." }, NO_STORE);
+      // One place per company: enrolments sharing a payTo wallet or a domain (enrolled domain or an endpoint's registrable
+      // domain) hold one place between them, and share its locked terms.
+      const keys = (x: Enrollment) => new Set([`pay:${x.pay_to_lc}`, ...[x.domain, ...x.endpoints.map((ep) => { try { return new URL(ep.url).hostname; } catch { return null; } })].filter((d): d is string => !!d).map((d) => registrableDomain(d) ?? d.toLowerCase()).map((d) => `dom:${d}`)]);
+      const mine = keys(e);
+      const holders = await store.founderHolders(plan);
+      const places: { keys: Set<string>; terms: number }[] = []; // one entry per company holding a place
+      for (const h of holders) {
+        const he = h.enrollment_id === e.id ? e : await store.enrollment(h.enrollment_id);
+        const hk = he ? keys(he) : new Set([`id:${h.enrollment_id}`]);
+        const hit = places.filter((p) => [...hk].some((k) => p.keys.has(k)));
+        for (const p of hit) places.splice(places.indexOf(p), 1);
+        places.push({ keys: new Set([...hk, ...hit.flatMap((p) => [...p.keys])]), terms: h.terms + hit.reduce((n, p) => n + p.terms, 0) });
+      }
+      const ours = places.filter((p) => [...p.keys].some((k) => mine.has(k)));
+      const holdsPlace = ours.length > 0;
+      const used = ours.reduce((n, p) => n + p.terms, 0);
+      if (!holdsPlace && places.length >= f.seats) return json(409, { error: "founder_offer_full", plan, detail: `The founder offer is limited to the first ${f.seats} sellers and all places are taken. Watch Plus at list price: ${base}${PLANS[f.listPlan].path}?enrollment=${e.id}${qs}`, note: "Not charged." }, NO_STORE);
+      if (used + qty.terms > f.lockedTerms) return json(409, { error: "founder_terms_used", plan, detail: `The founder price is kept for ${f.lockedTerms} terms per seller (one place per payTo wallet and per domain); this seller has used ${used}. Watch Plus at list price: ${base}${PLANS[f.listPlan].path}?enrollment=${e.id}${qs}`, terms_left: Math.max(0, f.lockedTerms - used), note: "Not charged." }, NO_STORE);
     }
     const econ = (per ? watchEconomics(e, plan, qty.endpoints, qty.terms) : planEconomics(e)[plan]) as { eligible: boolean; reason?: string };
     if (!econ.eligible) return json(409, { error: "plan_not_eligible", plan, reason: econ.reason, enrollment_id: e.id, ...(per ? { endpoints: qty.endpoints, terms: qty.terms } : {}), note: "Not charged." }, NO_STORE);
