@@ -95,3 +95,12 @@ export function fakeDurableObjectNamespace() {
     },
   };
 }
+
+// Options for a throwaway Miniflare instance with one D1 binding ("DB").
+// miniflare 5 (wrangler >= 4.152) takes `{ workers: [{ config, ... }] }`; it ships
+// convertV4MiniflareOptions to translate the v4-style flat options used here.
+// On miniflare 4 the converter is absent and the flat options pass straight through.
+export function miniflareD1Options(convert?: (o: unknown) => unknown): any {
+  const v4 = { modules: true, script: "export default { fetch() { return new Response('') } }", d1Databases: ["DB"] };
+  return typeof convert === "function" ? convert(v4) : v4;
+}

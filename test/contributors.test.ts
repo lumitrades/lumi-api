@@ -10,7 +10,7 @@ import { sha256Hex, utf8Hex } from "../src/trust/verify";
 import { VENDORS } from "../src/vendors";
 // @ts-ignore plain-JS kit (packages/scanner-kit): the same code contributors run
 import * as kit from "../packages/scanner-kit/src/index.js";
-import { NOW, PAY_TO, FACILITATOR, DATA } from "./helpers";
+import { NOW, PAY_TO, FACILITATOR, DATA, miniflareD1Options } from "./helpers";
 
 const OWNER = "o".repeat(52);
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", OWNER_MCP_KEY: OWNER };
@@ -357,8 +357,8 @@ describe("D1 write budget and queue", () => {
   });
 
   it("D1 store: migration 0015 applies and the batched SQL round-trips (miniflare)", async () => {
-    const { Miniflare } = await import("miniflare");
-    const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('') } }", d1Databases: ["DB"] });
+    const { Miniflare, convertV4MiniflareOptions } = await import("miniflare") as any;
+    const mf = new Miniflare(miniflareD1Options(convertV4MiniflareOptions));
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
@@ -618,8 +618,8 @@ describe("account deletion (contributor self-service + owner on email request)",
   });
 
   it("D1 store: erase in one batch, published rows anonymised (miniflare)", async () => {
-    const { Miniflare } = await import("miniflare");
-    const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('') } }", d1Databases: ["DB"] });
+    const { Miniflare, convertV4MiniflareOptions } = await import("miniflare") as any;
+    const mf = new Miniflare(miniflareD1Options(convertV4MiniflareOptions));
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
@@ -843,8 +843,8 @@ describe("score-gaming gaps: wallet proofs, funding clusters, seller-funded wall
   });
 
   it("D1: nearDup, clusterSeller, wallet proofs and the funding cache round-trip (miniflare, migration 0022)", async () => {
-    const { Miniflare } = await import("miniflare");
-    const mf = new Miniflare({ modules: true, script: "export default { fetch() { return new Response('') } }", d1Databases: ["DB"] });
+    const { Miniflare, convertV4MiniflareOptions } = await import("miniflare") as any;
+    const mf = new Miniflare(miniflareD1Options(convertV4MiniflareOptions));
     try {
       const db: any = await mf.getD1Database("DB");
       await db.exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);");
