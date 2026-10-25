@@ -27,6 +27,11 @@ import {
 } from "./verify";
 
 export const WINDOW_DAYS = 30;
+/** Confidence counts paid test-buys over 90 days (score inputs stay 30 days): since 2026-10-25 steady curated vendors are
+ * test-bought weekly instead of daily (seller rotation), so a 30-day count would understate how often they were checked. */
+export const CONFIDENCE_WINDOW_DAYS = 90;
+/** How the curated test-buy list is scheduled (seller rotation, owner-approved 2026-10-25). */
+export const TEST_BUY_SCHEDULE = "rotation: bought daily while new (fewer than 5 delivered test-buys), after any failed, no-data or timed-out buy or quote in the last 7 days, after a price or payTo change in the last 7 days, or for 14 days after a failure; otherwise (steady: every buy delivered for 7+ days) bought once a week, on a fixed weekday per seller. Free quote checks still run every 30 minutes.";
 const DAY = 86_400_000;
 export const REPORT_HOLD_MS = DAY;
 const REPORT_MAX_AGE_MS = 7 * DAY;
@@ -231,10 +236,10 @@ export interface ScoreResult {
   value: number | null;
   confidence: "low" | "medium" | "high";
   components: Record<string, unknown>;
-  samples: { paid_test_buys: number; delivered: number; inconclusive_test_buys?: number; probes: number; probes_ok: number; verified_reports_counted: number };
+  samples: { paid_test_buys: number; delivered: number; inconclusive_test_buys?: number; paid_test_buys_90d?: number; probes: number; probes_ok: number; verified_reports_counted: number };
 }
 
-export function scoreVendor(probes: ProbeSummary, obs: ObservationRow[], reports: ReportRow[], now: number): ScoreResult {
+export function scoreVendor(probes: ProbeSummary, obs: ObservationRow[], reports: ReportRow[], now: number, paid90?: number): ScoreResult {
   const paid = obs.length;
   // Inconclusive buys (Lumi never saw a response) are not evidence about the seller: excluded from the delivery rate.
   const dc = deliveryCounts(obs);
@@ -278,7 +283,7 @@ export function scoreVendor(probes: ProbeSummary, obs: ObservationRow[], reports
   let den = 0;
   for (const [k, v] of parts) if (v != null) { num += WEIGHTS[k] * v; den += WEIGHTS[k]; }
   const value = den ? Math.round((100 * num) / den) : null;
-  const confidence = paid < 5 || probes.n < 10 ? "low" : paid < 20 ? "medium" : "high";
+  const confidence = confidenceOf(paid90 ?? paid, probes.n);
   return {
     value,
     confidence,
@@ -288,7 +293,7 @@ export function scoreVendor(probes: ProbeSummary, obs: ObservationRow[], reports
       latency: { value: round(latency), weight: WEIGHTS.latency, median_ms: med == null ? null : Math.round(med), samples: probes.latencies.length, meaning: "median time to a valid 402 quote; 500 ms or less = 1, 5 s or more = 0" },
       agent_reports: { value: round(agentReports), weight: WEIGHTS.agent_reports, counted, meaning: "verified agent reports (on-ledger payment + payer signature), after a 24 h hold; excluded when there are none" },
     },
-    samples: { paid_test_buys: paid, delivered, inconclusive_test_buys: dc.inconclusive, probes: probes.n, probes_ok: probes.ok, verified_reports_counted: counted },
+    samples: { paid_test_buys: paid, delivered, inconclusive_test_buys: dc.inconclusive, ...(paid90 != null ? { paid_test_buys_90d: paid90 } : {}), probes: probes.n, probes_ok: probes.ok, verified_reports_counted: counted },
   };
 }
 
@@ -355,7 +360,7 @@ export function methodologyDoc(base: string) {
     seller_monitoring: { ...MONITOR_METHODOLOGY, docs: `${base}/v1/monitor`, corrections: `${base}/v1/monitor/corrections` },
     what_is_measured: [
       "Free probes: every 30 minutes Lumi sends one unpaid request to each curated vendor endpoint and records whether it answers with a valid x402 v2 402 quote that offers an XRPL (xrpl:0) option paying an address listed for that vendor (curated list; Bazaar catalog listings get their own quote checks, see x402_catalog), the quoted price and asset, whether the quote carries a sourceTag, and the response time. Probes never send a payment.",
-      "Paid test-buys, by chain. Curated vendor list (/v1/trust/vendors): bought on XRPL (xrpl:0) in RLUSD or XRP from Lumi's XRPL wallet, periodic single calls within shared hard caps (about $0.50 a day: 0.30 RLUSD + 0.10 XRP per day in total across all curated vendors, plus up to 0.15 USDC a day on Stellar, so not every vendor is bought every day; no endpoint priced above 0.05; actual counts per vendor are in coverage). CDP Bazaar catalog listings: bought in USDC on Base (eip155:8453) from Lumi's Base buyer wallet, through the facilitator the seller's own 402 names, one buy per seller domain plus queued re-buys (no listing priced above $0.05; re-buys capped at $0.10 per day). Stellar (stellar:pubnet) x402 sellers found in the Bazaar catalog: bought in USDC from Lumi's Stellar wallet within that shared daily cap (up to 0.15 USDC a day, no listing priced above $0.05). Catalog listings are not test-bought on XRPL and curated vendors are not test-bought on Base. Every test-buy tx is checked on-chain (successful, sent by a Lumi wallet, received by a listed payTo) before it is stored. Each record (in the paid vendor report or paid trust/check; free surfaces show only date, HTTP status and data yes/no) shows the amount, asset, tx hash, HTTP status, whether the response contained data, latency, and a signed receipt (see receipts).",
+      "Paid test-buys, by chain. Curated vendor list (/v1/trust/vendors): bought on XRPL (xrpl:0) in RLUSD or XRP from Lumi's XRPL wallet, periodic single calls within shared hard caps (about $0.50 a day: 0.30 RLUSD + 0.10 XRP per day in total across all curated vendors, plus up to 0.15 USDC a day on Stellar, so not every vendor is bought every day; no endpoint priced above 0.05; actual counts per vendor are in coverage). Since 2026-10-25 the curated list follows a seller rotation: " + TEST_BUY_SCHEDULE + " The field daily_test_buy is kept for compatibility and means 'on the test-buy list'; see test_buy_schedule. CDP Bazaar catalog listings: bought in USDC on Base (eip155:8453) from Lumi's Base buyer wallet, through the facilitator the seller's own 402 names, one buy per seller domain plus queued re-buys (no listing priced above $0.05; re-buys capped at $0.10 per day). Stellar (stellar:pubnet) x402 sellers found in the Bazaar catalog: bought in USDC from Lumi's Stellar wallet within that shared daily cap (up to 0.15 USDC a day, no listing priced above $0.05). Catalog listings are not test-bought on XRPL and curated vendors are not test-bought on Base. Every test-buy tx is checked on-chain (successful, sent by a Lumi wallet, received by a listed payTo) before it is stored. Each record (in the paid vendor report or paid trust/check; free surfaces show only date, HTTP status and data yes/no) shows the amount, asset, tx hash, HTTP status, whether the response contained data, latency, and a signed receipt (see receipts).",
       "Agent reports: any agent that paid a listed vendor can POST /v1/reports. A report counts only if the payment is validated on-ledger (tesSUCCESS, sent by the reporter, delivered to a pay-to address listed for that vendor, within the last 7 days) AND the payer signs the challenge `lumi-report:<network>:<tx_hash>`. Unverified submissions are stored privately for abuse review and are never shown or scored.",
     ],
     x402_catalog: {
@@ -388,7 +393,7 @@ export function methodologyDoc(base: string) {
       uptime: "valid 402 quotes / probes",
       latency: "1 - (median_ms - 500) / 4500, clipped to 0..1",
       agent_reports: "positive / (positive + negative) verified reports; a negative report gets weight 1.5 when a Lumi test-buy within 6 h also returned no data; max 1 counted report per reporter per day and 5 per 30 days; 24 h hold before counting",
-      confidence: "low when there are fewer than 5 paid test-buys or fewer than 10 probes; medium below 20 paid test-buys; otherwise high",
+      confidence: "low when there are fewer than 5 paid test-buys in the last 90 days or fewer than 10 probes in the last 30 days; medium below 20 paid test-buys in 90 days; otherwise high (the score itself uses the last 30 days)",
       ordering: "vendors are listed in allowlist order, not ranked",
     },
     data_returned_rule:
@@ -498,13 +503,14 @@ export function createTrust(deps: TrustDeps): Trust {
 
   async function gather(v: Vendor) {
     const since = now() - WINDOW_DAYS * DAY;
-    const [probes, obs, reports, replies] = await Promise.all([
+    const [probes, obs90, reports, replies] = await Promise.all([
       store.probeSummary(v.id, since),
-      store.observations(v.id, since),
+      store.observations(v.id, now() - CONFIDENCE_WINDOW_DAYS * DAY),
       store.verifiedReports(v.id, since),
       store.verifiedReplies(v.id),
     ]);
-    return { probes, obs, reports, replies, score: scoreVendor(probes, obs, reports, now()) };
+    const obs = obs90.filter((o) => o.ts >= since);
+    return { probes, obs, reports, replies, score: scoreVendor(probes, obs, reports, now(), obs90.length) };
   }
 
   /** A vendor is "unreachable" when the last 3 probes of every endpoint got 404/410 or no answer at all. */
@@ -629,7 +635,7 @@ export function createTrust(deps: TrustDeps): Trust {
       status: reach.status,
       ...(reach.note ? { status_note: reach.note } : {}),
       pay_to: v.pay_to,
-      endpoints: v.endpoints.map((e) => ({ url: e.url, method: e.method, listed_price: e.listed_price, listed_asset: e.listed_asset, daily_test_buy: !!e.test_buy })),
+      endpoints: v.endpoints.map((e) => ({ url: e.url, method: e.method, listed_price: e.listed_price, listed_asset: e.listed_asset, daily_test_buy: !!e.test_buy, test_buy: !!e.test_buy, test_buy_schedule: e.test_buy ? TEST_BUY_SCHEDULE : null })),
       score: { value: g.score.value, confidence: g.score.confidence, components: g.score.components, samples: g.score.samples },
       observations: g.obs.slice(0, 10).map(obsFreeView),
       observations_total: g.obs.length,
@@ -742,6 +748,7 @@ export function createTrust(deps: TrustDeps): Trust {
         listed_price: listed?.listed_price ?? null,
         listed_asset: listed?.listed_asset ?? null,
         daily_test_buy: !!listed?.test_buy,
+        test_buy_schedule: listed?.test_buy ? TEST_BUY_SCHEDULE : null,
         probes: p.length,
         valid_quotes: valid.length,
         uptime_pct: pct(valid.length, p.length),
@@ -774,10 +781,10 @@ export function createTrust(deps: TrustDeps): Trust {
       pay_to: v.pay_to,
       confidence_label:
         confidence === "low"
-          ? "LOW CONFIDENCE: few samples (fewer than 5 paid test-buys or fewer than 10 probes in the last 30 days). Treat these numbers as early observations."
+          ? "LOW CONFIDENCE: few samples (fewer than 5 paid test-buys in the last 90 days or fewer than 10 probes in the last 30 days). Treat these numbers as early observations."
           : confidence === "medium"
-          ? "Medium confidence: fewer than 20 paid test-buys in the last 30 days."
-          : "High confidence by Lumi's sample-size rule (20+ paid test-buys and 10+ probes in the last 30 days).",
+          ? "Medium confidence: fewer than 20 paid test-buys in the last 90 days."
+          : "High confidence by Lumi's sample-size rule (20+ paid test-buys in the last 90 days and 10+ probes in the last 30 days).",
       score: { value: g.score.value, confidence, window_days: WINDOW_DAYS, components: g.score.components, samples: g.score.samples },
       coverage: {
         first_probe_at: probes.length ? iso(probes[probes.length - 1].ts) : null,
