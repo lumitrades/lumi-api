@@ -96,7 +96,7 @@ export const RECEIPT_FREE_LIMITS = { perMinute: 10, perDay: 100, globalPerDay: 5
 /** The precomputed vendors index is served while younger than this (rebuilt by the 30-minute cron and after trust writes). */
 export const VENDORS_INDEX_TTL_MS = 40 * 60_000;
 const VENDORS_MEMO_MS = 60_000;
-const VENDORS_KEY = "vendors_index_v4"; // v4: + opt-in payment_attempts; v3: latest test-buy tx_hash/explorer per vendor
+const VENDORS_KEY = "vendors_index_v5"; // v5: score null + score_status/score_reason (not scored until paid proof); v4: + opt-in payment_attempts; v3: latest test-buy tx_hash/explorer per vendor
 
 export interface Trust {
   handle(request: Request, path: string, base: string, ctx?: { waitUntil(p: Promise<unknown>): void }): Promise<Response | null>;
