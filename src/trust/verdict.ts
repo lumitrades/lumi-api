@@ -118,8 +118,8 @@ export const WORDING: Record<string, (t: TestBuyEvidence, th: VerdictThresholds)
   no_recent_xrpl_buy: () => "Lumi has not test-bought this seller on XRPL in the last 30 days.",
   resource_not_listed: () => "This exact URL is not listed, but other listings on the same domain are; check the exact resource URL.",
   untested: () => "Listing and quote checks agree, but Lumi has not completed a paid test-buy of this seller yet.",
-  // Free probe checks passed (checked, not test-bought). Still check_first: a probe never substitutes for a delivered test-buy.
-  probe_checked_only: () => "Checked, not test-bought: Lumi's free checks passed (valid x402 payment response, reachable, TLS, listing), but Lumi has not paid this seller, so nothing is known about what a paid call returns.",
+  // Free probe checks passed (Checked, not test-bought). Still check_first: a probe never substitutes for a delivered test-buy.
+  probe_checked_only: () => "Checked, not test-bought: Lumi's free checks passed (valid x402 payment response, reachable, valid TLS, complete listing), but Lumi has not paid this seller, so nothing is known about what a paid call returns.",
   old_evidence: (t) => `Lumi's newest test-buy evidence for this seller (${day(t.last_at)}) is more than ${EVIDENCE_AGE.noDataAfterDays} days old, so it no longer supports a label. This is not a negative signal.`,
   stale_test: (t, th) => `Lumi's last delivered test-buy was on ${day(t.last_delivered_at)}, more than ${th.payMaxAgeDays} days ago.`,
   // no_data
@@ -188,7 +188,7 @@ export function labelFor(o: { check: CheckLike; tests: TestBuyEvidence; now: num
   const pick = (order: string[], sev?: string) => { const xs = check.reasons.filter((r) => !sev || r.severity === sev).map((r) => r.code); return order.find((c) => xs.includes(c)) ?? xs[0]; };
   if (check.decision === "block") return say("checks_failed", pick(BLOCK_PRIORITY, "block") ?? "generic_block");
   if (check.decision === "warn") return say("check_first", pick(WARN_PRIORITY, "warn") ?? "generic_warn");
-  // Not in the catalog yet, but Lumi's free probe passed: "checked, not test-bought" (check_first), never checks_passed.
+  // Not in the catalog yet, but Lumi's free probe passed: "Checked, not test-bought" (check_first), never checks_passed.
   if (check.decision === "unknown" && o.probe?.outcome === "pass" && !codes.has("lumi_itself")) return say("check_first", "probe_checked_only");
   if (check.decision === "unknown") return say("no_data", NO_DATA_PRIORITY.find((c) => codes.has(c)) ?? "not_observed");
   if (codes.has("lumi_itself")) return say("no_data", "lumi_itself");

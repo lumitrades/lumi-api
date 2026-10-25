@@ -5,7 +5,7 @@
  * public facts around it (TLS, domain age, whether the payTo has any public on-chain history, listing completeness).
  *
  * Integrity rules (enforced here and in tests):
- *  - Probe-only sellers are labelled PROBE_LABEL ("checked, not test-bought") everywhere and are never `verified`.
+ *  - Probe-only sellers are labelled PROBE_LABEL ("Checked, not test-bought") everywhere and are never `verified`.
  *  - A probe can never weigh as much as a delivered test-buy: PROBE_MAX_WEIGHT < BUY_MIN_WEIGHT.
  *  - Paying Lumi never changes any of this; nothing here reads billing or subscription state.
  *  - Failures use neutral, factual wording (FAIL_TEXT). No accusations.
@@ -15,9 +15,11 @@ import { keccak_256 } from "@noble/hashes/sha3";
 import { optUsd } from "./catalog";
 import type { D1Like } from "../config";
 
-export const PROBE_LABEL = "checked, not test-bought" as const;
+export const PROBE_LABEL = "Checked, not test-bought" as const;
 export const PROBE_LABEL_NOTE =
-  "Lumi sent one free, unpaid request and checked the x402 payment response, uptime, TLS, domain age, whether the payment address has any public on-chain history, and whether the listing is complete. Lumi has not paid this seller, so these checks say nothing about what a paid call returns.";
+  "Lumi sent this seller one free, unpaid request and checked its x402 payment response, whether it was reachable, its TLS certificate, its domain age, whether its payment address has any public on-chain history, and whether its listing is complete. Lumi has not paid this seller, so these checks say nothing about what a paid call returns.";
+/** Shown wherever a domain age is blank (no RDAP registration date). */
+export const DOMAIN_AGE_UNAVAILABLE = "domain age unavailable";
 export const PROBE_RULES_VERSION = "2026-10-25.p1";
 
 /** Score weights. A probe pass can add at most PROBE_MAX_WEIGHT; one delivered test-buy alone is worth BUY_MIN_WEIGHT. */
@@ -257,6 +259,7 @@ export function probePublicView(r: SellerProbeResult, checked_at: number) {
     note: r.label === PROBE_LABEL ? PROBE_LABEL_NOTE : undefined,
     outcome: r.outcome,
     checks: r.checks,
+    domain_age_note: r.checks.domain_age === "pass" || r.checks.domain_age === "fail" ? null : DOMAIN_AGE_UNAVAILABLE,
     notes: r.notes,
     endpoints_checked: r.endpoints_checked,
     endpoints_quoting: r.endpoints_quoting,

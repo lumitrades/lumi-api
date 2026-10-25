@@ -7,10 +7,11 @@ import { MemoryTrialStore } from "../src/trial";
 import { MemoryTrustStore } from "../src/trust/store";
 import { MemoryActivityStore } from "../src/trust/activity";
 import { SEED_OBSERVATIONS } from "../src/trust/seed";
-import { labelFor, VERDICT_DEFAULTS, type TestBuyEvidence } from "../src/trust/verdict";
+import { labelFor, VERDICT_DEFAULTS, WORDING, type TestBuyEvidence } from "../src/trust/verdict";
+import { catalogView } from "../src/trust/catalog";
 import {
   evaluateQuote, eip55Ok, payToFormat, rollupSeller, evidenceWeight, historyBand, parseProbeRow, toRow, probeRowPublic, MemoryProbeStore,
-  PROBE_LABEL, PROBE_MAX_WEIGHT, BUY_MIN_WEIGHT, FAIL_TEXT, type EndpointProbe,
+  PROBE_LABEL, PROBE_LABEL_NOTE, DOMAIN_AGE_UNAVAILABLE, PROBE_MAX_WEIGHT, BUY_MIN_WEIGHT, FAIL_TEXT, type EndpointProbe,
 } from "../src/trust/probe_checked";
 import { robotsAllows, publicHostOk } from "../tools/probe_checked";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch } from "./helpers";
@@ -54,17 +55,17 @@ describe("probe-checked: quote evaluation", () => {
 });
 
 describe("probe-checked: integrity rules", () => {
-  it("a probe-only seller is labelled 'checked, not test-bought', never verified, and weight is capped below one buy", () => {
+  it("a probe-only seller is labelled 'Checked, not test-bought', never verified, and weight is capped below one buy", () => {
     const r = rollupSeller({ seller: "a.example", endpoints: [ep(evaluateQuote(402, q402(), { price_usd: "0.01" }))], ...allGood });
     expect(r.outcome).toBe("pass");
     expect(r.label).toBe(PROBE_LABEL);
-    expect(r.label).toBe("checked, not test-bought");
+    expect(r.label).toBe("Checked, not test-bought");
     expect(r.verified).toBe(false);
     expect(r.score_weight).toBe(PROBE_MAX_WEIGHT);
     expect(PROBE_MAX_WEIGHT).toBeLessThan(BUY_MIN_WEIGHT);
     expect(evidenceWeight({ delivered_test_buys: 0, probe_weight: 99 })).toBe(PROBE_MAX_WEIGHT);
     expect(evidenceWeight({ delivered_test_buys: 1, probe_weight: 0 })).toBeGreaterThan(evidenceWeight({ delivered_test_buys: 0, probe_weight: 1 }));
-    expect(probeRowPublic(toRow(r, NOW), 0)).toMatchObject({ tier: "checked, not test-bought", verified: false, test_bought: false });
+    expect(probeRowPublic(toRow(r, NOW), 0)).toMatchObject({ tier: "Checked, not test-bought", verified: false, test_bought: false });
   });
   it("failures are partial/fail with neutral notes; no accusatory words anywhere in the wording", () => {
     const bad = rollupSeller({ seller: "b.example", endpoints: [ep(evaluateQuote(402, { nope: true }))], ...allGood });
@@ -134,10 +135,38 @@ describe("probe-checked: API", () => {
     expect(up).toMatchObject({ received: 3, valid: 1, skipped_self: 1, written: 1 });
     const c: any = await (await s.req("/v1/check?url=" + encodeURIComponent("https://api.probe-only.example/v1/x"))).json();
     expect(c.label).toBe("check_first");
-    expect(c.free_checks).toMatchObject({ tier: "checked, not test-bought", verified: false, test_bought: false, outcome: "pass" });
+    expect(c.free_checks).toMatchObject({ tier: "Checked, not test-bought", verified: false, test_bought: false, outcome: "pass" });
     expect(JSON.stringify(c.free_checks)).not.toMatch(/0x[0-9a-f]{40}/i);
     const other: any = await (await s.req("/v1/check?url=" + encodeURIComponent("https://never-seen.example/x"))).json();
     expect(other.free_checks).toBeNull();
     expect(other.label).toBe("no_data");
+  });
+});
+
+describe("probe-checked: editor wording and domain age", () => {
+  it("label, note and verdict line use the reviewed copy; no 'uptime' for a single probe", () => {
+    expect(PROBE_LABEL).toBe("Checked, not test-bought");
+    expect(PROBE_LABEL_NOTE.startsWith("Lumi sent this seller one free, unpaid request and checked its x402 payment response, whether it was reachable, its TLS certificate,")).toBe(true);
+    expect(PROBE_LABEL_NOTE.endsWith("Lumi has not paid this seller, so these checks say nothing about what a paid call returns.")).toBe(true);
+    const line = WORDING.probe_checked_only({} as any, VERDICT_DEFAULTS);
+    expect(line).toBe("Checked, not test-bought: Lumi's free checks passed (valid x402 payment response, reachable, valid TLS, complete listing), but Lumi has not paid this seller, so nothing is known about what a paid call returns.");
+    expect(PROBE_LABEL_NOTE + line).not.toMatch(/uptime/i);
+  });
+  it("blank domain age shows 'domain age unavailable' (free_checks and catalog view)", () => {
+    const r = rollupSeller({ seller: "a.example", endpoints: [ep(evaluateQuote(402, q402()))], ...allGood, domain_age_days: null });
+    expect(probeRowPublic(toRow(r, NOW), 0)).toMatchObject({ domain_age_note: DOMAIN_AGE_UNAVAILABLE });
+    const r2 = rollupSeller({ seller: "a.example", endpoints: [ep(evaluateQuote(402, q402()))], ...allGood });
+    expect(probeRowPublic(toRow(r2, NOW), 0)).toMatchObject({ domain_age_note: null });
+    expect(DOMAIN_AGE_UNAVAILABLE).toBe("domain age unavailable");
+    const row: any = { id: "x", resource: "https://a.example/x", domain: "a.example", reg_domain: "a.example", pay_tos: "", method: "GET", first_seen: NOW, last_seen: NOW };
+    expect((catalogView(row, [], { domain: "a.example", registered_at: null, checked_at: NOW, error: "rdap HTTP 403" }, NOW) as any).domain_age).toMatchObject({ age_days: null, note: "domain age unavailable" });
+    expect((catalogView(row, [], undefined, NOW) as any).domain_age).toMatchObject({ registered_at: null, note: "domain age unavailable" });
+    expect((catalogView(row, [], { domain: "a.example", registered_at: NOW - 400 * 86_400_000, checked_at: NOW, error: null }, NOW) as any).domain_age).toMatchObject({ age_days: 400, note: null });
+  });
+  it("a failed later RDAP lookup never erases a known registration date", async () => {
+    const st = new MemoryCatalogStore();
+    await st.saveDomain({ domain: "a.example", registered_at: 1_000, checked_at: 1, error: null });
+    await st.saveDomain({ domain: "a.example", registered_at: null, checked_at: 2, error: "rdap HTTP 403" });
+    expect((await st.domainInfo(["a.example"]))[0]).toMatchObject({ registered_at: 1_000, checked_at: 2 });
   });
 });

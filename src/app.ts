@@ -306,7 +306,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   // Lumi's own sellers and wallets are never ingested (payments from Lumi's wallets are already excluded upstream).
   const lumiSelf = { domains: ["lumitrades.io"], pay_to: [config.payTo, ...xrplBuyers, ...(config.evm ? [config.evm.payTo] : []), ...(config.stellar ? [config.stellar.payTo] : []), ...evmBuyers, ...stellarBuyers] };
   const activity = createActivity(opts.activityStore ?? (env.TRUST_DB ? new D1ActivityStore(env.TRUST_DB) : new MemoryActivityStore()), now, lumiSelf);
-  // Free probe-checked tier ("checked, not test-bought"): display + check_first wording only; never verified, never checks_passed.
+  // Free probe-checked tier ("Checked, not test-bought"): display + check_first wording only; never verified, never checks_passed.
   const probeStore: ProbeStore = opts.probeStore ?? (env.TRUST_DB ? new D1ProbeStore(env.TRUST_DB) : new MemoryProbeStore());
   const verdictTh = verdictThresholds(env as unknown as Record<string, string | undefined>);
   const relCfg = relationshipConfig(env as unknown as Record<string, string | undefined>);
