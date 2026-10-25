@@ -948,6 +948,9 @@ ${commerceSkillMd(base)}
 }
 
 const LOGO = "https://lumitrades.io/assets/icon-512.png";
+/** Social / x402scan card for api.lumitrades.io (the page <title> stays descriptive). */
+export const OG_TITLE = "Lumi Trades: check x402 sellers before you pay";
+export const OG_DESC = "Lumi Check: free signed allow/warn/block for x402 sellers, backed by paid test-buys on XRPL, Base and Stellar. Plus a daily policy brief.";
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** Human quickstart served at `/` when the client asks for text/html (browsers, x402scan's page fetcher). */
@@ -1040,7 +1043,8 @@ console.log(await res.json());`;
 <meta name="description" content="${esc(desc)}">
 <meta name="keywords" content="${esc(keywords)}">
 <meta name="theme-color" content="#070a10">
-<meta property="og:title" content="${esc(title)}"><meta property="og:description" content="${esc(desc)}">
+<meta property="og:title" content="${esc(OG_TITLE)}"><meta property="og:description" content="${esc(OG_DESC)}">
+<meta name="twitter:card" content="summary"><meta name="twitter:title" content="${esc(OG_TITLE)}"><meta name="twitter:description" content="${esc(OG_DESC)}">
 <meta property="og:url" content="${esc(base)}/"><meta property="og:type" content="website"><meta property="og:image" content="${LOGO}">
 <link rel="icon" href="${LOGO}"><link rel="canonical" href="${esc(base)}/">
 <link rel="alternate" type="application/json" href="${esc(base)}/"><link rel="alternate" type="text/markdown" href="${esc(base)}/llms.txt">

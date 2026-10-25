@@ -1,8 +1,9 @@
 # lumi-trades-mcp
 
-MCP server (stdio) for **[Lumi Trades](https://lumitrades.io)**: **free x402 vendor trust score lookups**, a **daily crypto market brief**
-and **Institutional & Policy Brief**, and, as a separate product line, **Lumi Market Ideas**: crypto signals for 51 coins, for Claude Desktop, Cursor, Claude Code, Cline, Windsurf
-and any other MCP client. Paid tools **pay per call via x402 with your own wallet: USDC on Base (gasless) or XRP / RLUSD / USDC on the XRP Ledger**
+MCP server (stdio) for **[Lumi Trades](https://lumitrades.io)**: **Lumi Check**, a free signed allow/warn/block check before your agent pays an x402 seller,
+backed by Lumi's own paid test-buys on XRPL, Base and Stellar. Also a **daily Institutional & Policy Brief**, crypto market data, and, as a separate product line,
+**Lumi Market Ideas** for 51 coins (educational, not advice). Works with Claude Desktop, Cursor, Claude Code, Cline, Windsurf and any other MCP client.
+Paid tools **pay per call via x402 with your own wallet: USDC on Base (gasless) or XRP / RLUSD / USDC on the XRP Ledger**
 (the API also accepts USDC on Stellar; this package pays only on Base or the XRP Ledger).
 No API key, no account: each paid tool call is one small payment, signed locally on your machine.
 

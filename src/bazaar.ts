@@ -101,7 +101,7 @@ export const FAIR_USE =
 export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   signal: {
     description:
-      "Lumi Market Ideas. Rule-based technical read for one of 50 large-cap crypto assets (XRP, BTC, ETH, SOL and more): label (Strong Buy to Strong Sell) and score, 1h/4h/1d labels, indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume) and price with 24h change. From public exchange candles; 1h refreshes about every 13 min. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on unknown coins or stale data.",
+      "Lumi Market Ideas (educational, not financial advice). Rule-based technical read for one of 51 large-cap crypto assets (XRP, BTC, ETH and more): label (Strong Buy to Strong Sell) and score, 1h/4h/1d labels, indicator summary (RSI, MACD, EMA stack, Bollinger, StochRSI, volume) and price with 24h change. From public exchange candles; 1h refreshes about every 13 min. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on unknown coins or stale data.",
     routeTemplate: "/v1/signal/:coin",
     pathParam: COIN_PARAM,
     example: {
@@ -119,7 +119,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   levels: {
     description:
-      "Lumi Market Ideas. Support and resistance levels for one of 14 watchlist and major coins (XRP, BTC, ETH, HBAR, XLM and more), with a bias label, rule-based 7-day bull/base/bear scenario levels (not forecasts), commentary, dated catalysts and cited sources. Use for price reference levels on one coin. Paper-trade analysis, not investment advice. Lumi does not trade real money. Other coins return 404 without charge; see /v1/coins. Not charged on stale data.",
+      "Lumi Market Ideas (educational, not financial advice). Support and resistance levels for one of 14 watchlist and major coins (XRP, BTC, ETH, HBAR, XLM and more), with a bias label, rule-based 7-day bull/base/bear scenario levels (not forecasts), commentary, dated catalysts and cited sources. Use for price reference levels on one coin. Paper-trade analysis, not investment advice. Lumi does not trade real money. Other coins return 404 without charge; see /v1/coins. Not charged on stale data.",
     routeTemplate: "/v1/levels/:coin",
     pathParam: COIN_PARAM,
     example: {
@@ -142,7 +142,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   slate: {
     description:
-      "Lumi Market Ideas. Lumi's current paper-trade setups, published for evaluation: coin, direction, entry zone, stop, targets, leverage and conviction for each idea, plus notes where no setup qualifies. Use when an agent needs structured, current trade-setup data to evaluate or compare against its own analysis. No performance is implied. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on stale data.",
+      "Lumi Market Ideas (educational, not financial advice). Lumi's current paper-trade setups, published for evaluation: coin, direction, entry zone, stop, targets, leverage and conviction for each idea, plus notes where no setup qualifies. Use when an agent needs structured, current trade-setup data to evaluate or compare against its own analysis. No performance is implied. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on stale data.",
     example: {
       kind: "slate",
       product_line: MARKET_IDEAS_NAME,
@@ -220,7 +220,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   institutional: {
     description:
-      "Daily sourced digest of digital-asset and stablecoin activity by central banks, standard-setters, regulators, banks and tokenization firms. Each item has a date, source URL, why it matters, impact, confidence and the tracked networks it touches, with a link_type separating confirmed links from indirect analysis. Also a summary, per-coin map and dated watch list. Use when an agent needs the regulatory and institutional context for digital assets. Neutral; not advice.",
+      "Daily Institutional & Policy Brief: dated, sourced items on digital-asset and stablecoin activity by central banks, standard-setters, regulators, banks and tokenization firms, with impact, confidence and the networks each item touches. JSON with markdown, or format=md. Neutral; not advice.",
     query: FORMAT_QUERY,
     example: {
       kind: "institutional_brief",
@@ -246,7 +246,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   vendor_report: {
     description:
-      "Full observation history for one x402 vendor on Lumi's curated trust list: unpaid 402-quote checks (90-day retention) with status, quoted price and latency; paid test purchases with ledger transaction hashes and delivered yes/no; uptime over 24h/7d/30d/90d; latency statistics; quoted-price history; score components with sample sizes. Use when deeper due diligence on a vendor is needed than the free summary at /v1/trust/vendors/{id}. Automated observations, not a rating.",
+      "Full observation history for one x402 vendor on Lumi's curated list: unpaid 402-quote checks with status, quoted price and latency; paid test purchases with ledger transaction hashes and delivered yes/no (XRP Ledger, Base, Stellar); uptime over 24h/7d/30d/90d; quoted-price history; score components with sample sizes. Automated observations, not a rating.",
     routeTemplate: "/v1/trust/vendors/:id/report",
     pathParam: {
       name: "id",
@@ -266,7 +266,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   scan: {
     description:
-      "Lumi Market Ideas. Market-wide screen of 50 large-cap crypto assets in one call: label, score, 1h/4h/1d labels, 1h RSI, price and 24h change per coin, strongest first, plus label counts and breadth. Computed live; freshness fields reflect the oldest coin included; not sold when fewer than 40 coins are fresh. Use to compare many coins in one call. Paper-trade analysis, not investment advice. Lumi does not trade real money.",
+      "Lumi Market Ideas (educational, not financial advice). Market-wide screen of 51 large-cap crypto assets in one call: label, score, 1h/4h/1d labels, 1h RSI, price and 24h change per coin, strongest first, plus label counts and breadth. Computed live; freshness fields reflect the oldest coin included; not sold when fewer than 40 coins are fresh. Use to compare many coins in one call. Paper-trade analysis, not investment advice. Lumi does not trade real money.",
     example: {
       kind: "scan",
       product_line: MARKET_IDEAS_NAME,
@@ -281,7 +281,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   lite: {
     description:
-      "Lumi Market Ideas. Low-cost headline read for one of 50 large-cap crypto assets (XRP, BTC, ETH, SOL and more): overall label and score, 1h/4h/1d labels, and price with 24h change. Same live computation as /v1/signal/{coin}, without the indicator breakdown. Payable in USDC on Base or XRP, RLUSD or USDC on the XRP Ledger. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on unknown coins or stale data.",
+      "Lumi Market Ideas (educational, not financial advice). Low-cost headline read for one of 51 large-cap crypto assets (XRP, BTC, ETH and more): overall label and score, 1h/4h/1d labels, and price with 24h change. Same live computation as /v1/signal/{coin}, without the indicator breakdown. Payable in USDC on Base or XRP, RLUSD or USDC on the XRP Ledger. Paper-trade analysis, not investment advice. Lumi does not trade real money. Not charged on unknown coins or stale data.",
     routeTemplate: "/v1/lite/:coin",
     pathParam: COIN_PARAM,
     example: {
@@ -299,7 +299,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   trust_check: {
     description:
-      "Pre-payment check for an x402 resource URL. Returns allow, warn or block with coded reasons, built from a daily index of the CDP Bazaar catalog, unpaid 402-quote checks and on-chain test purchases. Optional payTo and amount inputs are compared with the listing to detect address or price mismatches. Use when an agent is about to pay an unfamiliar x402 endpoint and needs evidence first. Observations, not a guarantee. Not charged on invalid input.",
+      "Pre-payment check for an x402 resource URL: allow, warn or block with coded reasons. Built from a daily index of the CDP Bazaar catalog, unpaid 402-quote checks and Lumi's own on-chain test purchases on Base, the XRP Ledger and Stellar. Optional payTo and amount inputs catch address or price mismatches. A free signed version, Lumi Check, is at /v1/check. Observations, not a guarantee.",
     query: {
       url: { type: "string", description: "The x402 resource URL you are about to pay (required)" },
       payTo: { type: "string", description: "The payTo address from its 402 quote (optional)" },

@@ -1,20 +1,20 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cypher-osiris/lumi-trades-mcp",
-  "title": "Lumi Trades: x402 seller checks, market data, Market Ideas",
-  "description": "Lumi: x402 seller checks, crypto market data, signals for 51 coins (paper-trade analysis)",
+  "title": "Lumi Trades: x402 seller checks and test-buys",
+  "description": "Free signed allow/warn/block before paying x402 sellers; test-buys on XRPL, Base and Stellar",
   "repository": {
     "url": "https://github.com/lumitrades/lumi-api",
     "source": "github",
     "subfolder": "mcp"
   },
   "websiteUrl": "https://api.lumitrades.io/skill.md",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "lumi-trades-mcp",
-      "version": "0.9.5",
+      "version": "0.9.6",
       "transport": {
         "type": "stdio"
       },
