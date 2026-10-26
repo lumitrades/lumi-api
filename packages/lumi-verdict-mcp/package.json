@@ -1,0 +1,60 @@
+{
+  "name": "lumi-verdict-mcp",
+  "version": "0.1.0",
+  "description": "Check an x402 seller before your agent pays it: one signed label from Lumi Trades' own test-buys on XRPL, Base and Stellar. $0.01 per live check, free cached check.",
+  "mcpName": "io.github.cypher-osiris/lumi-verdict-mcp",
+  "type": "module",
+  "bin": {
+    "lumi-verdict-mcp": "src/index.js"
+  },
+  "main": "src/index.js",
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "x402",
+    "x402-trust",
+    "x402-seller-check",
+    "check-seller-before-paying",
+    "pre-payment-check",
+    "verdict",
+    "payment-safety",
+    "agent-payments",
+    "ai-agents",
+    "xrpl",
+    "base",
+    "stellar",
+    "usdc",
+    "rlusd"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lumitrades/lumi-api.git",
+    "directory": "packages/lumi-verdict-mcp"
+  },
+  "homepage": "https://lumitrades.io/agents/",
+  "bugs": {
+    "url": "https://github.com/lumitrades/lumi-api/issues"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "lumi-trades-mcp": "^0.9.9",
+    "zod": "^4.6.6"
+  },
+  "overrides": {
+    "zod": "$zod"
+  }
+}
