@@ -866,7 +866,7 @@ const paid = JSON.parse(await act("retry_http_request_with_x402").invoke({
 console.log(paid.data, paid.details?.paymentProof);
 \`\`\`
 In an LLM agent with AgentKit tools, the prompt "call ${base}/v1/trust/check?url=https://api.example.com/v1/data and pay the Base USDC option" does the same.
-Full runnable version: https://github.com/cypher-osiris/lumi-api/blob/main/examples/agentkit-direct-url.ts
+Full runnable version: https://github.com/lumitrades/lumi-api/blob/main/examples/agentkit-direct-url.ts
 
 ` : ""}## Example: Python (PyPI \`x402-xrpl\`)
 
@@ -1122,7 +1122,7 @@ ${planPriceTable(base).filter((p) => p.path.startsWith("/v1/feed")).map((p) => `
 <p class="note"><a href="${esc(base)}/v1/feed">Feed docs</a> &middot; <a href="${esc(base)}/v1/feed/license">Licence terms</a> (no resale of raw data, attribution required).</p>
 ${evm ? `<h2>Quickstart: USDC on Base (x402 fetch SDK)</h2>${pre(baseSnippet)}
 <h2>Quickstart: Coinbase AgentKit</h2>${pre(agentkitSnippet)}
-<p class="note">Full runnable example: <a href="https://github.com/cypher-osiris/lumi-api/blob/main/examples/agentkit-direct-url.ts">examples/agentkit-direct-url.ts</a></p>` : ""}
+<p class="note">Full runnable example: <a href="https://github.com/lumitrades/lumi-api/blob/main/examples/agentkit-direct-url.ts">examples/agentkit-direct-url.ts</a></p>` : ""}
 <h2 id="trial">Free trial: ${TRIAL_LIMITS.perWallet} calls per new wallet (Base or XRPL)</h2>${cfg.evm ? pre(trialSnippet) : ""}${pre(xrplTrialSnippet(base, cfg.network))}
 <p class="note">Uses the x402 <code>sign-in-with-x</code> extension (CAIP-122). ${cfg.evm ? `Base: EIP-4361 signed by an EOA holding at least 0.01 USDC on ${esc(cfg.evm.networkName)}. ` : ""}XRP Ledger: type <code>xrpl</code>, signed with the account's master key or current regular key (ripple-keypairs) plus <code>publicKey</code>; the account must be activated. Nothing is charged or moved. Limits: ${TRIAL_LIMITS.perWallet} per wallet (one trial per wallet, not per chain), ${TRIAL_LIMITS.perIpDay} per IP per day, one-time 5-minute challenges. The response carries <code>access.mode: "trial"</code>, <code>charged: false</code>. After that, pay per call as usual.</p>
 <h2>Quickstart: XRP Ledger (XRP, RLUSD, USDC)</h2>${pre(xrplSnippet)}
