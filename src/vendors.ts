@@ -227,7 +227,7 @@ export const VENDORS: Vendor[] = [
     name: "sitecheck-api (macro data)",
     homepage: "https://api.sitecheck-api.workers.dev",
     pay_to: { xrpl: ["rDxNZCDfLxUzeMWGGwsY3sjQT8eoZCf8UJ"], evm: ["0xb8491F953e6860D3b5840b73c60883Ff099ceAfA"] },
-    endpoints: [{ url: "https://api.sitecheck-api.workers.dev/api/macro?series=fed_funds&limit=3", method: "GET", listed_price: "0.001", listed_asset: "RLUSD", test_buy: true }],
+    endpoints: [{ url: "https://api.sitecheck-api.workers.dev/api/macro?series=fed_funds&limit=3", method: "GET", listed_price: "0.002", listed_asset: "RLUSD", test_buy: true }],
   },
   {
     id: "horizonpulse",
