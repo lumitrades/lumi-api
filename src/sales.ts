@@ -213,8 +213,16 @@ async function loadEmailMessage(): Promise<(from: string, to: string, raw: strin
   return (from, to, raw) => new mod.EmailMessage(from, to, raw);
 }
 
-export function alertText(r: SaleRow): string {
-  return `Lumi sale: ${r.routeKey ?? r.route} paid ${r.amount} ${r.asset} on ${r.rail === "base" ? "Base" : r.rail === "stellar" ? "Stellar" : "XRPL"}${r.usd != null ? ` (~$${r.usd})` : ""}${r.isTest ? " [test wallet]" : ""} tx ${r.tx}`;
+/** Sale outcome reported by a handler whose credit is decided after settlement (Founder pack place claim). */
+export type SaleOutcome = { kind: "credited" } | { kind: "refused"; reason: string } | { kind: "unknown" };
+/** Routes whose instant alert waits for the handler's outcome: a Founder payment can settle and still be refused. */
+export const DEFERRED_ALERT_ROUTES = new Set(["founder_pack"]);
+/** How long a deferred alert waits for the outcome before going out marked "outcome unknown". */
+export const DEFERRED_ALERT_WAIT_MS = 20_000;
+export const REFUSED_ALERT_NOTE = "REFUSED AT SETTLEMENT, no credit, needs owner review";
+
+export function alertText(r: SaleRow, note?: string): string {
+  return `${note ? `[${note}] ` : ""}Lumi sale: ${r.routeKey ?? r.route} paid ${r.amount} ${r.asset} on ${r.rail === "base" ? "Base" : r.rail === "stellar" ? "Stellar" : "XRPL"}${r.usd != null ? ` (~$${r.usd})` : ""}${r.isTest ? " [test wallet]" : ""} tx ${r.tx}`;
 }
 
 export function alertEnabled(cfg: AlertConfig): boolean {
@@ -222,17 +230,17 @@ export function alertEnabled(cfg: AlertConfig): boolean {
 }
 
 /** Sends the alert to whatever is configured. Never throws. */
-export async function sendSaleAlert(cfg: AlertConfig, row: SaleRow, doFetch: typeof fetch): Promise<string[]> {
+export async function sendSaleAlert(cfg: AlertConfig, row: SaleRow, doFetch: typeof fetch, note?: string): Promise<string[]> {
   if (row.isTest && !cfg.includeTests) return [];
   const sent: string[] = [];
-  const text = alertText(row);
+  const text = alertText(row, note);
   if (cfg.webhookUrl) {
     try {
       // Slack / Discord / generic: `text` and `content` cover the common incoming-webhook formats.
       const r = await doFetch(cfg.webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, content: text, sale: { ...row, ts: new Date(row.ts).toISOString() } }),
+        body: JSON.stringify({ text, content: text, sale: { ...row, ts: new Date(row.ts).toISOString() }, ...(note ? { note } : {}) }),
       });
       if (r.ok) sent.push("webhook");
     } catch {

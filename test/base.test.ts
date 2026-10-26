@@ -267,7 +267,7 @@ describe("discovery lists both networks", () => {
   it("index, health, /.well-known/x402, openapi, skill.md, llms.txt", async () => {
     const { get } = setup();
     const index = await (await get("/")).json();
-    expect(index.version).toBe("1.1.7");
+    expect(index.version).toBe("1.1.8");
     expect(index.payment.networks.map((n: any) => n.network)).toEqual(["eip155:84532", "xrpl:1"]);
     expect(index.payment.assets[0]).toMatchObject({ symbol: "USDC", network: "eip155:84532", asset: SEPOLIA_USDC, accepts_index: 0 });
     expect(index.payment.assets[1]).toMatchObject({ symbol: "XRP", accepts_index: 1 });
@@ -279,7 +279,7 @@ describe("discovery lists both networks", () => {
     expect(wk.facilitators).toEqual([FACILITATOR, EVM_FAC]);
     expect(wk.agent_card).toBe(`${BASE}/.well-known/agent-card.json`);
     const oa = await (await get("/openapi.json")).json();
-    expect(oa.info.version).toBe("1.1.7");
+    expect(oa.info.version).toBe("1.1.8");
     // Base first: the primary x-payment-info is Base USDC; XRPL rails follow as alternatives.
     expect(oa.paths["/v1/market"].get["x-payment-info"]).toMatchObject({ network: "eip155:84532", amount: "20000" });
     expect(oa.paths["/v1/market"].get["x-payment-info"].alternatives[0].network).toBe("xrpl:1");

@@ -30,7 +30,7 @@ describe("A2A agent card", () => {
     expect(await (await get("/.well-known/agent.json")).json()).toEqual(card);
     expect(card).toMatchObject({
       name: "Lumi Trades",
-      version: "1.1.7",
+      version: "1.1.8",
       provider: { organization: "Lumi Trades", url: "https://lumitrades.io" },
       documentationUrl: `${BASE}/skill.md`,
       capabilities: { streaming: false, pushNotifications: false },

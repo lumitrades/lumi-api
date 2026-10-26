@@ -2,7 +2,7 @@
 import type { SanctionsScreen } from "../sanctions";
 import type { Config } from "../config";
 import { b64decodeUtf8, json, type PaywallDeps } from "../x402";
-import type { SendEmailBinding } from "../sales";
+import type { SaleOutcome, SendEmailBinding } from "../sales";
 import type { CommerceStore } from "./store";
 import type { CatalogStore } from "../trust/catalog";
 import type { EvidenceStore } from "../trust/evidence";
@@ -24,6 +24,8 @@ export interface CommerceDeps {
   evidence?: EvidenceStore;
   receipts?: ReceiptStore;
   paywall: (ctx?: WaitUntil) => PaywallDeps;
+  /** Reports whether a settled payment was credited, for alerts deferred until then (Founder pack; see sales.ts). */
+  saleOutcome?: (tx: string, o: SaleOutcome) => void;
   email: { from?: string; binding?: SendEmailBinding; makeMessage?: (from: string, to: string, raw: string) => unknown };
   extraTestWallets: string[];
   testPriceUsd: string;

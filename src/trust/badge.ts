@@ -22,6 +22,8 @@ import { CONTACT_EMAIL } from "./index";
 import { deliveryState, inconclusiveReason, INCONCLUSIVE_REASONS, type DeliveryState } from "./delivery";
 import type { ObservationRow } from "./store";
 import type { BuyRow } from "./catalog";
+import { BADGE_WINDOW_DAYS, testedBadgeRules, testedBadgeSummary } from "./check";
+import { COUNTING_TEXT } from "../commerce/counting";
 
 export const BADGE_TESTS = 10;
 export const BADGE_MAX_AGE = 3600;
@@ -338,7 +340,7 @@ export function embedSnippets(key: string, base: string) {
 }
 
 export const BADGE_DISCLAIMER =
-  "Factual test evidence, not an endorsement, rating or guarantee. The badge is earned only (live score and paid test-buy thresholds, never sold) and is removed automatically when the seller drops below them. The result page lists Lumi's latest stored paid test-buys of this service (delivered = the paid response contained data; not delivered = the seller answered without usable data; inconclusive = Lumi never saw a response, a Lumi-side outcome not counted against the seller). Past results do not predict future ones. Paying Lumi never changes a result.";
+  "Factual test evidence, not an endorsement, rating or guarantee. The badge is earned only (live score and Lumi test-buy thresholds, never sold), is dated by Lumi's latest conclusive test-buy, and is removed automatically when the seller drops below the thresholds, when that latest test-buy failed, or 30 days after it. The result page lists Lumi's latest stored paid test-buys of this service (delivered = the paid response contained data; not delivered = the seller answered without usable data; inconclusive = Lumi never saw a response, a Lumi-side outcome not counted against the seller). Past results do not predict future ones. Paying Lumi never changes a result.";
 
 function rightToReply(key: string) {
   return { email: CONTACT_EMAIL, note: `Sellers can reply to or dispute any result: email ${CONTACT_EMAIL} (mention badge key ${key}), or sign a reply with a listed pay-to key via POST /v1/trust/replies. Verified replies are shown with your entry; corrections are logged publicly.` };
@@ -348,7 +350,7 @@ function rightToReply(key: string) {
 export function badgeDocs(base: string, th: { minScore: number; minPaidTests: number }) {
   return {
     kind: "lumi_badge_docs",
-    summary: `Free, signed, earned-only 'Tested by Lumi' badge for x402 sellers. Shown only while the seller's live Lumi score is at least ${th.minScore} with at least ${th.minPaidTests} conclusive paid test-buys and the latest test-buy delivered; otherwise the SVG says 'no badge' (or 'not scored'). Never sold.`,
+    summary: `Free, signed, earned-only 'Tested by Lumi' badge for x402 sellers: ${testedBadgeSummary(th)}. Otherwise the SVG says 'no badge' (or 'not scored').`,
     endpoints: {
       svg: `${base}/v1/badge/{key}.svg`,
       json: `${base}/v1/badge/{key}.json`,
@@ -356,9 +358,17 @@ export function badgeDocs(base: string, th: { minScore: number; minPaidTests: nu
       keys: `${base}/v1/check/keys`,
     },
     key: "A Lumi vendor id (e.g. printmoneylab, from GET /v1/trust/vendors) or the exact host of a curated vendor's x402 service. One key = one seller; there is no listing or search here.",
-    threshold: { min_score: th.minScore, min_paid_test_buys: th.minPaidTests, latest_test_buy: "delivered" },
+    threshold: { min_score: th.minScore, min_paid_test_buys: th.minPaidTests, window_days: BADGE_WINDOW_DAYS, latest_test_buy: "delivered" },
+    rules: testedBadgeRules(th),
+    date_shown: "The SVG and the .json (last_test_buy.date) show the UTC date of Lumi's latest conclusive test-buy, never the date the badge was rendered; .json also gives lapses_at.",
+    monitored_badge: {
+      note: "A separate badge for sellers who enroll in Lumi monitoring or buy a test-buy pack. It pools Lumi's own buys with seller-paid buys under the counting rules below. It does not affect this badge or any score.",
+      svg: `${base}/v1/monitor/badge/{enrollment_id}.svg`,
+      json: `${base}/v1/monitor/badge/{enrollment_id}.json`,
+      rules: COUNTING_TEXT,
+    },
     signature: "The .json verdict carries a Lumi-signed object (Ed25519, kind tested_badge, short expires_at). Verify it against Lumi's pinned public keys (lumi-scanner-kit verifyLumiSigned); a copied image proves nothing.",
-    legacy: "GET /badge and /badge/{key}.svg|.json are retired: they answer 301 to these routes (query string kept).",
+    legacy: "The old paths GET /badge and /badge/{key}.svg|.json still work: they answer 301 to the /v1/badge routes above (query string kept). Use the /v1/badge paths in new embeds.",
     example: embedSnippets("printmoneylab", base),
     how_lumi_tests: HOW_IT_WORKS,
     right_to_reply: rightToReply("{key}"),

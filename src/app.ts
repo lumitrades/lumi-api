@@ -50,7 +50,7 @@ import { lookupError, withSafety } from "./trust/index";
 const SAFETY_WARN_CODES = new Set(["pay_to_unrecognised", "quoted_price_differs", "paid_no_data", "xrpl_paid_no_data", "recent_buy_failed", "checks_failed_pending_review"]);
 import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
 import { signingSecretSeparate } from "./trust/lumi_keys";
-import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, earnedBadgeSvg, noBadgeSvg } from "./trust/check";
+import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, BADGE_WINDOW_DAYS, earnedBadgeSvg, noBadgeSvg, testedBadgeRules, utcDay } from "./trust/check";
 import { curatedByHost, badgeDocs } from "./trust/badge";
 import type { LookupQuery } from "./trust/catalog";
 import { D1LiveStore, MemoryLiveStore, isFresh, LIVE_UNIVERSE, LIVE_MAX_AGE_MS, LIVE_CYCLE_MS, type LiveStore } from "./live";
@@ -66,7 +66,7 @@ import { registrableDomain } from "./trust/catalog";
 import { liveProbe, liveAlertView, LIVE_ALERT_PREFIX, LIVE_CHECK_NOTE, type LiveBaseline } from "./trust/live_check";
 import { createActivity, activityPublic, activityOwnerView, activityFlags, qualifyOrganicPayers, D1ActivityStore, MemoryActivityStore, type ActivityStore } from "./trust/activity";
 import { CONTACT_EMAIL } from "./trust/index";
-import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, type SalesStore, type AlertConfig } from "./sales";
+import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, DEFERRED_ALERT_ROUTES, DEFERRED_ALERT_WAIT_MS, REFUSED_ALERT_NOTE, type SalesStore, type AlertConfig, type SaleOutcome } from "./sales";
 
 export interface AppOptions {
   /** OFAC SDN address snapshot override (tests); default = bundled data/ofac_sdn_addresses.json (+ optional SANCTIONS_KV). */
@@ -238,6 +238,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   const extraTestWallets = split(env.SALES_TEST_WALLETS);
   /** Per-request paywall deps: records the sale, then alerts in the background (waitUntil) when configured. */
   const paidByCtx = new WeakMap<object, boolean>();
+  /** Deferred sale alerts waiting for their handler's outcome, by tx (per isolate; the request holds them via waitUntil). */
+  const pendingAlerts = new Map<string, (o: SaleOutcome) => void>();
+  const saleOutcome = (tx: string, o: SaleOutcome) => pendingAlerts.get(tx)?.(o);
   const paywallDeps = (ctx?: WaitUntil): PaywallDeps => ({
     ...deps,
     onSale: async (sale) => {
@@ -249,7 +252,19 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         deps.log?.({ event: "sale_record_error", tx: row.tx, error: String(e), row });
         return true;
       });
-      if (inserted && alertEnabled(alertCfg)) {
+      if (inserted && alertEnabled(alertCfg) && DEFERRED_ALERT_ROUTES.has(row.route) && ctx) {
+        // Founder pack: the place is claimed after settlement and can still be refused, so the alert waits for the
+        // handler's outcome (saleOutcome) and says so when the payment was refused; no outcome in time = "outcome unknown".
+        const p = new Promise<SaleOutcome>((resolve) => {
+          const timer = setTimeout(() => resolve({ kind: "unknown" }), DEFERRED_ALERT_WAIT_MS);
+          pendingAlerts.set(row.tx, (o) => { clearTimeout(timer); resolve(o); });
+        }).then((o) => {
+          pendingAlerts.delete(row.tx);
+          const note = o.kind === "refused" ? `${REFUSED_ALERT_NOTE} (${o.reason})` : o.kind === "unknown" ? "outcome unknown, check owner packs review" : undefined;
+          return sendSaleAlert(alertCfg, row, doFetch, note);
+        }).then((sent) => sent.length && deps.log?.({ event: "sale_alert_sent", tx: row.tx, via: sent, deferred: true }));
+        ctx.waitUntil(p);
+      } else if (inserted && alertEnabled(alertCfg)) {
         const p = sendSaleAlert(alertCfg, row, doFetch).then((sent) => sent.length && deps.log?.({ event: "sale_alert_sent", tx: row.tx, via: sent }));
         if (ctx) ctx.waitUntil(p);
         else await p;
@@ -592,20 +607,24 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const live = `${base}/trust/v/${encodeURIComponent(s?.vendor_id ?? key)}`;
     const headers = { "Cache-Control": BADGE_CACHE, "Access-Control-Allow-Origin": "*" };
     if (ext === "svg") {
-      const svg = d.earned && s ? earnedBadgeSvg(s.score.value!, new Date(now()).toISOString().slice(0, 10)) : noBadgeSvg(d.reason === "not_scored" ? "not scored" : "no badge");
+      // Dated by Lumi's latest conclusive test-buy (delivered whenever the badge is earned), never the render date.
+      const svg = d.earned && s && s.last_conclusive_at != null ? earnedBadgeSvg(s.score.value!, utcDay(s.last_conclusive_at)) : noBadgeSvg(d.reason === "not_scored" ? "not scored" : "no badge");
       return new Response(svg, { status: 200, headers: { ...headers, "Content-Type": "image/svg+xml; charset=utf-8", Link: `<${live}>; rel="related"` } });
     }
     const payload = {
       subject: s ? { vendor_id: s.vendor_id, name: s.name } : { key: key.slice(0, 200) },
       earned: d.earned, reason: d.reason,
       score: s ? { value: s.score.value, status: s.score.status, ...(s.score.reason ? { reason: s.score.reason } : {}), confidence: s.score.confidence, paid_test_buys: s.score.samples.paid_test_buys } : null,
-      threshold: { min_score: th.minScore, min_paid_test_buys: th.minPaidTests, latest_test_buy: "delivered" },
+      last_test_buy: s?.last_conclusive_at != null ? { at: new Date(s.last_conclusive_at).toISOString(), date: utcDay(s.last_conclusive_at), result: s.last_conclusive } : null,
+      ...(d.earned && s?.last_conclusive_at != null ? { lapses_at: new Date(s.last_conclusive_at + BADGE_WINDOW_DAYS * 86_400_000).toISOString() } : {}),
+      threshold: { min_score: th.minScore, min_paid_test_buys: th.minPaidTests, window_days: BADGE_WINDOW_DAYS, latest_test_buy: "delivered" },
+      rules: testedBadgeRules(th),
       live_report: live,
       embed: d.earned ? `<a href="${live}"><img src="${base}/v1/badge/${encodeURIComponent(s?.vendor_id ?? key)}.svg" alt="Tested by Lumi (live score)"></a>` : null,
       purchasable: false,
     };
     const signed = await signResponse("tested_badge", payload, await signKey(), now(), BADGE_SIGNED_TTL_SEC);
-    return json(200, { kind: "tested_badge_verdict", ...payload, signed, note: "Earned only, never sold. Re-evaluated from the live score on every request and removed automatically when it drops below the threshold. Check the signature and expires_at; a copied image proves nothing." }, headers);
+    return json(200, { kind: "tested_badge_verdict", ...payload, signed, note: "Earned only, never sold. Re-evaluated from the live score on every request; removed automatically when a rule above stops holding (score drop, failed latest test-buy, or no conclusive Lumi test-buy for 30 days). Check the signature and expires_at; a copied image proves nothing." }, headers);
   }
   const ownHosts = new Set(["api.lumitrades.io", ...(config.publicBaseUrl ? [new URL(config.publicBaseUrl).hostname] : [])]);
   const commerce = createCommerce({
@@ -622,6 +641,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     evidence: evidenceStore,
     receipts: receiptStore,
     paywall: (ctx) => paywallDeps(ctx),
+    saleOutcome,
     email: { from: alertCfg.emailFrom, binding: alertCfg.emailBinding },
     extraTestWallets,
     testPriceUsd: TEST_PRICE_USD,

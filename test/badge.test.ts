@@ -123,7 +123,7 @@ describe("legacy /badge retired: 301 to the signed /v1/badge route", () => {
     const d = await (await get(app, "/v1/badge")).json();
     expect(d.kind).toBe("lumi_badge_docs");
     expect(d.endpoints.svg).toBe("https://api.lumitrades.io/v1/badge/{key}.svg");
-    expect(d.threshold).toEqual({ min_score: 80, min_paid_test_buys: 3, latest_test_buy: "delivered" });
+    expect(d.threshold).toEqual({ min_score: 80, window_days: 30, min_paid_test_buys: 3, latest_test_buy: "delivered" });
     expect(d.legacy).toMatch(/301/);
     expect(d.example.markdown).toBe("[![Tested by Lumi (live score, earned only)](https://api.lumitrades.io/v1/badge/printmoneylab.svg)](https://api.lumitrades.io/trust/v/printmoneylab)");
     expect(JSON.stringify(d)).not.toContain("cryptobuddy");

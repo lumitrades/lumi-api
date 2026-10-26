@@ -1,4 +1,5 @@
 /** Discovery entries for the plan routes (well-known x402 manifest, OpenAPI, index, skill.md, MCP, A2A). */
+import { MONITORED_BADGE_SUMMARY } from "./counting";
 import type { Config } from "../config";
 import { dropsToXrp } from "../config";
 import { usdToDrops } from "../pricing";
@@ -79,7 +80,7 @@ export const COMMERCE_FREE_ENDPOINTS = [
   { method: "GET", path: "/v1/monitor/status/{id}", summary: "Public seller status page (also .json): uptime from quote probes, test-buy outcomes, tier label" },
   { method: "GET", path: "/v1/monitor/sellers", summary: "Monitored sellers (each pays Lumi for monitoring; disclosed)" },
   { method: "GET", path: "/v1/monitor/sellers/{id}", summary: "Public seller entry: disclosure, plan status, test-buy outcomes, findings with seller replies" },
-  { method: "GET", path: "/v1/monitor/badge/{file}", summary: "Live 'Monitored by Lumi' badge: {id}.svg or {id}.json; removed automatically when a test fails or the plan lapses" },
+  { method: "GET", path: "/v1/monitor/badge/{file}", summary: `Live 'Monitored by Lumi' badge: {id}.svg or {id}.json; ${MONITORED_BADGE_SUMMARY}; also removed when the plan or pack lapses` },
   { method: "POST", path: "/v1/monitor/replies", summary: "Seller reply to a finding (management token); findings cannot be removed" },
   { method: "GET", path: "/v1/monitor/corrections", summary: "Public correction log" },
   { method: "GET", path: "/v1/feed", summary: "Trust data feed for facilitators, wallets and frameworks: plans, metering, endpoints" },
@@ -112,7 +113,7 @@ export function commerceOpenApiPaths(cfg: Config, base: string) {
     "/v1/monitor/status/{id}": { get: { tags: tagM, security: [], summary: "Public seller status page (HTML; also {id}.json): uptime from quote probes, test-buy outcomes, tier label (free)", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: R({ "200": "OK", "404": "Unknown enrolment" }) } },
     "/v1/monitor/sellers": { get: { tags: tagM, security: [], summary: "Monitored sellers (free)", responses: R({ "200": "OK" }) } },
     "/v1/monitor/sellers/{id}": { get: { tags: tagM, security: [], summary: "Public seller entry with disclosure, findings and replies (free)", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string", pattern: "^men_[a-f0-9]{24}$" } }], responses: R({ "200": "OK", "404": "Unknown, or no plan paid yet" }) } },
-    "/v1/monitor/badge/{file}": { get: { tags: tagM, security: [], summary: "Live badge: {id}.svg or {id}.json (free)", parameters: [{ name: "file", in: "path", required: true, schema: { type: "string", pattern: "^men_[a-f0-9]{24}\\.(svg|json)$" } }], responses: R({ "200": "Badge", "404": "Unknown seller" }) } },
+    "/v1/monitor/badge/{file}": { get: { tags: tagM, security: [], summary: "Live badge: {id}.svg or {id}.json (free)", description: `${MONITORED_BADGE_SUMMARY}. Also removed when the plan or pack lapses.`, parameters: [{ name: "file", in: "path", required: true, schema: { type: "string", pattern: "^men_[a-f0-9]{24}\\.(svg|json)$" } }], responses: R({ "200": "Badge", "404": "Unknown seller" }) } },
     "/v1/monitor/replies": { post: { tags: tagM, security: [{ managementToken: [] }], summary: "Seller reply to a finding (free)", requestBody: body({ enrollment_id: { type: "string" }, finding_id: { type: "integer" }, text: { type: "string", maxLength: 1000 } }, ["enrollment_id", "finding_id", "text"]), responses: R({ "201": "Reply stored", "401": "Management token required" }) } },
     "/v1/monitor/corrections": { get: { tags: tagM, security: [], summary: "Public correction log (free)", responses: R({ "200": "OK" }) } },
     "/v1/feed": { get: { tags: tagF, security: [], summary: "Trust data feed: plans, metering, endpoints (free)", responses: R({ "200": "OK" }) } },

@@ -92,3 +92,14 @@ export function countedSummary(buys: CountedBuy[], endpoints: string[]) {
   const lastDelivered = counted.find((b) => b.delivered)?.ts ?? null;
   return { latest, lastDelivered, counted: counted.length };
 }
+
+/** Public wording of the counting rules (seller page, /v1/badge, OpenAPI, llms.txt, skill.md). Must match countBuys + badgeStatus. */
+export const COUNTING_TEXT = {
+  rule: `At most ${COUNTING.perEndpointPerUtcDay} counted test-buy per endpoint per UTC day, from Lumi's own baseline buys and seller-paid buys (plan or pack) together. If any buy that day failed, the day counts as a failure (the first failure), even if it came after a success; otherwise the first success counts. Extra buys that day are shown as history with counted:false and never add anything, so paying cannot hide a failure or freshen the badge more than once a day.`,
+  failures: "Failures are published and counted exactly like successes; the latest counted result per endpoint decides the badge.",
+  dating: `The badge shows the date of the last delivered counted test-buy and lapses ${COUNTING.badgeLapseDays} days after it (sooner on tiers with a shorter window).`,
+  score: "Paying never changes a score: Lumi's trust score and the earned 'Tested by Lumi' badge read only Lumi's own baseline buys, never seller-paid runs.",
+};
+
+/** One-sentence form of COUNTING_TEXT for endpoint lists. */
+export const MONITORED_BADGE_SUMMARY = `one counted test-buy per endpoint per UTC day (any failure that day makes the day a failure); the latest counted result per endpoint decides, so a failure removes the badge; dated by the last delivered counted test-buy and gone ${COUNTING.badgeLapseDays} days after it (sooner on tiers with a shorter window); paying never changes a score`;

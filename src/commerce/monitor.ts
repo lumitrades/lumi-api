@@ -11,7 +11,8 @@ import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, SOLD_MONITOR_PLANS, PLANS, TEST_
 import { FOUNDER_RACE_TEXT, MONITOR_METHODOLOGY, MONITOR_SAFEGUARDS, MONITOR_TERMS, PACK_TERMS } from "./policy";
 const CONTACT_EMAIL = "hello@lumitrades.io";
 import { makeChallenge, verifyProof } from "./proof";
-import { BADGE_LAPSE_MS, COUNTING, countBuys, countedSummary, type CountedBuy } from "./counting";
+import { BADGE_LAPSE_MS, COUNTING, COUNTING_TEXT, countBuys, countedSummary, type CountedBuy } from "./counting";
+export { COUNTING_TEXT } from "./counting";
 import type { BuyRow } from "../trust/catalog";
 import { NO_STORE, acceptAsset, acceptUsd, bad, bearer, parse402, readJson, safeEmail, safeHttpsUrl, type CommerceDeps, type WaitUntil } from "./common";
 import type { EndpointChain, Enrollment, FindingRow, MonitorEndpoint, PackJobRow, PlanRow, RunRow, UptimeRow } from "./store";
@@ -158,9 +159,11 @@ const tierRank = (plan: string) => ({ watch_pro: 6, watch_plus: 5, watch_plus_fo
 
 /**
  * The seller-monitoring badge (adopted rules 2026-10-25, see counting.ts): seller-paid runs (plans and packs) and Lumi's
- * baseline buys are pooled; at most one counted buy per endpoint per UTC day (first wins, baseline first on a tie);
- * failures count like successes (the latest counted result per endpoint decides); the badge is dated with the last
- * delivered counted buy and lapses when that is older than the tier window, never more than 30 days.
+ * baseline buys are pooled; at most one counted buy per endpoint per UTC day (the first failure that day if any buy
+ * failed, otherwise the first success; see countBuys); failures count like successes (the latest counted result per
+ * endpoint decides, and any endpoint whose latest counted day failed removes the badge); the badge is dated with the
+ * last delivered counted buy and lapses when that is older than the tier window, never more than 30 days (packs: 30).
+ * Public wording: COUNTING_TEXT in counting.ts.
  */
 export function badgeStatus(e: Enrollment, plans: PlanRow[], runs: RunRow[], now: number, baseline: BuyRow[] = []) {
   const live = (p: PlanRow) => p.starts_at <= now && now < p.ends_at;
@@ -185,13 +188,6 @@ export function badgeStatus(e: Enrollment, plans: PlanRow[], runs: RunRow[], now
   return { ok: true as const, plan: active, last_test: last, result: seen.length < eps.length ? "pass (partial)" : "pass" };
 }
 
-/** Public wording of the counting rules (seller page, docs). */
-export const COUNTING_TEXT = {
-  rule: `At most ${COUNTING.perEndpointPerUtcDay} counted test-buy per endpoint per UTC day, from Lumi's own baseline buys and seller-paid buys (plan or pack) together. If any buy that day failed, the day counts as a failure (the first failure), even if it came after a success; otherwise the first success counts. Extra buys that day are shown as history with counted:false and never add anything, so paying cannot hide a failure or freshen the badge more than once a day.`,
-  failures: "Failures are published and counted exactly like successes; the latest counted result per endpoint decides the badge.",
-  dating: `The badge shows the date of the last delivered counted test-buy and lapses ${COUNTING.badgeLapseDays} days after it (sooner on tiers with a shorter window).`,
-  score: "Paying never changes a score: Lumi's trust score and the earned 'Tested by Lumi' badge read only Lumi's own baseline buys, never seller-paid runs.",
-};
 
 const REASON_TEXT: Record<string, string> = {
   plan_lapsed: "plan lapsed", no_monitoring_plan: "not monitored", no_test_yet: "no test yet", monitoring_failed: "latest test failed", no_recent_test: "no recent test",
@@ -592,7 +588,7 @@ export function createMonitor(deps: CommerceDeps) {
       return new Response(badgeSvg("Lumi monitoring", "unknown seller", false), { status: 404, headers: { ...hdr, "Content-Type": "image/svg+xml" } });
     }
     const b = badgeStatus(x.e, x.plans, x.runs, now(), x.baseline);
-    const j = { ...badgeJson(x.e, b), enrollment_id: id, seller_page: `${base}/v1/monitor/sellers/${id}`, live: true, note: "Computed on every request: removed automatically when a test fails, no recent test exists, or the plan lapses." };
+    const j = { ...badgeJson(x.e, b), enrollment_id: id, seller_page: `${base}/v1/monitor/sellers/${id}`, live: true, last_test_is: "the date of the last delivered counted test-buy (never the render date)", rules: COUNTING_TEXT, note: "Computed on every request: removed automatically when the latest counted test-buy of an endpoint failed, no counted test-buy delivered in the window, or the plan lapses." };
     if (fmt === "json") return json(200, j, hdr);
     const right = b.ok ? `last test ${iso(b.last_test)!.slice(0, 10)} · ${b.result}${x.e.is_test ? " · test" : ""}` : `badge removed: ${REASON_TEXT[b.reason]}`;
     return new Response(badgeSvg(b.ok ? badgeLabel(x.e, b.plan.plan) : "Lumi monitoring", right, b.ok), { headers: { ...hdr, "Content-Type": "image/svg+xml" } });
@@ -1260,7 +1256,7 @@ export function createMonitor(deps: CommerceDeps) {
     return {
       packs: PACK_PLANS.map((id) => {
         const p = PLANS[id], k = p.pack!;
-        return { plan: id, name: p.name, price_usd: p.usd, checkout_usd: usd2(p.usd), test_buys: k.buys, expiry_days: k.expiryDays, max_usd_per_test_buy: PACK_LIMITS.maxBuyUsd,
+        return { plan: id, name: p.name, price_usd: p.usd, checkout_usd: Number(p.usd).toFixed(2) /* always two decimals: "5.00", "6.50" */, test_buys: k.buys, expiry_days: k.expiryDays, max_usd_per_test_buy: PACK_LIMITS.maxBuyUsd,
           ...(id === "retest_pack" ? { pitch: "Fixed something? Get re-tested now." } : {}),
           ...(k.founder ? { founder: { seats: k.founder.seats, one_place_per_company: "enrolments sharing a payTo wallet or a registrable domain", max_purchases_per_company: k.founder.maxPurchases } } : {}),
           buy: `${base}${p.path}?enrollment=<enrollment_id>[&endpoint=<enrolled endpoint URL>]`, summary: p.summary };
@@ -1329,6 +1325,7 @@ export function createMonitor(deps: CommerceDeps) {
           await store.addPackRefusal({ paid_tx: tx, enrollment_id: e.id, plan, reason: c.reason, paid_network: s.network, paid_asset: assetLabel(req), paid_amount: String(req.amount), payer: s.payer ?? null, usd: Number(usd), is_test: e.is_test, created_at: t })
             .catch((err) => deps.log({ event: "monitor_pack_refusal_error", error: String(err) }));
           deps.log({ event: "monitor_pack_refused_at_settlement", plan, enrollment: e.id, reason: c.reason, tx });
+          deps.saleOutcome?.(tx, { kind: "refused", reason: c.reason });
           return json(409, {
             error: c.reason === "founder_offer_full" ? "founder_offer_full_at_settlement" : "founder_purchases_used_at_settlement",
             plan, paid: true, credited: false, tx, network: s.network, enrollment_id: e.id,
@@ -1341,6 +1338,7 @@ export function createMonitor(deps: CommerceDeps) {
         }
       }
       const ins = await store.addPlan(row).catch((err) => { deps.log({ event: "monitor_pack_error", error: String(err) }); return "error" as const; });
+      deps.saleOutcome?.(tx, ins === "error" ? { kind: "unknown" } : { kind: "credited" });
       let job: PackJobRow | null = null, jobNote: string | null = null;
       if (ins === "inserted") {
         const q = await queuePackJob(e, pe.ep, t, row.id).catch((err) => ({ ok: false as const, error: "queue_error", detail: String(err).slice(0, 200) }));

@@ -111,7 +111,7 @@ export interface Trust {
   /** free=true: answer-only (no tx hashes / evidence detail) for free surfaces; default full for paid /v1/trust/check. */
   lookup(q: LookupQuery, base: string, opts?: { free?: boolean }): Promise<Record<string, unknown>>;
   /** Live score of one curated vendor (same inputs as the public score: probes, Lumi test-buys, verified reports). Null = unknown id. */
-  vendorScore(id: string): Promise<{ vendor_id: string; name: string; score: ScoreResult; status: string; last_conclusive: "delivered" | "not_delivered" | null } | null>;
+  vendorScore(id: string): Promise<{ vendor_id: string; name: string; score: ScoreResult; status: string; last_conclusive: "delivered" | "not_delivered" | null; last_conclusive_at: number | null } | null>;
   /** Verified seller replies for a curated vendor (shown in /v1/verdict). */
   vendorReplies(id: string): Promise<Array<{ text: string; via: string; ts: number }>>;
   /** Free-route rate limit (same buckets as free lookups). Null = allowed. */
@@ -952,7 +952,9 @@ export function createTrust(deps: TrustDeps): Trust {
     const hit = byIp ?? (kh ? await limited("lookup_key", kh, l.perMinute, l.perDay, l.globalPerDay) : null);
     if (!hit) return null;
     const body = (await hit.json().catch(() => ({}))) as Record<string, unknown>;
-    return json(429, { ...body, more: FREE_LIMIT_MORE }, Object.fromEntries(hit.headers));
+    // Copy only Retry-After: json() adds the CORS headers itself, and re-passing hit's (lowercased) copies doubled them.
+    const retry = hit.headers.get("Retry-After");
+    return json(429, { ...body, more: FREE_LIMIT_MORE }, retry ? { "Retry-After": retry } : {});
   }
 
   async function limited(bucket: string, who: string, perMinute: number, perDay: number, globalPerDay: number): Promise<Response | null> {
@@ -1473,8 +1475,10 @@ export function createTrust(deps: TrustDeps): Trust {
     const v = vendorById(id);
     if (!v) return null;
     const [g, reach] = await Promise.all([gather(v), reachability(v)]);
-    const last = g.obs.map(deliveryState).find((d) => d !== "inconclusive") ?? null;
-    return { vendor_id: v.id, name: v.name, score: g.score, status: reach.status, last_conclusive: last as "delivered" | "not_delivered" | null };
+    // g.obs is Lumi's own test-buys in the 30-day window, newest first.
+    const lastObs = g.obs.find((o) => deliveryState(o) !== "inconclusive") ?? null;
+    const last = lastObs ? deliveryState(lastObs) : null;
+    return { vendor_id: v.id, name: v.name, score: g.score, status: reach.status, last_conclusive: last as "delivered" | "not_delivered" | null, last_conclusive_at: lastObs?.ts ?? null };
   }
 
   async function freeLimit(request: Request, bucket: "lookup") {

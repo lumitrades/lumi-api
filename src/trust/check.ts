@@ -54,6 +54,30 @@ export function badgeThresholds(env: { BADGE_MIN_SCORE?: string; BADGE_MIN_PAID_
 }
 export const BADGE_CACHE = "public, max-age=300, s-maxage=300";
 
+/** The Tested-by-Lumi badge reads Lumi's test-buys from this window (trust WINDOW_DAYS); with none conclusive in it, no badge. */
+export const BADGE_WINDOW_DAYS = 30;
+/** YYYY-MM-DD (UTC) of a ms timestamp. */
+export const utcDay = (ts: number) => new Date(ts).toISOString().slice(0, 10);
+
+/**
+ * The "Tested by Lumi" rules exactly as badgeDecision + vendorScore enforce them. Every doc (/v1/badge, OpenAPI,
+ * llms.txt, skill.md, the badge JSON) uses this text so the docs cannot drift from the code.
+ */
+export function testedBadgeRules(t: BadgeThresholds = DEFAULT_BADGE_THRESHOLDS) {
+  return {
+    earned_when: `Lumi's live score for the seller is at least ${t.minScore}, Lumi made at least ${t.minPaidTests} conclusive test-buys in the last ${BADGE_WINDOW_DAYS} days, Lumi's latest conclusive test-buy delivered, and the seller is not currently unreachable.`,
+    counting: `Every conclusive test-buy from Lumi's own wallet in the last ${BADGE_WINDOW_DAYS} days counts. Inconclusive buys (Lumi never got a response) never count. Seller-paid monitoring runs are never read.`,
+    failures: "If Lumi's latest conclusive test-buy failed, the badge is removed at once and stays off until a later test-buy delivers.",
+    dating: `The badge shows the date (UTC) of Lumi's latest conclusive test-buy, not the date it was rendered. It lapses ${BADGE_WINDOW_DAYS} days after that test-buy: with no conclusive test-buy in the last ${BADGE_WINDOW_DAYS} days there is no badge.`,
+    paying: "Paying never changes a score. The badge is never sold, and nothing a seller pays Lumi (monitoring, packs, reports) is read by it.",
+  };
+}
+
+/** One-sentence form of testedBadgeRules for endpoint lists. */
+export function testedBadgeSummary(t: BadgeThresholds = DEFAULT_BADGE_THRESHOLDS): string {
+  return `shown only while the seller's live Lumi score is at least ${t.minScore}, with at least ${t.minPaidTests} conclusive Lumi test-buys in the last ${BADGE_WINDOW_DAYS} days and the latest one delivered; dated by that latest test-buy and gone ${BADGE_WINDOW_DAYS} days after it; a failed latest test-buy removes it at once; never sold, and paying never changes a score`;
+}
+
 export interface ScoreInput {
   value: number | null;
   confidence: string;
@@ -117,7 +141,7 @@ export function noBadgeSvg(text: string): string {
 }
 
 export function earnedBadgeSvg(score: number, date: string): string {
-  const right = esc(`score ${score} · ${date}`);
+  const right = esc(`score ${score} · tested ${date}`);
   const lw = 98, rw = 20 + right.length * 6.5, w = Math.round(lw + rw);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" role="img" aria-label="Tested by Lumi: ${right}"><title>Tested by Lumi: ${right}. Live score, earned only, not an endorsement or guarantee.</title><rect width="${lw}" height="20" fill="#3a3f47"/><rect x="${lw}" width="${Math.round(rw)}" height="20" fill="#2e8540"/><g fill="#fff" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11"><text x="8" y="14">Tested by Lumi</text><text x="${lw + 8}" y="14">${right}</text></g></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="20" role="img" aria-label="Tested by Lumi: ${right}"><title>Tested by Lumi: ${right} (date of Lumi's latest conclusive test-buy, UTC). Live score, earned only, not an endorsement or guarantee.</title><rect width="${lw}" height="20" fill="#3a3f47"/><rect x="${lw}" width="${Math.round(rw)}" height="20" fill="#2e8540"/><g fill="#fff" font-family="Verdana,DejaVu Sans,sans-serif" font-size="11"><text x="8" y="14">Tested by Lumi</text><text x="${lw + 8}" y="14">${right}</text></g></svg>`;
 }
