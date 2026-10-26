@@ -73,7 +73,7 @@ export function productSample(route: PaidRoute, body: Record<string, unknown>) {
   return { sample, truncated: { arrays: cut, ...(omitted.length ? { omitted } : {}) } };
 }
 
-export const SAMPLE_ARGS: Partial<Record<PaidRoute, string>> = { vendor_report: "printmoneylab", trust_check: "url=https%3A%2F%2Fapi.lumitrades.io%2Fv1%2Fmarket" };
+export const SAMPLE_ARGS: Partial<Record<PaidRoute, string>> = { vendor_report: "printmoneylab", trust_check: "url=https%3A%2F%2Fapi.lumitrades.io%2Fv1%2Ffunding" };
 
 export function sampleEntry(cfg: Config, base: string, route: PaidRoute) {
   const e = PAID_ENDPOINTS.find((x) => x.route === route);

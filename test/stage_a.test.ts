@@ -18,7 +18,7 @@ function setup() {
 describe("freshness metadata", () => {
   it("every paid response carries as_of, data_age_seconds, next_update, stale_after (ISO UTC)", async () => {
     const { get } = setup();
-    for (const path of ["/v1/macro/yen", "/v1/market", "/v1/market", "/v1/market", "/v1/macro/yen", "/v1/events", "/v1/sentiment"]) {
+    for (const path of ["/v1/institutional", "/v1/fear-greed", "/v1/fear-greed", "/v1/fear-greed", "/v1/institutional", "/v1/institutional", "/v1/fear-greed"]) {
       const q = await (await get(path)).json();
       const r = await get(path, { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) });
       expect(r.status, path).toBe(200);

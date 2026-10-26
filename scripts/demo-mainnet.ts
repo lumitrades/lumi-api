@@ -17,7 +17,7 @@ import { Client, Wallet } from "xrpl";
 import { XRPLPresignedPaymentPayer, decodePaymentRequiredHeader, decodePaymentResponseHeader } from "x402-xrpl";
 
 const BASE = (process.env.LUMI_API_URL || "https://api.lumitrades.io").replace(/\/+$/, "");
-const PATH = process.env.DEMO_PATH || "/v1/sentiment";
+const PATH = process.env.DEMO_PATH || "/v1/fear-greed";
 const FILE = process.env.DEMO_BUYER_FILE || "/workspace/secrets/xrpl_demo_buyer.json";
 const LOG = process.env.DEMO_LOG || "/workspace/notes/wallet_log.md";
 const MAX_DROPS = BigInt(process.env.DEMO_MAX_DROPS || "10000");

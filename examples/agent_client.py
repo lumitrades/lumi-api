@@ -3,7 +3,7 @@ Minimal agent client (Python) using the official XRPL x402 SDK (PyPI: x402-xrpl)
 
     pip install x402-xrpl xrpl-py
     XRPL_SEED=s... LUMI_API_URL=https://api.lumitrades.io XRPL_NETWORK=xrpl:0 \
-        python examples/agent_client.py /v1/market
+        python examples/agent_client.py /v1/fear-greed
 """
 import json
 import os
@@ -18,7 +18,7 @@ rpc_url = os.environ.get(
     "XRPL_RPC_URL",
     "https://xrplcluster.com/" if network == "xrpl:0" else "https://testnet.xrpl-labs.com/",
 )
-path = sys.argv[1] if len(sys.argv) > 1 else "/v1/market"
+path = sys.argv[1] if len(sys.argv) > 1 else "/v1/fear-greed"
 
 session = x402_requests(
     Wallet.from_seed(os.environ["XRPL_SEED"]),

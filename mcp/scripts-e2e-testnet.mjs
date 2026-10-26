@@ -32,7 +32,7 @@ const call = async (name, args = {}) => {
 };
 const cat = JSON.parse((await call("lumi_catalog")).text);
 console.log("catalog:", cat.wallet, cat.caps, cat.endpoints.length, "endpoints");
-console.log("quote /v1/market:", (await call("lumi_quote", { path: "/v1/brief" })).text.replace(/\s+/g, " ").slice(0, 300));
+console.log("quote /v1/brief (retired):", (await call("lumi_quote", { path: "/v1/brief" })).text.replace(/\s+/g, " ").slice(0, 300));
 const out = {};
 for (const [name, args] of [["lumi_sentiment"], ["lumi_macro_yen"], ["lumi_events"], ["lumi_market"], ["lumi_institutional_brief", { format: "md" }]]) {
   const r = await call(name, args ?? {});

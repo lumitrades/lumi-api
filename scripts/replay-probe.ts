@@ -17,14 +17,14 @@ const env = { XRPL_NETWORK: "xrpl:1", PAY_TO: w.receiver.address, INVOICE_SECRET
 const a = await startServer(env, 0);
 const b = await startServer(env, 0); // fresh instance: empty replay memory
 try {
-  const r402 = await fetch(`${a.url}/v1/sentiment`);
+  const r402 = await fetch(`${a.url}/v1/fear-greed`);
   const ch = decodePaymentRequiredHeader(r402.headers.get("PAYMENT-REQUIRED")!) as any;
   const payer = new XRPLPresignedPaymentPayer({ wallet: Wallet.fromSeed(w.payer.seed), network: "xrpl:1", wsUrl });
   const { paymentHeader } = await payer.preparePayment(ch.accepts[0], { resource: ch.resource });
-  const first = await fetch(`${a.url}/v1/sentiment`, { headers: { "PAYMENT-SIGNATURE": paymentHeader } });
+  const first = await fetch(`${a.url}/v1/fear-greed`, { headers: { "PAYMENT-SIGNATURE": paymentHeader } });
   const rcpt = decodePaymentResponseHeader(first.headers.get("PAYMENT-RESPONSE") ?? "") as any;
   console.log("first payment:", first.status, rcpt?.transaction);
-  const replay = await fetch(`${b.url}/v1/sentiment`, { headers: { "PAYMENT-SIGNATURE": paymentHeader } });
+  const replay = await fetch(`${b.url}/v1/fear-greed`, { headers: { "PAYMENT-SIGNATURE": paymentHeader } });
   const body = (await replay.json()) as any;
   console.log("replay on fresh instance:", replay.status, body.error ?? body.kind, replay.headers.get("PAYMENT-RESPONSE") ? decodePaymentResponseHeader(replay.headers.get("PAYMENT-RESPONSE")!) : "");
 } finally {

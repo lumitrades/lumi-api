@@ -44,13 +44,8 @@ use this package when you want paid tools to pay automatically from your own wal
 
 | Tool | Paid? | Price (USD) | What you get |
 |---|---|---|---|
-| `lumi_market` | paid | $0.02 | BTC + macro backdrop and breadth |
-| `lumi_macro_yen` | paid | $0.01 | USD/JPY, Nikkei, a rule-based yen risk level against a 155 reference, Japan events |
-| `lumi_sentiment` | paid | $0.005 | Fear & Greed, funding sign and size band, OI, dominance, breadth |
-| `lumi_events` | paid | $0.005 | Sourced upcoming macro/crypto events and catalysts |
 | `lumi_funding` | paid | $0.003 | Perp funding rates for every tracked coin listed on OKX (8h-normalised, annualised, size band) |
 | `lumi_fear_greed` | paid | $0.003 | CoinMarketCap Fear & Greed now vs yesterday/week/month, yearly high/low, 30-day series |
-| `lumi_events_48h` | paid | $0.003 | What is scheduled in the next 48 hours (UTC + US Central), why it matters, sources |
 | `lumi_institutional_brief` | paid | $0.10 | Daily Institutional & Policy Brief: BIS, IMF, US Treasury/regulators, JPMorgan, SBI, Cross River, Securitize, R3 and others mapped to XRP, XLM, XDC, QNT, AXL, HBAR (confirmed vs indirect-alignment links, sourced). `format: "md"` for markdown. Allowed by the default caps (0.30 USD / 0.25 XRP) |
 
 How to pay, in order of preference: **1. USDC on Base** (gasless, `EVM_PRIVATE_KEY`), **2. the XRP Ledger** (`XRPL_SEED`):
@@ -145,8 +140,7 @@ npm test                         # spend-cap / payee / settings unit tests + a m
 node scripts-e2e-testnet.mjs     # testnet only: real x402 payments through MCP against a local testnet API (see the file header)
 ```
 
-Testnet run, Oct 22 2026 (via MCP stdio, x402 on XRPL Testnet, all `tesSUCCESS`): `lumi_sentiment` 9137C1AE…, `lumi_macro_yen`
-38DDADD0…, `lumi_events` EBD235D3… (tools retired since then are not listed).
+The market, yen, sentiment and events tools were retired on Oct 25 2026 (the API answers 410 Gone, never charged).
 
 ## License
 

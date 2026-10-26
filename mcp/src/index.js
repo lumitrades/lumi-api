@@ -20,13 +20,8 @@ export const VERSION = "0.10.0";
 
 /** Paid tools: name -> API path builder + description (prices are read live from the API's 402 quote). */
 export const PAID_TOOLS = [
-  { name: "lumi_market", path: () => "/v1/market", input: {}, description: "BTC backdrop (price, 24h change, dated catalysts), macro (yen note, total cap, dominance, Fear & Greed, funding) and 24h up/down breadth. Market data only. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
-  { name: "lumi_macro_yen", path: () => "/v1/macro/yen", input: {}, description: "Yen macro watch: USD/JPY, Nikkei 225, a rule-based yen risk level (low/watch/elevated) against a 155 reference, Japan events (BOJ, CPI). Paid: $0.01 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
-  { name: "lumi_sentiment", path: () => "/v1/sentiment", input: {}, description: "CoinMarketCap Fear & Greed, BTC perp funding (sign and size band), open interest, total cap/dominance, 24h up/down breadth across tracked coins. Paid: $0.005 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
-  { name: "lumi_events", path: () => "/v1/events", input: {}, description: "Sourced upcoming macro/crypto events (timed releases in UTC + US Central, and dated per-coin catalysts). Paid: $0.005 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
   { name: "lumi_funding", path: () => "/v1/funding", input: {}, description: "Perpetual funding rates for every tracked coin listed on OKX (rate, 8h-normalised, annualised, next funding time, size band), the BTC rate, median, most positive/negative. Refreshed every 15 minutes. Paid: $0.003 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
   { name: "lumi_fear_greed", path: () => "/v1/fear-greed", input: {}, description: "CoinMarketCap Fear & Greed now, yesterday, last week and last month, change vs each, yearly high/low and a 30-day series. Refreshed every 30 minutes. Paid: $0.003 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
-  { name: "lumi_events_48h", path: () => "/v1/events/next48h", input: {}, description: "What is scheduled in the next 48 hours: macro releases and decisions with UTC + US Central times, why each matters and its source, plus dated coin catalysts. Paid: $0.003 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
   {
     name: "lumi_institutional_brief",
     path: (a) => `/v1/institutional${a.format === "md" ? "?format=md" : ""}`,
@@ -105,8 +100,8 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: free samples of every paid product",
       description:
-        "Free. A truncated, clearly labelled SAMPLE of each paid product (market, yen, sentiment, funding, fear_greed, events, events_48h, institutional brief, trust_check, vendor report, verdict) with its USD price and full URL, so you can judge it before paying. Lists are cut to 2 entries; up to 10 minutes old. Pass route to get one product.",
-      inputSchema: { route: z.string().regex(/^[a-z_]{1,32}$/).optional().describe("Optional product route, e.g. institutional or market") },
+        "Free. A truncated, clearly labelled SAMPLE of each paid product (funding, fear_greed, institutional brief, trust_check, vendor report, verdict) with its USD price and full URL, so you can judge it before paying. Lists are cut to 2 entries; up to 10 minutes old. Pass route to get one product.",
+      inputSchema: { route: z.string().regex(/^[a-z_]{1,32}$/).optional().describe("Optional product route, e.g. institutional or funding") },
     },
     async ({ route }) => {
       const r = await client.free("/v1/samples");
@@ -120,8 +115,8 @@ export function buildServer(client, opts = {}) {
     "lumi_quote",
     {
       title: "Lumi: price check without paying (free)",
-      description: "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base) for any Lumi paid path, e.g. /v1/market, without paying. A 503 means the data is not fresh right now and the call would not be sold.",
-      inputSchema: { path: z.string().regex(/^\/v1\//).describe("Paid API path, e.g. /v1/market or /v1/trust/check?url=...") },
+      description: "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base) for any Lumi paid path, e.g. /v1/funding, without paying. A 503 means the data is not fresh right now and the call would not be sold.",
+      inputSchema: { path: z.string().regex(/^\/v1\//).describe("Paid API path, e.g. /v1/funding or /v1/trust/check?url=...") },
     },
     async ({ path }) => text(await client.quote(path)),
   );

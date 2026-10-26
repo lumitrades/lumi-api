@@ -21,49 +21,6 @@ export const NOT_CHARGED = "Not charged on bad input or stale data (every respon
 
 export const PAID_ENDPOINTS: PaidEndpoint[] = [
   {
-    route: "market",
-    name: "Lumi Trades: BTC + macro market backdrop",
-    method: "GET",
-    path: "/v1/market",
-    template: "/v1/market",
-    summary:
-      "Use this when you need the whole crypto backdrop in one call: BTC price and 24h change, macro (USD/JPY note, total cap, dominance, Fear & Greed, BTC perp funding/OI), dated catalysts with sources and 24h up/down breadth across tracked coins. " + NOT_CHARGED,
-    example: "/v1/market",
-  },
-  {
-    route: "yen",
-    name: "Lumi Trades: yen macro watch (USD/JPY, Nikkei)",
-    method: "GET",
-    path: "/v1/macro/yen",
-    template: "/v1/macro/yen",
-    summary:
-      "Use this when you need to check whether a fast yen move could spill into crypto: USD/JPY and Nikkei 225 (price, 1d/5d change, ranges), " +
-      "a rule-based macro risk level (low/watch/elevated) against a 155 USD/JPY reference with reasons, BTC context, upcoming Japan events (BOJ, CPI) and sources. " + NOT_CHARGED,
-    example: "/v1/macro/yen",
-  },
-  {
-    route: "sentiment",
-    name: "Lumi Trades: crypto sentiment (Fear & Greed, funding)",
-    method: "GET",
-    path: "/v1/sentiment",
-    template: "/v1/sentiment",
-    summary:
-      "Use this when you need a quick market-mood snapshot: Fear & Greed (value, band, day-over-day change), the BTC perp funding rate (sign and size) " +
-      "+ open interest, total market cap/volume/dominance, and 24h up/down breadth across tracked coins. " + NOT_CHARGED,
-    example: "/v1/sentiment",
-  },
-  {
-    route: "events",
-    name: "Lumi Trades: macro + crypto events calendar",
-    method: "GET",
-    path: "/v1/events",
-    template: "/v1/events",
-    summary:
-      "Use this when you need to know what scheduled events could move crypto soon: timed releases/decisions (UTC + US Central, with why it matters) and dated " +
-      "per-coin catalysts (Fed, BOJ, CPI, network upgrades, conferences). Every row is sourced. " + NOT_CHARGED,
-    example: "/v1/events",
-  },
-  {
     route: "funding",
     name: "Lumi Trades: perpetual funding rates (OKX perps)",
     method: "GET",
@@ -82,16 +39,6 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     summary:
       "Use this when you need crypto sentiment: the CoinMarketCap Fear & Greed index now, yesterday, last week and last month, the change vs each, yearly high/low and a 30-day daily series. Refreshed every 30 minutes. " + NOT_CHARGED,
     example: "/v1/fear-greed",
-  },
-  {
-    route: "events_48h",
-    name: "Lumi Trades: events in the next 48 hours",
-    method: "GET",
-    path: "/v1/events/next48h",
-    template: "/v1/events/next48h",
-    summary:
-      "Use this when you need to know what could move crypto in the next 48 hours: scheduled macro releases and decisions with exact UTC and US Central times, why each matters and its source, plus dated per-coin catalysts. An empty window is a valid answer. " + NOT_CHARGED,
-    example: "/v1/events/next48h",
   },
   {
     route: "institutional",

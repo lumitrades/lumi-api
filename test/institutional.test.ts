@@ -212,12 +212,14 @@ describe("institutional brief over MCP and A2A", () => {
     expect(fac.calls).toHaveLength(0);
   });
 
-  it("A2A routes institutional questions to the institutional skill; market questions go to /v1/market (the brief is retired)", async () => {
+  it("A2A routes institutional questions to the institutional skill; the brief and market feed are retired", async () => {
     const { a2a } = setup();
     const p = await a2a([{ text: "what are the BIS and IMF doing that matters for XRP?" }]);
     expect(p[1].data.url).toBe(`${BASE}/v1/institutional`);
     expect(p[1].data.options.map((o: any) => o.amount)).toEqual(["0.1", "0.077", "0.1", "0.1"]);
-    expect((await a2a([{ text: "today's crypto market brief" }]))[1].data.url).toBe(`${BASE}/v1/market`);
+    const mb = await a2a([{ text: "today's crypto market brief" }]); // brief and market feed retired: no quote for either
+    expect(JSON.stringify(mb)).not.toMatch(/\/v1\/(brief|market)\b"/);
+    expect(mb[1]?.data?.url ?? "").not.toMatch(/\/v1\/(brief|market)$/);
     expect((await a2a([{ data: { skill: "institutional" } }]))[1].data.url).toBe(`${BASE}/v1/institutional`);
   });
 });
@@ -246,7 +248,7 @@ describe("?format validation", () => {
 describe("Bazaar resource descriptions", () => {
   it("use the v2 listing text verbatim, with no price in the text (prices live in accepts[]), never cut and never instructions to agents", async () => {
     const { get } = setup();
-    for (const [p, route, usd] of [["/v1/market", "market", "0.02"], ["/v1/institutional", "institutional", "0.1"], ["/v1/trust/check?url=https://a.example/x", "trust_check", ""]] as const) {
+    for (const [p, route, usd] of [["/v1/fear-greed", "fear_greed", "0.003"], ["/v1/institutional", "institutional", "0.1"], ["/v1/trust/check?url=https://a.example/x", "trust_check", ""]] as const) {
       const d = (await (await get(p)).json()).resource.description as string;
       expect(d.length, p).toBeLessThanOrEqual(500);
       expect(d, p).toBe(BAZAAR_ROUTES[route].description);

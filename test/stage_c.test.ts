@@ -189,7 +189,7 @@ describe("Stage C: feeds", () => {
   });
 });
 
-describe("Stage C: /v1/events/next48h", () => {
+describe("Stage C: /v1/fear-greed", () => {
   it("keeps only the next 48 hours", () => {
     const now = Date.parse("2026-10-22T12:00:00Z");
     const ev = { events: [
@@ -204,13 +204,11 @@ describe("Stage C: /v1/events/next48h", () => {
     expect(none.count).toBe(0);
   });
 
-  it("is sold from events.json", async () => {
-    const { buy } = setup();
-    const r = await buy("/v1/events/next48h");
-    expect(r.status).toBe(200);
-    const j: any = await r.json();
-    expect(j.kind).toBe("events_48h");
-    expect(typeof j.count).toBe("number");
+  it("is no longer sold: /v1/events/next48h is retired (410, nothing charged)", async () => {
+    const { get } = setup();
+    const r = await get("/v1/events/next48h");
+    expect(r.status).toBe(410);
+    expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
   });
 });
 

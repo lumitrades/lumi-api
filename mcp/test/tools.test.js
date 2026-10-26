@@ -47,9 +47,9 @@ test("tools: seller monitoring and trust feed present; retired trading tools gon
   const by = Object.fromEntries(tools.map((t) => [t.name, t]));
   assert.ok(by.lumi_seller_monitoring && by.lumi_trust_feed);
   assert.match(by.lumi_seller_monitoring.description, /paying never changes a score/);
-  for (const n of ["lumi_coins", "lumi_signal", "lumi_lite", "lumi_scan", "lumi_levels", "lumi_slate", "lumi_brief"]) assert.ok(!by[n], `${n} retired`);
+  for (const n of ["lumi_coins", "lumi_signal", "lumi_lite", "lumi_scan", "lumi_levels", "lumi_slate", "lumi_brief", "lumi_market", "lumi_macro_yen", "lumi_sentiment", "lumi_events", "lumi_events_48h"]) assert.ok(!by[n], `${n} retired`);
   for (const t of tools) assert.doesNotMatch(t.description, /projection|leverage|support|resistance|\bsignal\b|trade idea/i, t.name);
-  assert.equal(tools.length, 20);
+  assert.equal(tools.length, 15); // 5 market-feed tools retired 2026-10-25
   assert.ok(by.lumi_verdict, "lumi_verdict present");
   assert.match(by.lumi_verdict.description, /never changes a result/);
   assert.ok(!tools.some((t) => t.name === "lumi_trades"), "lumi_trades removed");

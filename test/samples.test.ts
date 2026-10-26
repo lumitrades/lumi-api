@@ -40,8 +40,8 @@ describe("samples", () => {
     expect(j.is_sample).toBe(true);
     expect(j.label).toMatch(/^SAMPLE/);
     const routes = j.products.map((p: any) => p.route);
-    expect(routes).toEqual(expect.arrayContaining(["market", "institutional", "vendor_report"]));
-    for (const gone of ["signal", "levels", "lite", "scan", "slate", "brief", "coins"]) expect(routes).not.toContain(gone);
+    expect(routes).toEqual(expect.arrayContaining(["fear_greed", "institutional", "vendor_report"]));
+    for (const gone of ["signal", "levels", "lite", "scan", "slate", "brief", "coins", "market", "yen", "sentiment", "events", "events_48h"]) expect(routes).not.toContain(gone);
     for (const p of j.products) {
       expect(p.full_url).toMatch(/^http:\/\/lumi\.test\/v1\//);
       expect(p.price.xrp).toBeTruthy();

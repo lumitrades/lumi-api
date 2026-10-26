@@ -3,7 +3,8 @@
  *   /v1/macro/yen  USD/JPY + Nikkei 225 and a rule-based yen risk level against a 155 reference
  *   /v1/sentiment  Fear & Greed (CoinMarketCap) + BTC perp funding/OI + market-wide breadth
  *   /v1/events     sourced, dated macro/crypto events and per-coin catalysts
- * (The daily market brief, /v1/brief, was retired on 2026-10-25.)
+ * (The daily market brief, /v1/brief, was retired on 2026-10-25. The yen, sentiment and events routes were retired the same
+ * day and answer 410 from src/retired.ts; these builders are no longer routed and are kept only for compact/eventRows reuse.)
  * Rules: whitelist fields, omit anything that is missing (never invent), run through the privacy filter (envelope -> sanitize),
  * keep the disclaimer.
  */

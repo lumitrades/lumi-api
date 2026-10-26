@@ -18,6 +18,8 @@ const RETIRED = [
   "/v1/signal/XRP", "/v1/signal/btc", "/v1/signal/{coin}", "/v1/signal/%7Bcoin%7D", "/v1/signal/:coin", "/v1/signals",
   "/v1/lite/XRP", "/v1/lite/{coin}", "/v1/levels/XRP", "/v1/levels/{coin}", "/v1/levels/",
   "/v1/scan", "/v1/slate", "/v1/slate/", "/v1/brief", "/v1/brief?format=md", "/v1/coins", "/v1/trades", "/V1/SIGNAL/XRP",
+  "/v1/market", "/v1/market/", "/V1/MARKET", "/v1/macro/yen", "/v1/macro/yen/", "/v1/sentiment", "/v1/events", "/v1/events/",
+  "/v1/events/next48h", "/v1/events/next48h/", "/v1/Events/Next48h",
 ];
 // An oversized but syntactically plausible header must not turn a 410 into a 431/402 either.
 const PAY_HEADERS = [
@@ -55,13 +57,13 @@ describe("retired trading routes (2026-10-25)", () => {
   });
 
   it("live routes are not caught by the retired matcher", () => {
-    for (const p of ["/v1/market", "/v1/check", "/v1/trust/check", "/v1/trust/vendors/x/report", "/v1/macro/yen", "/v1/events/next48h", "/v1/fear-greed", "/v1/funding", "/v1/sentiment", "/v1/institutional", "/v1/verdict"])
+    for (const p of ["/v1/check", "/v1/trust/check", "/v1/trust/vendors/x/report", "/v1/fear-greed", "/v1/funding", "/v1/institutional", "/v1/verdict", "/v1/marketplace", "/v1/macro", "/v1/events/other", "/v1/monitor/packs"])
       expect(isRetiredPath(p), p).toBe(false);
   });
 
   it("are gone from well-known, OpenAPI, the root list, llms.txt, skill.md, the agent card, MCP, samples, bazaar and sitemap", async () => {
     const { get } = setup();
-    const re = /\/v1\/(signal|lite|levels|scan|slate|brief|coins)\b/;
+    const re = /\/v1\/(signal|lite|levels|scan|slate|brief|coins|market|macro\/yen|sentiment|events)\b/;
     const wk: any = await (await get("/.well-known/x402")).json();
     for (const r of wk.resources ?? []) expect(String(r), "well-known").not.toMatch(re);
     const oa: any = await (await get("/openapi.json")).json();
@@ -117,9 +119,9 @@ describe("retired trading routes (2026-10-25)", () => {
 
   it("a still-paid market-data route still quotes and sells", async () => {
     const { get } = setup();
-    const q = await get("/v1/market");
+    const q = await get("/v1/fear-greed");
     expect(q.status).toBe(402);
     const req = (await q.json()).accepts[0];
-    expect((await get("/v1/market", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) })).status).toBe(200);
+    expect((await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) })).status).toBe(200);
   });
 });

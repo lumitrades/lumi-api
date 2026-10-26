@@ -43,7 +43,6 @@ describe("M-1 test-buy cadence wording", () => {
 describe("M-2 Bazaar metadata", () => {
   it("descriptions carry XRP / RLUSD / Fear and Greed keywords within the 500-char limit", () => {
     for (const [r, m] of Object.entries(BAZAAR_ROUTES)) expect(m.description.length, r).toBeLessThanOrEqual(BAZAAR_MAX_DESCRIPTION);
-    expect(BAZAAR_ROUTES.sentiment.description).toMatch(/Fear and Greed/);
     expect(BAZAAR_ROUTES.fear_greed.description).toMatch(/Fear and Greed/);
   });
   it("plan quotes say seller monitoring / trust data feed", () => {

@@ -20,17 +20,17 @@ describe("config", () => {
     expect(cfg.payTo).toBe(MAINNET_PAY_TO);
     expect(cfg.facilitatorUrl).toBe("https://xrpl-facilitator-mainnet.t54.ai");
     expect(cfg.pricesDrops).toEqual({
-      market: "10000", yen: "7500", sentiment: "3800", events: "3800", institutional: "77000", vendor_report: "15000",
-      trust_check: "15000", funding: "2300", fear_greed: "2300", events_48h: "2300", verdict: "7500",
+      institutional: "77000", vendor_report: "15000",
+      trust_check: "15000", funding: "2300", fear_greed: "2300", verdict: "7500",
     });
-    expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_YEN_XRP: "0.02" }).pricesDrops.yen).toBe("20000");
+    expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_FUNDING_XRP: "0.02" }).pricesDrops.funding).toBe("20000");
   });
 
   it("requires an explicit PAY_TO off mainnet and validates it", () => {
     expect(() => loadConfig({ XRPL_NETWORK: "xrpl:1" })).toThrow(/PAY_TO/);
     expect(() => loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: "nope" })).toThrow(/PAY_TO/);
-    const cfg = loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_MARKET_XRP: "0.1" });
-    expect(cfg.pricesDrops.market).toBe("100000");
+    const cfg = loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_TRUST_CHECK_XRP: "0.1" });
+    expect(cfg.pricesDrops.trust_check).toBe("100000");
     expect(cfg.invoiceSecretIsDevDefault).toBe(true);
   });
 });

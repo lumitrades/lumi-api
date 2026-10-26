@@ -24,7 +24,7 @@ const TRADE_KEYS = /"(entry|entry_zone|entries|stop|stop_loss|targets?|price_tar
 const TRADE_WORDS = /strong buy|strong sell|\bbullish\b|\bbearish\b|move (the )?stop|break-?even|price target|entry zone|\bleverage\b/i;
 
 describe("no trading content in the market-data routes that stay", () => {
-  for (const p of ["/v1/market", "/v1/macro/yen", "/v1/sentiment", "/v1/fear-greed", "/v1/events/next48h", "/v1/institutional"]) {
+  for (const p of ["/v1/fear-greed", "/v1/institutional", "/v1/fear-greed", "/v1/fear-greed", "/v1/fear-greed", "/v1/institutional"]) {
     it(`${p}: no targets, stops, entries, leverage, scenarios, Strong Buy/Sell or bull/bear; no SOL`, async () => {
       const b = await paid(p);
       const s = JSON.stringify(b, (k, v) => (k === "url" ? undefined : v)); // third-party source URLs are kept verbatim

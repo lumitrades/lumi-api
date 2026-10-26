@@ -71,7 +71,7 @@ test("Base rail pays end to end with @x402/fetch (mocked server)", async () => {
   const { createClient } = await import("../src/lumi.js");
   const enc = (o) => Buffer.from(JSON.stringify(o)).toString("base64");
   const opt = baseOpt("0x5E617bac19912e6d212CB303ae84655E9E203532", "10000");
-  const pr = { x402Version: 2, resource: { url: "https://api.lumitrades.io/v1/market", description: "d", mimeType: "application/json" }, accepts: [...accepts(), opt] };
+  const pr = { x402Version: 2, resource: { url: "https://api.lumitrades.io/v1/funding", description: "d", mimeType: "application/json" }, accepts: [...accepts(), opt] };
   let sig = null;
   const fetchImpl = async (input, init) => {
     const req = input instanceof Request ? input : new Request(input, init);
@@ -80,7 +80,7 @@ test("Base rail pays end to end with @x402/fetch (mocked server)", async () => {
     return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json", "PAYMENT-RESPONSE": enc({ success: true, transaction: "0xabc", network: "eip155:8453", payer: "0x1" }) } });
   };
   const c = createClient(loadSettings({ EVM_PRIVATE_KEY: KEY }), { fetch: fetchImpl });
-  const r = await c.paid("/v1/market");
+  const r = await c.paid("/v1/funding");
   assert.equal(r.paid, true);
   assert.equal(r.receipt.transaction, "0xabc");
   const payload = JSON.parse(Buffer.from(sig, "base64").toString());
@@ -90,7 +90,7 @@ test("Base rail pays end to end with @x402/fetch (mocked server)", async () => {
   assert.match(await c.walletAddress(), /^0x[0-9a-fA-F]{40}$/);
 
   const capped = createClient(loadSettings({ EVM_PRIVATE_KEY: KEY, LUMI_MAX_USD_PER_CALL: "0.005" }), { fetch: fetchImpl });
-  const r2 = await capped.paid("/v1/market");
+  const r2 = await capped.paid("/v1/funding");
   assert.equal(r2.paid, false);
   assert.match(r2.error, /LUMI_MAX_USD_PER_CALL/);
 });

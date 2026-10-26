@@ -153,7 +153,7 @@ function setup(cdp: { verify?: Handler; settle?: Handler } = {}, env: Record<str
   };
 }
 
-async function payBase(app: { fetch: (r: Request) => Promise<Response> }, path = "/v1/macro/yen", strip = false) {
+async function payBase(app: { fetch: (r: Request) => Promise<Response> }, path = "/v1/institutional", strip = false) {
   const first = await app.fetch(new Request("http://lumi.test" + path));
   const pr = await first.json();
   const account = privateKeyToAccount(generatePrivateKey());
@@ -263,6 +263,6 @@ describe("bazaar service tags", () => {
       expect(new Set(t.map((x) => x.toLowerCase())).size).toBe(5);
       for (const x of t) { expect(x).toMatch(/^[\x20-\x7e]{1,32}$/); all.add(x); }
     }
-    expect(all.size).toBeGreaterThanOrEqual(30);
+    expect(all.size).toBeGreaterThanOrEqual(20); // 6 paid routes since the market feeds were retired (2026-10-25)
   });
 });

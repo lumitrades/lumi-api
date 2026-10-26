@@ -30,7 +30,7 @@ describe("free endpoints", () => {
     expect(html).toMatch(/<title>Lumi API: x402 seller checks before you pay, plus crypto market data \(pay on XRPL, Base or Stellar\)/);
     expect(html).toContain('<meta name="description"');
     expect(html).toContain("/v1/trust/vendors");
-    expect(html).toContain("/v1/market");
+    expect(html).toContain("/v1/fear-greed");
     expect(html).toContain("lumi-trades-mcp");
     expect(html).toContain("x402Fetch");
     expect(html).not.toMatch(/win rate|track record/i);
@@ -43,7 +43,7 @@ describe("free endpoints", () => {
     const ld = JSON.parse(html.match(/<script type="application\/ld\+json">(.*?)<\/script>/s)![1]);
     expect(ld["@type"]).toBe("WebAPI");
     expect(ld.offers.length).toBeGreaterThan(5);
-    expect(html.match(/<tbody>([\s\S]*?)<\/tbody>/)![1]).toContain("/v1/market");
+    expect(html.match(/<tbody>([\s\S]*?)<\/tbody>/)![1]).toContain("/v1/fear-greed");
     expect(html).not.toMatch(/<link[^>]+stylesheet|<script src=/);
     const j = await get("/", { Accept: "application/json" });
     expect(j.headers.get("content-type")).toMatch(/json/);
@@ -53,8 +53,7 @@ describe("free endpoints", () => {
     const { get } = setup();
     const index = await (await get("/")).json();
     expect(index.paid_endpoints.map((p: any) => [p.path, p.price_xrp])).toEqual([
-      ["/v1/market", "0.01"], ["/v1/macro/yen", "0.0075"], ["/v1/sentiment", "0.0038"], ["/v1/events", "0.0038"],
-      ["/v1/funding", "0.0023"], ["/v1/fear-greed", "0.0023"], ["/v1/events/next48h", "0.0023"],
+      ["/v1/funding", "0.0023"], ["/v1/fear-greed", "0.0023"],
       ["/v1/institutional", "0.077"], ["/v1/trust/check", "0.015"], ["/v1/trust/vendors/{id}/report", "0.015"],
       ["/v1/verdict", "0.0075"],
     ]);
@@ -64,16 +63,16 @@ describe("free endpoints", () => {
     expect(skill).toContain("PAYMENT-SIGNATURE");
     expect(skill).toContain("x402Fetch");
     expect(skill).toContain("You only pay when you get data");
-    expect(skill).toContain("/v1/market");
+    expect(skill).toContain("/v1/fear-greed");
     const wk = await (await get("/.well-known/x402")).json();
     expect(wk).toMatchObject({ x402Version: 2, kind: "resource-server" });
-    expect(wk.resources).toHaveLength(19); // 2026-10-25: Watch Plus + founder retired, Re-test and Founder packs added. 2026-10-25: + Watch Plus founder. 2026-10-25: per-coin readings, slate, scan and brief retired (410); Monitor and Monitor Plus no longer sold
+    expect(wk.resources).toHaveLength(14); // 2026-10-25: market, yen, sentiment, events, events_48h retired (410). 2026-10-25: Watch Plus + founder retired, Re-test and Founder packs added. 2026-10-25: + Watch Plus founder. 2026-10-25: per-coin readings, slate, scan and brief retired (410); Monitor and Monitor Plus no longer sold
     expect(wk.resources.filter((r: any) => r.plan).map((r: any) => r.url)).toEqual(["watch", "watch_pro", "audit", "retest_pack", "founder_pack"].map((p) => `${BASE}/v1/monitor/subscribe/${p}`).concat([`${BASE}/v1/feed/subscribe/feed`, `${BASE}/v1/feed/subscribe/feed_pro`, `${BASE}/v1/feed/credits`]));
-    expect(wk.resources.map((r: any) => r.url)).toContain(`${BASE}/v1/macro/yen`);
+    expect(wk.resources.map((r: any) => r.url)).toContain(`${BASE}/v1/institutional`);
     const oa = await (await get("/openapi.json")).json();
-    expect(oa.paths["/v1/macro/yen"].get["x-payment-info"].price).toEqual({ mode: "fixed", currency: "USD", amount: "0.010000" });
-    expect(oa.paths["/v1/macro/yen"].get["x-payment-info"].protocols).toEqual([{ x402: {} }]);
-    expect(oa.paths["/v1/macro/yen"].get["x-payment-info"].xrp_price).toEqual({ mode: "fixed", currency: "XRP", amount: "0.0075" });
+    expect(oa.paths["/v1/institutional"].get["x-payment-info"].price).toEqual({ mode: "fixed", currency: "USD", amount: "0.100000" });
+    expect(oa.paths["/v1/institutional"].get["x-payment-info"].protocols).toEqual([{ x402: {} }]);
+    expect(oa.paths["/v1/institutional"].get["x-payment-info"].xrp_price).toEqual({ mode: "fixed", currency: "XRP", amount: "0.077" });
     expect((await get("/v1/coins")).status).toBe(410); // retired 2026-10-25
   });
 
@@ -89,7 +88,7 @@ describe("free endpoints", () => {
 describe("x402 paywall", () => {
   it("challenges unpaid requests with x402 v2 requirements", async () => {
     const { get } = setup();
-    for (const [path, amount] of [["/v1/macro/yen", "7500"], ["/v1/sentiment", "3800"], ["/v1/market", "10000"], ["/v1/institutional", "77000"]]) {
+    for (const [path, amount] of [["/v1/fear-greed", "2300"], ["/v1/institutional", "77000"]]) {
       const req = await challenge(get, path);
       expect(req).toMatchObject({ scheme: "exact", network: "xrpl:1", asset: "XRP", amount, payTo: PAY_TO, maxTimeoutSeconds: 300 });
       expect(req.extra.sourceTag).toBe(5864);
@@ -99,23 +98,22 @@ describe("x402 paywall", () => {
 
   it("verifies, settles, serves data with a receipt, and refuses replay", async () => {
     const { get, fac, logs } = setup();
-    const req = await challenge(get, "/v1/macro/yen");
+    const req = await challenge(get, "/v1/institutional");
     const header = paymentHeaderFor(req);
-    const r = await get("/v1/macro/yen", { "PAYMENT-SIGNATURE": header });
+    const r = await get("/v1/institutional", { "PAYMENT-SIGNATURE": header });
     expect(r.status).toBe(200);
     expect(fac.calls.map((c) => c.path)).toEqual(["/verify", "/settle"]);
     expect(fac.calls[0].body.paymentRequirements).toEqual(req);
     const receipt = decodeB64Json(r.headers.get("PAYMENT-RESPONSE"));
     expect(receipt).toMatchObject({ success: true, transaction: "A".repeat(64), network: "xrpl:1" });
     const body = await r.json();
-    expect(body).toMatchObject({ kind: "macro_yen", source: "lumitrades.io" });
-    expect(body.usd_jpy.price).toBeGreaterThan(100);
+    expect(body).toMatchObject({ kind: "institutional", source: "lumitrades.io" });
     expect(body.disclaimer).toBeTruthy();
     expect(body.timestamp).toBeTruthy();
     expect(body.payment.explorer).toBe(`https://testnet.xrpl.org/transactions/${"A".repeat(64)}`);
-    expect(logs[0]).toMatchObject({ event: "x402_settled", route: "yen", amountDrops: "7500" });
+    expect(logs[0]).toMatchObject({ event: "x402_settled", route: "institutional", amountDrops: "77000" });
 
-    const replay = await get("/v1/macro/yen", { "PAYMENT-SIGNATURE": header });
+    const replay = await get("/v1/institutional", { "PAYMENT-SIGNATURE": header });
     expect(replay.status).toBe(402);
     expect((await replay.json()).error).toBe("invoice_already_used");
     expect(fac.calls).toHaveLength(2);
@@ -127,25 +125,29 @@ describe("x402 paywall", () => {
     const mk = () => createApp({ ...ENV, INVOICE_GUARD: ns }, { fetch: makeFetch(fac), log: () => {}, now: () => NOW });
     const isolateA = mk();
     const isolateB = mk();
-    const r402 = await isolateA.fetch(new Request(BASE + "/v1/market"));
+    const r402 = await isolateA.fetch(new Request(BASE + "/v1/fear-greed"));
     const req = (await r402.json()).accepts[0];
     const h = { "PAYMENT-SIGNATURE": paymentHeaderFor(req) };
-    expect((await isolateA.fetch(new Request(BASE + "/v1/market", { headers: h }))).status).toBe(200);
-    const replay = await isolateB.fetch(new Request(BASE + "/v1/market", { headers: h }));
+    expect((await isolateA.fetch(new Request(BASE + "/v1/fear-greed", { headers: h }))).status).toBe(200);
+    const replay = await isolateB.fetch(new Request(BASE + "/v1/fear-greed", { headers: h }));
     expect(replay.status).toBe(402);
     expect((await replay.json()).error).toBe("invoice_already_used");
   });
 
   it("rejects an invoice issued for another route or a tampered amount without calling the facilitator", async () => {
     const { get, fac } = setup();
-    const req = await challenge(get, "/v1/sentiment");
-    const r1 = await get("/v1/events", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) }); // same price, other route
+    const req = await challenge(get, "/v1/fear-greed");
+    // Price fear_greed like institutional so only the route differs.
+    const same = createApp({ ...ENV, PRICE_FEAR_GREED_XRP: "0.077", PRICE_FEAR_GREED_RLUSD: "0.10", PRICE_FEAR_GREED_USDC: "0.10" }, { fetch: makeFetch(fac), log: () => {}, now: () => NOW });
+    const getSame = (path: string, headers: Record<string, string> = {}) => same.fetch(new Request(BASE + path, { headers }));
+    const iq = await challenge(getSame, "/v1/institutional");
+    const r1 = await getSame("/v1/fear-greed", { "PAYMENT-SIGNATURE": paymentHeaderFor(iq) }); // same price, other route
     expect(r1.status).toBe(402);
     expect((await r1.json()).error).toBe("invoice_route_mismatch");
-    const r2 = await get("/v1/sentiment", { "PAYMENT-SIGNATURE": paymentHeaderFor({ ...req, amount: "1" }) });
+    const r2 = await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": paymentHeaderFor({ ...req, amount: "1" }) });
     expect(r2.status).toBe(402);
     expect((await r2.json()).error).toBe("payment_requirements_mismatch");
-    const r3 = await get("/v1/macro/yen", { "PAYMENT-SIGNATURE": "%%%not-base64" });
+    const r3 = await get("/v1/institutional", { "PAYMENT-SIGNATURE": "%%%not-base64" });
     expect(r3.status).toBe(402);
     const b3 = await r3.json();
     expect(b3.error).toBe("invalid_payment_signature_header");
@@ -153,7 +155,7 @@ describe("x402 paywall", () => {
     const h3 = JSON.parse(Buffer.from(r3.headers.get("PAYMENT-REQUIRED")!, "base64").toString("utf8"));
     expect(h3).toEqual(b3);
     for (const bad of [Buffer.from(JSON.stringify({ x402Version: 1, accepted: req })).toString("base64"), Buffer.from(JSON.stringify({ x402Version: 2, accepted: { ...req, extra: {} }, payload: {} })).toString("base64")]) {
-      const r = await get("/v1/macro/yen", { "X-PAYMENT": bad });
+      const r = await get("/v1/institutional", { "X-PAYMENT": bad });
       expect(r.status).toBe(402);
       expect(["invalid_x402_version", "missing_invoiceId"]).toContain((await r.json()).error);
       expect(r.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
@@ -164,8 +166,8 @@ describe("x402 paywall", () => {
   it("re-quotes when the facilitator says the payment is invalid", async () => {
     const fac: FakeFacilitator = { ...happyFacilitator(), verify: () => jsonResponse(200, { isValid: false, invalidReason: "amount_mismatch" }) };
     const { get } = setup(fac);
-    const req = await challenge(get, "/v1/market");
-    const r = await get("/v1/market", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
+    const req = await challenge(get, "/v1/fear-greed");
+    const r = await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
     expect(r.status).toBe(402);
     expect((await r.json()).error).toBe("verify_failed:amount_mismatch");
     expect(fac.calls.map((c) => c.path)).toEqual(["/verify"]);
@@ -176,21 +178,21 @@ describe("x402 paywall", () => {
     const base = happyFacilitator();
     const fac: FakeFacilitator = { ...base, verify: (b) => (down ? jsonResponse(502, { error: "bad gateway" }) : base.verify(b)) };
     const { get } = setup(fac);
-    const req = await challenge(get, "/v1/market");
+    const req = await challenge(get, "/v1/fear-greed");
     const h = paymentHeaderFor(req);
-    const r = await get("/v1/market", { "PAYMENT-SIGNATURE": h });
+    const r = await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": h });
     expect(r.status).toBe(503);
     expect(await r.json()).toMatchObject({ retryable: true, phase: "verify", settlementAttempted: false });
     down = false;
-    const ok = await get("/v1/market", { "PAYMENT-SIGNATURE": h });
+    const ok = await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": h });
     expect(ok.status).toBe(200);
   });
 
   it("reports settlement_status_unknown (409) when settle cannot be confirmed", async () => {
     const fac: FakeFacilitator = { ...happyFacilitator(), settle: () => { throw new Error("socket hang up"); } };
     const { get } = setup(fac);
-    const req = await challenge(get, "/v1/sentiment");
-    const r = await get("/v1/sentiment", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
+    const req = await challenge(get, "/v1/fear-greed");
+    const r = await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
     expect(r.status).toBe(409);
     expect(await r.json()).toMatchObject({ error: "settlement_status_unknown", settlementAttempted: true });
   });
@@ -198,15 +200,15 @@ describe("x402 paywall", () => {
   it("re-quotes when settlement fails on ledger", async () => {
     const fac: FakeFacilitator = { ...happyFacilitator(), settle: () => jsonResponse(200, { success: false, errorReason: "tecUNFUNDED_PAYMENT", transaction: "", network: "xrpl:1" }) };
     const { get } = setup(fac);
-    const req = await challenge(get, "/v1/events");
-    const r = await get("/v1/events", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
+    const req = await challenge(get, "/v1/institutional");
+    const r = await get("/v1/institutional", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
     expect(r.status).toBe(402);
     expect((await r.json()).error).toBe("settle_failed:tecUNFUNDED_PAYMENT");
   });
 
   it("never asks for money when upstream data is unavailable", async () => {
     const { get, fac } = setup(happyFacilitator(), { dataDown: true });
-    const r = await get("/v1/market");
+    const r = await get("/v1/fear-greed");
     expect(r.status).toBe(503);
     expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
     expect(fac.calls).toHaveLength(0);
@@ -222,12 +224,11 @@ describe("paid payloads", () => {
     return r.json();
   }
 
-  it("market: BTC backdrop, macro with yen note, breadth", async () => {
-    const b = await paid("/v1/market");
-    expect(b.btc_backdrop.coin.symbol).toBe("BTC");
-    expect(b.btc_backdrop).not.toHaveProperty("projection");
-    expect(b.macro.yen_note).toMatch(/yen|USD\/JPY/i);
-    expect(b.breadth.coins_tracked).toBe(12); // fixture site coins minus SOL
+  it("fear-greed: CoinMarketCap Fear & Greed from the context fallback, data only", async () => {
+    const b = await paid("/v1/fear-greed");
+    expect(b.kind).toBe("fear_greed");
+    expect(b.disclaimer).toBeTruthy();
+    expect(JSON.stringify(b)).not.toMatch(/projection|target|stop_loss/i);
   });
 });
 

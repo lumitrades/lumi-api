@@ -20,7 +20,7 @@ describe("v1.1.1 discovery files", () => {
       const r = await get(p);
       expect(r.status, p).toBe(200);
       const c = await r.json();
-      expect(c).toMatchObject({ name: "io.github.cypher-osiris/lumi-trades-mcp", version: "1.1.8", remotes: [{ type: "streamable-http", url: `${BASE}/mcp` }] });
+      expect(c).toMatchObject({ name: "io.github.cypher-osiris/lumi-trades-mcp", version: "1.1.9", remotes: [{ type: "streamable-http", url: `${BASE}/mcp` }] });
       expect(c.$schema).toMatch(/server-card/);
       expect(c.description).toMatch(/^Lumi Trades/);
     }
@@ -77,16 +77,16 @@ describe("v1.1.1 policies and metadata", () => {
     expect(t.resource.serviceName).toBe("Lumi Trades");
     expect(t.extensions.bazaar.info.input.queryParams?.url ?? t.extensions.bazaar.info.input.queryParams).toBeTruthy();
     expect(JSON.stringify(t.extensions.bazaar.schema)).toContain('"required":["url"]');
-    const s = await (await get("/v1/macro/yen")).json();
+    const s = await (await get("/v1/institutional")).json();
     expect(s.resource.serviceName).toBe("Lumi Trades");
-    for (const p of ["/v1/macro/yen", "/v1/fear-greed", "/v1/levels/btc", "/v1/market"]) expect(JSON.stringify(await (await get(p)).json()), p).not.toMatch(/crypto crypto/i);
+    for (const p of ["/v1/institutional", "/v1/fear-greed", "/v1/levels/btc", "/v1/fear-greed"]) expect(JSON.stringify(await (await get(p)).json()), p).not.toMatch(/crypto crypto/i);
     for (const r of Object.values(BAZAAR_ROUTES)) expect(r.description.length).toBeLessThanOrEqual(500);
   });
 
   it("coins are case-insensitive (same quote) and the vendor-id pattern matches openapi", async () => {
     const { get } = setup();
     const strip = (b: any) => b.accepts.map((a: any) => [a.network, a.amount, a.payTo]);
-    expect(strip(await (await get("/v1/macro/yen")).json())).toEqual(strip(await (await get("/v1/macro/yen")).json()));
+    expect(strip(await (await get("/v1/institutional")).json())).toEqual(strip(await (await get("/v1/institutional")).json()));
     const oa = await (await get("/openapi.json")).json();
     expect(oa.paths["/v1/trust/vendors/{id}/report"].get.parameters[0].schema.pattern).toBe(VENDOR_ID_PATTERN);
     const r = await (await get("/v1/trust/vendors/%7Bid%7D/report")).json();
@@ -106,7 +106,7 @@ describe("v1.1.1 policies and metadata", () => {
 
   it("every paid data response carries as_of, data_age_seconds and next_update", async () => {
     const { get } = setup();
-    for (const p of ["/v1/sentiment", "/v1/macro/yen", "/v1/market", "/v1/fear-greed"]) {
+    for (const p of ["/v1/fear-greed", "/v1/institutional", "/v1/fear-greed", "/v1/fear-greed"]) {
       const req = (await (await get(p)).json()).accepts[0];
       const r = await get(p, { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
       expect(r.status, p).toBe(200);

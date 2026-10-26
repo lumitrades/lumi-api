@@ -23,17 +23,12 @@ export const TRUST_SERVICE_NAME = SERVICE_NAME;
 export const TRUST_ROUTES: PaidRoute[] = ["trust_check", "vendor_report", "verdict"];
 export const SERVICE_ICON = "https://lumitrades.io/assets/icon-512.png";
 export const ROUTE_TAGS: Record<PaidRoute, string[]> = {
-  market: ["market-data", "bitcoin", "funding-rates", "open-interest", "crypto"],
-  yen: ["macro", "forex", "usd-jpy", "japan", "bitcoin"],
-  sentiment: ["sentiment", "fear-and-greed", "funding-rates", "open-interest", "crypto"],
-  events: ["economic-calendar", "events", "macro", "bitcoin", "crypto"],
   institutional: ["regulation", "stablecoins", "tokenization", "policy", "crypto"],
   vendor_report: ["x402", "seller-reputation", "vendor-report", "api-monitoring", "due-diligence"],
   trust_check: ["x402", "check-before-paying", "pre-payment-check", "trust-check", "agent-payments"],
   verdict: ["x402", "check-before-paying", "pre-payment-check", "seller-reputation", "test-buys"],
   funding: ["funding-rates", "perpetuals", "derivatives", "market-data", "crypto"],
   fear_greed: ["fear-and-greed", "sentiment", "coinmarketcap", "bitcoin", "crypto"],
-  events_48h: ["economic-calendar", "events", "macro", "fomc", "crypto"],
 };
 
 export function serviceMeta(route: PaidRoute): { serviceName: string; tags: string[]; iconUrl: string } {
@@ -88,56 +83,6 @@ export const FAIR_USE =
   "Every response carries as_of, data_age_seconds, next_update and stale_after. Not charged on bad input or stale data.";
 
 export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
-  market: {
-    description:
-      "Use when an agent needs the overall crypto market context: BTC price and 24h change, macro context (total market cap, BTC dominance, Fear & Greed, USD/JPY note, BTC perpetual funding and open interest), dated catalysts with sources and 24h up/down breadth across tracked coins. Not charged on stale data. Market data only, not financial advice.",
-    example: {
-      kind: "market",
-      btc_backdrop: { price: { usd: 81984, change_24h_pct: -1.62 }, catalysts: [{ date: "2026-10-28", kind: "event", text: "FOMC rate decision" }] },
-      macro: { total_mcap_usd: 2742576601668, btc_dominance_pct: 60.04, fear_greed: { value: 49, classification: "Neutral" } },
-      breadth: { coins_tracked: 13, up_24h: 1, down_24h: 12 },
-      ...FRESH("2026-10-22T11:05:00Z", "2026-10-22T23:05:00Z"),
-      payment: pay("market"),
-    },
-  },
-  yen: {
-    description:
-      "Use when an agent needs to assess whether a fast yen move could affect risk assets including crypto: USD/JPY and Nikkei 225 prices with daily and 5-day changes, a rule-based macro risk level (low, watch or elevated) measured against a 155 USD/JPY reference with reasons, and upcoming Japan events such as BOJ decisions and CPI releases, with sources. Not charged on stale data. Market data only, not financial advice.",
-    example: {
-      kind: "macro_yen",
-      usd_jpy: { price: 157.08, change_pct: -0.62, change_5d_pct: -0.67 },
-      nikkei_225: { price: 62907.84, change_pct: -2.65 },
-      yen_risk: { level: "watch", reference_level: 155, distance_to_reference_pct: 1.34, reasons: ["USD/JPY 157.08 is only 1.34% above 155"] },
-      japan_events: [{ date: "2026-10-30", title: "BOJ policy decision" }],
-      ...FRESH("2026-10-22T11:05:00Z", "2026-10-22T23:05:00Z"),
-      payment: pay("yen"),
-    },
-  },
-  sentiment: {
-    description:
-      "Use when an agent needs a compact crypto market-mood snapshot: Fear and Greed index value, band and day-over-day change; BTC perpetual funding rate (sign and size band) and open interest; total market cap and BTC dominance; and 24h breadth across tracked coins. Not charged on stale data. Market data only, not financial advice.",
-    example: {
-      kind: "sentiment",
-      fear_greed: { value: 49, classification: "Neutral", previous: 54, change: -5 },
-      derivatives: { instrument: "BTC-USDT-SWAP (OKX)", funding_rate_pct: 0.00657, open_interest_usd: 2462680121 },
-      global: { total_mcap_usd: 2742576601668, btc_dominance_pct: 60.04 },
-      breadth: { coins_tracked: 13, up_24h: 1, down_24h: 12 },
-      ...FRESH("2026-10-22T11:05:00Z", "2026-10-22T23:05:00Z"),
-      payment: pay("sentiment"),
-    },
-  },
-  events: {
-    description:
-      "Use when an agent needs to know which scheduled events in the coming days could affect crypto markets: timed releases and policy decisions in UTC and US Central time with a note on relevance, plus dated per-coin catalysts such as network upgrades and conferences. Every row cites a source. For only the next 48 hours, /v1/events/next48h costs less. Not charged on stale data. Market data only, not financial advice.",
-    example: {
-      kind: "events",
-      next: { at_utc: "2026-10-22T23:30:00Z", title: "Japan September CPI", why: "Last national CPI before the BOJ meeting." },
-      upcoming_timed: [{ at_utc: "2026-10-28T18:00:00Z", title: "FOMC rate decision", url: "https://www.federalreserve.gov/" }],
-      upcoming_by_date: [{ date: "2026-11-03", coin: "XLM", title: "Protocol 30 validator vote" }],
-      ...FRESH("2026-10-22T11:05:00Z", "2026-10-24T11:05:00Z"),
-      payment: pay("events"),
-    },
-  },
   institutional: {
     description:
       "Use when an agent needs a dated, sourced daily brief on digital-asset and stablecoin activity by central banks, standard-setters, regulators, banks and tokenization firms, with confidence and the networks each item touches. JSON with a markdown field, or format=md. Not charged on invalid format or stale data. Neutral summary; not financial advice.",
@@ -256,18 +201,6 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
       payment: pay("fear_greed"),
     },
   },
-  events_48h: {
-    description:
-      "Use when an agent needs a short-horizon event check before acting or scheduling: scheduled macro releases, policy decisions and dated per-coin catalysts in the next 48 hours, with exact UTC and US Central times, a note on relevance and a source for each. An empty window is a valid result. The full multi-day calendar is /v1/events. Not charged on stale data. Market data only, not financial advice.",
-    example: {
-      kind: "events_48h",
-      count: 2,
-      next: { at_utc: "2026-10-23T12:30:00Z", title: "US jobless claims", why: "Labor-market read ahead of the FOMC", source: "DOL" },
-      timed: [{ at_utc: "2026-10-23T12:30:00Z", title: "US jobless claims" }],
-      ...FRESH("2026-10-23T06:00:00Z", "2026-10-24T06:00:00Z"),
-      payment: pay("events_48h"),
-    },
-  },
 };
 
 /** One documented error status of a paid route (listed in the 402 bazaar schema, OpenAPI and /.well-known/x402). */
@@ -373,17 +306,12 @@ export function bazaarExtension(route: PaidRoute, arg?: string, query?: Record<s
 /** resource.description for a quote: the full summary when it fits CDP's limit, otherwise the Bazaar listing text. */
 /** Buyer-keyword headline per route, so Bazaar search and listings show what it is and what it costs first. */
 const HEADLINES: Record<PaidRoute, (subject?: string) => string> = {
-  market: () => "Crypto market backdrop (BTC price, macro, dominance, funding)",
-  yen: () => "Yen macro watch for crypto (USD/JPY, Nikkei, BOJ)",
-  sentiment: () => "Crypto sentiment (Fear & Greed, BTC funding, open interest)",
-  events: () => "Crypto and macro events calendar (Fed, CPI, BOJ, upgrades)",
   institutional: () => "Daily institutional & policy brief for digital assets (regulators, banks, tokenization)",
   vendor_report: (v) => `x402 seller reputation report${v ? ` for ${v}` : ""} (uptime, latency, test-buys)`,
   trust_check: () => "Check before paying an x402 URL (allow / warn / block with coded reasons)",
   verdict: () => "Check before paying: one-label x402 pre-payment check (checks_passed / check_first / checks_failed / no_data)",
   funding: () => "Crypto perpetual funding rates (OKX perps)",
   fear_greed: () => "Crypto Fear & Greed index (CoinMarketCap, 30-day history)",
-  events_48h: () => "Crypto and macro events in the next 48 hours",
 };
 
 /**

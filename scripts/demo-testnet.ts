@@ -5,7 +5,7 @@
  *   1. GET a paid endpoint with no payment            -> 402 + x402 requirements
  *   2. sign an XRP Payment with the x402-xrpl SDK, retry with PAYMENT-SIGNATURE -> 200 + data + receipt
  *   3. replay the same PAYMENT-SIGNATURE              -> refused (invoice already used)
- *   4. one-liner agent flow with x402Fetch            -> 200 on /v1/market
+ *   4. one-liner agent flow with x402Fetch            -> 200 on /v1/fear-greed
  *   5. confirm both transactions on the ledger and write a transcript to demo/
  *
  * Uses throwaway faucet wallets from .testnet/ (created on first run). Never touches mainnet.
@@ -101,7 +101,7 @@ async function main() {
 
   try {
     // ---------------------------------------------------------------- 1. 402
-    const target = `${base}/v1/sentiment`;
+    const target = `${base}/v1/fear-greed`;
     hr(`1. GET ${target} (no payment)`);
     const r402 = await fetch(target);
     const challengeHeader = r402.headers.get("PAYMENT-REQUIRED");
@@ -145,7 +145,7 @@ async function main() {
     if (replay.status === 200) throw new Error("replay was served: this must not happen");
 
     // ---------------------------------------------------------------- 4. x402Fetch one-liner
-    const target2 = `${base}/v1/market`;
+    const target2 = `${base}/v1/fear-greed`;
     hr(`4. Agent one-liner: x402Fetch(${target2})`);
     const fetchPaid = x402Fetch({ wallet: payer, network: "xrpl:1", wsUrl, maxValue: "100000" });
     const t1 = Date.now();

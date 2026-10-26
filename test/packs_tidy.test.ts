@@ -144,8 +144,8 @@ describe("tidy: pack prices, 429 headers, version, trial naming", () => {
 
   it("health reports the bumped version", async () => {
     const s = setup();
-    expect(VERSION).toBe("1.1.8");
-    expect((await (await s.req("/health")).json()).version).toBe("1.1.8");
+    expect(VERSION).toBe("1.1.9");
+    expect((await (await s.req("/health")).json()).version).toBe("1.1.9");
   });
 
   it("no user-facing 'Watch Plus trial' naming is left", () => {

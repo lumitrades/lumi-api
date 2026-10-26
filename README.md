@@ -23,7 +23,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`) });
-const res = await wrapFetchWithPayment(fetch, client)("https://api.lumitrades.io/v1/sentiment"); // $0.005, gasless
+const res = await wrapFetchWithPayment(fetch, client)("https://api.lumitrades.io/v1/trust/check?url=https://api.example.com/v1/data"); // $0.02, gasless
 console.log(await res.json());
 ```
 
@@ -43,9 +43,9 @@ const walletProvider = new ViemWalletProvider(createWalletClient({
 const agentkit = await AgentKit.from({ walletProvider, actionProviders: [x402ActionProvider()] });
 const act = (n: string) => agentkit.getActions().find((a) => a.name.endsWith(n))!;
 
-const url = "https://api.lumitrades.io/v1/sentiment";
+const url = "https://api.lumitrades.io/v1/trust/check?url=https://api.example.com/v1/data";
 const quote = JSON.parse(await act("make_http_request").invoke({ url }));          // 402 terms
-const o = quote.acceptablePaymentOptions.find((x: any) => x.network === "eip155:8453"); // 5000 = $0.005 USDC
+const o = quote.acceptablePaymentOptions.find((x: any) => x.network === "eip155:8453"); // 20000 = $0.02 USDC
 const paid = JSON.parse(await act("retry_http_request_with_x402").invoke({
   url, method: "GET",
   selectedPaymentOption: { scheme: o.scheme, network: o.network, asset: o.asset, amount: o.amount, payTo: o.payTo },
@@ -88,22 +88,22 @@ console.log(paid.data);
 
 **Market data (paid)**
 
+`/v1/market`, `/v1/macro/yen`, `/v1/sentiment`, `/v1/events` and `/v1/events/next48h` were retired on 2026-10-25 and answer `410 Gone` (never charged).
+
 | | Endpoint | Price | Returns |
 |---|---|---|---|
-| **paid** | `GET /v1/market` | **0.01 XRP** or **0.02 RLUSD / USDC** | BTC price and 24h change, macro (USD/JPY note, total cap, dominance, Fear & Greed, BTC perp funding/OI), dated catalysts with sources, 24h up/down breadth |
-| **paid** | `GET /v1/macro/yen` | **0.0075 XRP** or **0.01 RLUSD / USDC** | USD/JPY + Nikkei 225 (price, 1d/5d change, ranges), rule-based macro risk level (`low`/`watch`/`elevated`) against a 155 USD/JPY reference with reasons, Lumi's yen note, Japan events (CPI, BOJ), sources |
-| **paid** | `GET /v1/sentiment` | **0.0038 XRP** or **0.005 RLUSD / USDC** | CoinMarketCap Fear & Greed (value, band, change), BTC perp funding + plain-English read + OI (OKX), total cap/volume/dominance, 24h up/down breadth |
-| **paid** | `GET /v1/events` | **0.0038 XRP** or **0.005 RLUSD / USDC** | Sourced upcoming macro/crypto events: timed releases (UTC + US Central, why it matters) and dated per-coin catalysts (Fed, BOJ, CPI, upgrades, conferences) |
+| **paid** | `GET /v1/funding` | **$0.003**: 0.003 RLUSD / USDC (XRPL, Base or Stellar) or the XRP equivalent (default 0.0023 XRP, live-priced) | Current perpetual funding rate for every tracked coin listed on OKX (rate, 8h-normalised, annualised, next funding time), the BTC rate, the median and the most positive/negative |
+| **paid** | `GET /v1/fear-greed` | **$0.003**: 0.003 RLUSD / USDC (XRPL, Base or Stellar) or the XRP equivalent (default 0.0023 XRP, live-priced) | CoinMarketCap Fear & Greed index now, yesterday, last week and last month, changes, yearly high/low and a 30-day series |
 | **paid** | `GET /v1/institutional` | **$0.10**: 0.10 RLUSD / USDC (XRPL, Base or Stellar) or the XRP equivalent (default 0.077 XRP, live-priced) | **Institutional & Policy Brief** (daily): sourced analysis of what BIS, IMF, US Treasury/OCC, Fed, SEC, CFTC, JPMorgan (Kinexys), SBI, Cross River, Securitize, R3 and others are doing, mapped to XRP, XLM, XDC, QNT, AXL and HBAR. Each item: date, source URL, why it matters, coins, confidence and `link_type` (`confirmed` / `indirect_alignment` = Lumi's analysis / `context`). Plus big picture, per-token map, connections, no-news notes, what to watch. JSON with `markdown`; `?format=md` returns `text/markdown`. Not sold if older than 36 h |
 
-Pricing rationale (Oct 2026, XRP ≈ $1.33): single data feeds on the XRPL AI Hub sell for 0.001-0.012 RLUSD (AskSurf, Heurist Mesh, KR Crypto) and composite reads for ~0.02-0.025 (Strale Fear & Greed via Monid, invinoveritas). Lumi's quick reads sit at $0.005, single feeds at $0.01 and the multi-source backdrop at $0.02. The daily Institutional & Policy Brief is $0.10 (lowered from $0.25 on Oct 23 2026, and now included in the free trial): exactly 0.10 RLUSD / USDC (XRPL, Base or Stellar); the XRP default is **0.077 XRP** (0.10 / 1.30), repriced from the live rate when `XRP_PRICING=live`.
+Pricing rationale (Oct 2026, XRP ≈ $1.33): single data feeds on the XRPL AI Hub sell for 0.001-0.012 RLUSD (AskSurf, Heurist Mesh, KR Crypto) and composite reads for ~0.02-0.025 (Strale Fear & Greed via Monid, invinoveritas). Lumi's single feeds (funding, Fear & Greed) sit at $0.003. The daily Institutional & Policy Brief is $0.10 (lowered from $0.25 on Oct 23 2026, and now included in the free trial): exactly 0.10 RLUSD / USDC (XRPL, Base or Stellar); the XRP default is **0.077 XRP** (0.10 / 1.30), repriced from the live rate when `XRP_PRICING=live`.
 
 ### You only pay when you get data
 
 Other x402 vendors have taken payment and then returned an upstream error or an empty body. Lumi API is built so that cannot happen:
 
 1. Every input file an endpoint needs is fetched and **validated before any 402 quote is issued**: present, non-empty, and fresh (market data ≤ 12 h old, `DATA_MAX_AGE_HOURS`; hand-written analysis/events ≤ 48 h; FX/Nikkei quotes ≤ 4 days).
-2. The response body is **built before settlement** and must carry real content (e.g. a Fear & Greed value for `/v1/sentiment`, a USD/JPY or Nikkei quote for `/v1/macro/yen`).
+2. The response body is **built before settlement** and must carry real content (e.g. a Fear & Greed value for `/v1/fear-greed`, a funding rate for `/v1/funding`).
 3. If anything fails, the answer is `503` `{ "error": "data_stale" | "data_unavailable", "note": "Not charged." }` with **no** `PAYMENT-REQUIRED` header. A payment header sent anyway is ignored (the facilitator is never called), even for a quote issued earlier while the data was fresh.
 4. Settlement happens only after these checks; the prepared body is returned immediately after a validated `tesSUCCESS`.
 
@@ -136,11 +136,11 @@ Every paid response includes `timestamp`, `source: "lumitrades.io"`, a `payment`
 
 ```
 Agent                          Lumi API (Worker)                 T54 facilitator         XRP Ledger
-  | GET /v1/market                  |                                  |                      |
+  | GET /v1/fear-greed              |                                  |                      |
   |-------------------------------->|                                  |                      |
   | 402 + PAYMENT-REQUIRED          |  (stateless HMAC invoice id)     |                      |
   |<--------------------------------|                                  |                      |
-  | sign Payment(20000 drops,       |                                  |                      |
+  | sign Payment(2300 drops,        |                                  |                      |
   |  SourceTag, Memo=invoiceId,     |                                  |                      |
   |  InvoiceID=sha256(invoiceId))   |                                  |                      |
   | GET + PAYMENT-SIGNATURE         |                                  |                      |
@@ -169,7 +169,7 @@ import { Wallet } from "xrpl";
 import { x402Fetch } from "x402-xrpl";
 
 const fetchPaid = x402Fetch({ wallet: Wallet.fromSeed(process.env.XRPL_SEED!), network: "xrpl:0", maxValue: "100000" });
-const res = await fetchPaid("https://api.lumitrades.io/v1/sentiment");
+const res = await fetchPaid("https://api.lumitrades.io/v1/trust/check?url=https://api.example.com/v1/data");
 console.log(await res.json());
 ```
 
@@ -177,7 +177,7 @@ console.log(await res.json());
 from xrpl.wallet import Wallet
 from x402_xrpl.clients import x402_requests
 s = x402_requests(Wallet.from_seed(SEED), rpc_url="https://xrplcluster.com/", network_filter="xrpl:0", scheme_filter="exact")
-print(s.get("https://api.lumitrades.io/v1/market", timeout=180).json())
+print(s.get("https://api.lumitrades.io/v1/trust/check?url=https://api.example.com/v1/data", timeout=180).json())
 ```
 
 See `examples/agent-client.ts`, `examples/agent_client.py` and the live `/skill.md`.
@@ -187,9 +187,9 @@ See `examples/agent-client.ts`, `examples/agent_client.py` and the live `/skill.
 The last `accepts[]` entry is a standard x402 v2 EVM requirement, so the official x402 clients work unchanged and skip the XRPL options:
 
 ```json
-{ "scheme": "exact", "network": "eip155:8453", "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "amount": "5000",
+{ "scheme": "exact", "network": "eip155:8453", "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "amount": "20000",
   "payTo": "0x5E617bac19912e6d212CB303ae84655E9E203532", "maxTimeoutSeconds": 300,
-  "extra": { "name": "USD Coin", "version": "2", "invoiceId": "lumi1.sentiment.<exp>.<nonce>.<mac>", "symbol": "USDC", "decimals": 6 } }
+  "extra": { "name": "USD Coin", "version": "2", "invoiceId": "lumi1.trust_check.<exp>.<nonce>.<mac>", "symbol": "USDC", "decimals": 6 } }
 ```
 
 The agent signs an EIP-3009 `transferWithAuthorization` (no gas, no ETH needed) and retries with
@@ -205,7 +205,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`) });
-const res = await wrapFetchWithPayment(fetch, client)("https://api.lumitrades.io/v1/market");
+const res = await wrapFetchWithPayment(fetch, client)("https://api.lumitrades.io/v1/trust/check?url=https://api.example.com/v1/data");
 console.log(await res.json());
 ```
 
@@ -270,12 +270,12 @@ The demo does the following:
 3. sends a paid `GET` and gets **402** with the requirements
 4. signs the Payment with the `x402-xrpl` SDK, retries, and gets **200** with data and a `PAYMENT-RESPONSE` receipt
 5. replays the same `PAYMENT-SIGNATURE` and gets **402 `invoice_already_used`**
-6. runs the one-line agent flow `x402Fetch(/v1/market)` and gets **200**
+6. runs the one-line agent flow `x402Fetch` on a paid route and gets **200**
 7. checks both transactions on the ledger (validated, `tesSUCCESS`, destination, amount, the SourceTag, invoice memo) and writes a transcript to `demo/`
 
 To run it against the Workers runtime instead: `npm run dev` in one shell, then `LUMI_API_URL=http://127.0.0.1:8787 npm run demo:testnet`.
 
-Recorded runs (Oct 22 2026; historical: the per-coin and watchlist routes used here were retired on 2026-10-25), all validated `tesSUCCESS` on XRPL Testnet (the first five at the launch prices of 0.02/0.05 XRP, the last two at the current 0.005/0.01 XRP):
+Recorded runs (Oct 22 2026; historical: the per-coin, watchlist and `/v1/market` routes used here were retired on 2026-10-25), all validated `tesSUCCESS` on XRPL Testnet (the first five at the launch prices of 0.02/0.05 XRP, the last two at the current 0.005/0.01 XRP):
 
 | Run | Endpoint | Amount | Tx |
 |---|---|---|---|
@@ -322,7 +322,7 @@ Historical (the route below was retired on 2026-10-25):
 4. Trust layer: `npx wrangler d1 create lumi_trust` (put the id in `wrangler.toml`), then
    `npx wrangler d1 migrations apply lumi_trust --remote`. The `*/30 * * * *` Cron Trigger runs the free probes.
 5. `npm run deploy`. Wrangler creates the `api.lumitrades.io` DNS record and certificate, because `custom_domain = true`.
-6. Smoke test: `curl https://api.lumitrades.io/health` and `curl -i https://api.lumitrades.io/v1/market` (expect 402).
+6. Smoke test: `curl https://api.lumitrades.io/health` and `curl -i https://api.lumitrades.io/v1/fear-greed` (expect 402).
 
 ### Mainnet configuration
 
@@ -458,8 +458,8 @@ plus the legacy `initialize` handshake for `2024-11-05` .. `2025-11-25` clients)
 server URL (e.g. a Grok, Claude or ChatGPT connector, or `npx @modelcontextprotocol/inspector`).
 
 - Same tool names and descriptions as the stdio package below: free `lumi_catalog`, `lumi_samples`, `lumi_quote`, `lumi_verdict`, `lumi_vendor_scores`; paid Lumi Trades seller checks `lumi_trust_check`, `lumi_vendor_report`;
-  paid market data `lumi_market`, `lumi_macro_yen`, `lumi_sentiment`, `lumi_events`, `lumi_institutional_brief`. The retired tools
-  (`lumi_signal`, `lumi_lite`, `lumi_scan`, `lumi_levels`, `lumi_slate`, `lumi_brief`, `lumi_coins`) are no longer listed and answer that they were retired.
+  paid market data `lumi_funding`, `lumi_fear_greed`, `lumi_institutional_brief`. The retired tools
+  (`lumi_signal`, `lumi_lite`, `lumi_scan`, `lumi_levels`, `lumi_slate`, `lumi_brief`, `lumi_coins`, `lumi_market`, `lumi_macro_yen`, `lumi_sentiment`, `lumi_events`, `lumi_events_48h`) are no longer listed and answer that they were retired.
 - A remote connector has no wallet, so a paid tool returns a normal tool result with the price and the two ways to pay: x402 at the
   REST endpoint, or the `lumi-trades-mcp` npm package with your own XRPL wallet. Nothing is charged.
 - The freshness rule still applies: stale or missing data is a tool error ("Not charged."), never a quote or data.

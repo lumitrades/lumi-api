@@ -53,31 +53,31 @@ describe("live XRP pricing", () => {
       { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", XRP_PRICING: "live" } as any,
       { fetch: rateFetch({ coinbase: 2, kraken: 2, bitstamp: 2 }, makeFetch(fac)), log: () => {}, now: () => NOW, salesStore },
     );
-    const r = await app.fetch(new Request(BASE + "/v1/market"));
+    const r = await app.fetch(new Request(BASE + "/v1/institutional"));
     expect(r.status).toBe(402);
     const q = await r.json();
-    expect(q.accepts[0]).toMatchObject({ asset: "XRP", amount: "10000" }); // $0.02 / $2
-    expect(q.accepts[1].amount).toBe("0.02");
+    expect(q.accepts[0]).toMatchObject({ asset: "XRP", amount: "50000" }); // $0.10 / $2
+    expect(q.accepts[1].amount).toBe("0.1");
     expect(q.samples).toBe(BASE + "/v1/samples");
     const inv = q.accepts[0].extra.invoiceId as string;
     expect(inv.split(".")).toHaveLength(6);
-    expect(inv.split(".")[4]).toBe("10000");
+    expect(inv.split(".")[4]).toBe("50000");
 
     // The rate moves before the paid retry: the issued invoice still settles at its own amount.
     app.pricer.set({ usd: 3, source: "test", at: NOW });
-    const paid = await app.fetch(new Request(BASE + "/v1/market", { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) } }));
+    const paid = await app.fetch(new Request(BASE + "/v1/institutional", { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) } }));
     expect(paid.status).toBe(200);
     expect(decodeB64Json(paid.headers.get("PAYMENT-RESPONSE"))).toBeTruthy();
-    expect(salesStore.rows[0]).toMatchObject({ asset: "XRP", amount: "0.01" });
-    expect(salesStore.rows[0].usd).toBeCloseTo(0.03, 6); // 0.01 XRP valued at the rate when it was received ($3)
+    expect(salesStore.rows[0]).toMatchObject({ asset: "XRP", amount: "0.05" });
+    expect(salesStore.rows[0].usd).toBeCloseTo(0.15, 6); // 0.05 XRP valued at the rate when it was received ($3)
 
     // A tampered amount fails the MAC.
-    const q2 = await (await app.fetch(new Request(BASE + "/v1/market"))).json();
-    expect(q2.accepts[0].amount).toBe("6700"); // $0.02 / $3
+    const q2 = await (await app.fetch(new Request(BASE + "/v1/institutional"))).json();
+    expect(q2.accepts[0].amount).toBe("33400"); // $0.10 / $3, rounded up to 100 drops
     const parts = q2.accepts[0].extra.invoiceId.split(".");
     parts[4] = "100";
     const forged = { ...q2.accepts[0], amount: "100", extra: { ...q2.accepts[0].extra, invoiceId: parts.join(".") } };
-    const bad = await app.fetch(new Request(BASE + "/v1/market", { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(forged) } }));
+    const bad = await app.fetch(new Request(BASE + "/v1/institutional", { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(forged) } }));
     expect(bad.status).toBe(402);
     expect(JSON.stringify(await bad.json())).toMatch(/invalid_invoice/);
   });

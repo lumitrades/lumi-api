@@ -61,12 +61,12 @@ describe("sales ledger", () => {
   it("records one row per settle on both rails, with rail, asset, decimal amount, list USD and payer", async () => {
     const { app, appFetch, salesStore } = setup();
     const { account, client } = buyer();
-    expect((await wrapFetchWithPayment(appFetch, client)(BASE + "/v1/market")).status).toBe(200);
-    expect((await payXrpl(app, "/v1/macro/yen")).status).toBe(200);
+    expect((await wrapFetchWithPayment(appFetch, client)(BASE + "/v1/fear-greed")).status).toBe(200);
+    expect((await payXrpl(app, "/v1/institutional")).status).toBe(200);
     expect(salesStore.rows).toHaveLength(2);
     const [b, x] = salesStore.rows;
-    expect(b).toMatchObject({ route: "market", routeKey: "market", rail: "base", network: "eip155:84532", asset: "USDC", amount: "0.02", usd: 0.02, payer: account.address, isTest: false });
-    expect(x).toMatchObject({ route: "yen", routeKey: "yen", rail: "xrpl", network: "xrpl:1", asset: "XRP", isTest: false, usd: 0.0099 }); // 0.0075 XRP valued at the fallback 1.32 USD/XRP
+    expect(b).toMatchObject({ route: "fear_greed", routeKey: "fear_greed", rail: "base", network: "eip155:84532", asset: "USDC", amount: "0.003", usd: 0.003, payer: account.address, isTest: false });
+    expect(x).toMatchObject({ route: "institutional", routeKey: "institutional", rail: "xrpl", network: "xrpl:1", asset: "XRP", isTest: false, usd: 0.10164 }); // 0.077 XRP valued at the fallback 1.32 USD/XRP
     expect(Number(x.amount)).toBeGreaterThan(0);
     expect(x.amount).not.toMatch(/^\d{4,}$/); // XRP, not drops
   });
@@ -79,7 +79,7 @@ describe("sales ledger", () => {
     await salesStore.insert(toRow({ route: "signal", rail: "base", network: "eip155:8453", asset: "USDC", amount: "0.01", usd: 0.01, tx: "0xtest", payer: OWN_WALLETS[0] }, NOW - 1000));
     await salesStore.insert(toRow({ route: "brief", rail: "base", network: "eip155:8453", asset: "USDC", amount: "0.03", usd: 0.03, tx: "0xold", payer: "0xabc" }, NOW - 10 * 86_400_000));
     await salesStore.insert(toRow({ route: "brief", rail: "base", network: "eip155:8453", asset: "USDC", amount: "0.03", usd: 0.03, tx: "0xold", payer: "0xabc" }, NOW));
-    expect((await wrapFetchWithPayment(appFetch, buyer().client)(BASE + "/v1/market")).status).toBe(200);
+    expect((await wrapFetchWithPayment(appFetch, buyer().client)(BASE + "/v1/fear-greed")).status).toBe(200);
 
     const unauth = await app.fetch(new Request(BASE + "/v1/owner/sales"));
     expect(unauth.status).toBe(401);
@@ -91,8 +91,8 @@ describe("sales ledger", () => {
     expect(s.today_utc.sales).toBe(1);
     expect(s.last_7d.sales).toBe(1);
     expect(s.last_30d.sales).toBe(2); // duplicate tx ignored, test wallet excluded
-    expect(s.last_30d.usd_list_total).toBe(0.05);
-    expect(s.by_route_30d.market.sales).toBe(1);
+    expect(s.last_30d.usd_list_total).toBe(0.033);
+    expect(s.by_route_30d.fear_greed.sales).toBe(1);
     expect(s.by_route_30d.brief.sales).toBe(1);
     expect(s.by_route_30d.signal).toBeUndefined();
     expect(s.test_sales_30d.sales).toBe(1);
@@ -106,16 +106,16 @@ describe("sales ledger", () => {
     const pending: Promise<unknown>[] = [];
     const ctx = { waitUntil: (p: Promise<unknown>) => pending.push(p) };
     const ctxFetch = ((input: RequestInfo | URL, init?: RequestInit) => app.fetch(input instanceof Request ? input : new Request(String(input), init), ctx)) as typeof fetch;
-    expect((await wrapFetchWithPayment(ctxFetch, buyer().client)(BASE + "/v1/market")).status).toBe(200);
+    expect((await wrapFetchWithPayment(ctxFetch, buyer().client)(BASE + "/v1/fear-greed")).status).toBe(200);
     await Promise.all(pending);
     expect(hooks).toHaveLength(1);
-    expect(hooks[0].text).toMatch(/^Lumi sale: market paid 0\.02 USDC on Base \(~\$0\.02\) tx 0x/);
-    expect(hooks[0].sale.route).toBe("market");
+    expect(hooks[0].text).toMatch(/^Lumi sale: fear_greed paid 0\.003 USDC on Base \(~\$0\.003\) tx 0x/);
+    expect(hooks[0].sale.route).toBe("fear_greed");
 
     // Lumi's own buyer wallet: recorded as test, no alert.
     const ownKeyAccount = buyer(); // stands in for an own wallet via SALES_TEST_WALLETS
     const own2 = setup({ SALES_WEBHOOK_URL: HOOK, SALES_TEST_WALLETS: ownKeyAccount.account.address }, "0x" + "e".repeat(64));
-    expect((await wrapFetchWithPayment(own2.appFetch, ownKeyAccount.client)(BASE + "/v1/market")).status).toBe(200);
+    expect((await wrapFetchWithPayment(own2.appFetch, ownKeyAccount.client)(BASE + "/v1/fear-greed")).status).toBe(200);
     expect(own2.salesStore.rows[0].isTest).toBe(true);
     expect(own2.hooks).toHaveLength(0);
     expect(salesStore.rows[0].isTest).toBe(false);
@@ -126,7 +126,7 @@ describe("sales ledger", () => {
     const app = createApp({ ...ENV, SALES_WEBHOOK_URL: "https://unreachable.invalid/x" } as any, {
       fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW, salesStore: broken as any,
     });
-    expect((await payXrpl(app, "/v1/macro/yen")).status).toBe(200);
+    expect((await payXrpl(app, "/v1/institutional")).status).toBe(200);
   });
 
   it("email alert goes through the send_email binding when recipient, sender and binding are all set", async () => {

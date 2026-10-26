@@ -51,7 +51,7 @@ const SKILLS: SkillDef[] = [
   { id: "seller_monitoring", name: "Seller monitoring plans for x402 sellers (info free; plans paid at the REST URL)", tags: ["monitoring", "x402", "sellers", "badge", "audit"], examples: ["seller monitoring plans", "{\"skill\":\"seller_monitoring\"}"], match: /\b(monitor(ing)?|badge|audit)\b/i },
   { id: "trust_feed", name: "Trust data feed for facilitators, wallets and frameworks (info free; keys and plans at the REST URL)", tags: ["data", "feed", "license", "trust", "x402"], examples: ["trust data feed", "{\"skill\":\"trust_feed\"}"], match: /\b(data feed|trust feed|feed|licen[cs]e|bulk lookup)\b/i },
   { id: "samples", name: "Free samples of every paid product", tags: ["samples", "preview", "free"], examples: ["samples", "show me a free sample"], match: /\b(samples?|preview|try|demo)\b/i },
-  { id: "quote", name: "Price quote for a paid call, without paying (free)", tags: ["quote", "x402", "free"], examples: ["quote /v1/market"], match: /\bquote\b/i },
+  { id: "quote", name: "Price quote for a paid call, without paying (free)", tags: ["quote", "x402", "free"], examples: ["quote /v1/funding"], match: /\bquote\b/i },
   {
     id: "institutional",
     route: "institutional",
@@ -60,13 +60,8 @@ const SKILLS: SkillDef[] = [
     examples: ["institutional brief", "what are BIS, IMF and the big banks doing that matters for XRP and QNT?"],
     match: /\b(institution(al|s)?|policy|regulat(ion|ions|ory|ors?)|bis|imf|treasury|occ|sec|cftc|cbdcs?|jpmorgan|jpm|kinexys|sbi|cross river|securitize|corda|r3|banks?|tokeni[sz](ed|ation))\b/i,
   },
-  { id: "market", route: "market", name: "BTC + macro market backdrop (data only)", tags: ["crypto", "bitcoin", "macro", "paid"], examples: ["BTC macro backdrop"], match: /\b(market|backdrop|macro|dominance)\b/i },
-  { id: "macro_yen", route: "yen", name: "Yen macro watch (USD/JPY, Nikkei)", tags: ["macro", "yen", "usd-jpy", "japan", "paid"], examples: ["yen macro watch"], match: /\b(yen|jpy|usd\/?jpy|nikkei|japan|boj)\b/i },
   { id: "funding", route: "funding", name: "Perpetual funding rates (OKX perps)", tags: ["crypto", "funding", "perpetuals", "derivatives", "paid"], examples: ["funding rates"], match: /\bfunding\b/i },
   { id: "fear_greed", route: "fear_greed", name: "Fear & Greed (CoinMarketCap, with history)", tags: ["crypto", "sentiment", "fear-greed", "paid"], examples: ["fear and greed index"], match: /\bfear\b.*\bgreed\b|\bfear[-_ ]?greed\b/i },
-  { id: "events_48h", route: "events_48h", name: "Events in the next 48 hours", tags: ["macro", "events", "calendar", "48h", "paid"], examples: ["what's scheduled in the next 48 hours?"], match: /\b(48 ?h(ours)?|next two days|tomorrow)\b/i },
-  { id: "sentiment", route: "sentiment", name: "Crypto sentiment (Fear & Greed, funding)", tags: ["crypto", "sentiment", "fear-greed", "funding", "paid"], examples: ["fear and greed"], match: /\b(sentiment|fear|greed|funding|mood)\b/i },
-  { id: "events", route: "events", name: "Macro + crypto events calendar", tags: ["macro", "events", "calendar", "paid"], examples: ["upcoming events"], match: /\b(events?|calendar|fomc|cpi|schedule)\b/i },
   {
     id: "vendor_report",
     route: "vendor_report",
@@ -96,7 +91,7 @@ const FREE_DESCRIPTIONS: Record<string, string> = {
     `${MONITOR_PRICE_TEXT.replace(/\.$/, "")}. Seller-funded, no auto-renew, payTo proven by signature; paying never changes a score. Answers with the plan table and enrolment steps; payment happens at GET /v1/monitor/subscribe/{plan}?enrollment=<id>&endpoints=<N>.`,
   trust_feed:
     "Licensed trust data feed: free key with 1,000 lookups/month (wallet signature), $1.50 per 1,000 extra lookups, Feed $99/30 days, Feed Pro $199/30 days (snapshot export, webhooks). Answers with plans, endpoints and licence terms; keys and payments at the REST URLs under /v1/feed.",
-  quote: "Live x402 v2 quote (all accepts options) for a paid skill or path, e.g. {\"skill\":\"trust_check\",\"url\":\"...\"} or \"quote /v1/market\". A 503 means the data is not fresh right now and would not be sold.",
+  quote: "Live x402 v2 quote (all accepts options) for a paid skill or path, e.g. {\"skill\":\"trust_check\",\"url\":\"...\"} or \"quote /v1/funding\". A 503 means the data is not fresh right now and would not be sold.",
 };
 
 function priceLine(cfg: Config, route: PaidRoute): string {
@@ -130,7 +125,7 @@ export function agentCard(cfg: Config, base: string) {
     description:
       "Should I pay this x402 URL? Lumi Trades seller checks checks a seller before you pay: allow / warn / block with coded reasons from daily CDP Bazaar index checks and Lumi's own on-chain test-buys, " +
       "(free lookup, paid check, vendor reports); signed delivery receipts come with paid vendor reports and Feed catalog lookups, verifiable free. " +
-      "Separately, neutral crypto market data for AI agents from Lumi Trades (lumitrades.io): BTC/macro backdrop, yen macro watch, sentiment, funding rates, an events calendar " +
+      "Separately, neutral crypto market data for AI agents from Lumi Trades (lumitrades.io): funding rates, Fear & Greed " +
       "and a daily policy brief (regulators, central banks, banks, tokenization). No trade calls. " +
       `Pay per call over x402 v2 with no API key or account, in ${settledIn(cfg)}. Also available as a remote MCP server. Information only, not financial advice.`,
     // A2A 1.0
@@ -342,7 +337,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
       text:
         `Lumi Trades checks x402 sellers before you pay and sells neutral market data per call over x402 (${settledIn(cfg)}). ` +
         "Free here: catalog, quote, vendor_trust, seller_monitoring, trust_feed. Paid skills: " + SKILLS.filter((s) => s.route).map((s) => s.id).join(", ") +
-        ". Ask e.g. 'should I pay https://example.com/api' or 'quote /v1/market' to get the live payment terms." + (skill ? "" : " (No skill matched your message, so here is the catalog.)"),
+        ". Ask e.g. 'should I pay https://example.com/api' or 'quote /v1/funding' to get the live payment terms." + (skill ? "" : " (No skill matched your message, so here is the catalog.)"),
       data: {
         api: base,
         agent_card: `${base}/.well-known/agent-card.json`,
@@ -410,7 +405,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     }
   }
   if (!path) {
-    if (!target.route) return { skill: "quote", text: "Tell me which paid skill or path to quote, e.g. 'quote /v1/market' or {\"skill\":\"quote\",\"path\":\"/v1/market\"}.", data: { error: "missing_path" } };
+    if (!target.route) return { skill: "quote", text: "Tell me which paid skill or path to quote, e.g. 'quote /v1/funding' or {\"skill\":\"quote\",\"path\":\"/v1/funding\"}.", data: { error: "missing_path" } };
     const ep = PAID_ENDPOINTS.find((e) => e.route === target.route)!;
     if (target.needsVendor) {
       const vendorArg = (typeof data.vendor_id === "string" && data.vendor_id) || VENDOR_IDS.find((v) => new RegExp(`(^|[^a-z0-9-])${v}([^a-z0-9-]|$)`, "i").test(text));

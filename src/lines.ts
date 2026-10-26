@@ -1,8 +1,8 @@
 /**
  * Product lines. Everything is sold under one brand, Lumi Trades. The paid routes fall into two groups: seller checks
- * (pay-check, verdict, vendor reports, badges, monitoring, feed) and market data (market backdrop, sentiment, Fear & Greed,
- * events, funding, yen watch, institutional policy brief). The per-coin readings group (signal, lite, scan, levels, slate)
- * and the daily market brief were retired on 2026-10-25 and answer 410 Gone (src/retired.ts).
+ * (pay-check, verdict, vendor reports, badges, monitoring, feed) and market data (Fear & Greed, funding, institutional
+ * policy brief). The per-coin readings group (signal, lite, scan, levels, slate), the daily market brief and the market,
+ * yen, sentiment, events and next-48h events feeds were retired on 2026-10-25 and answer 410 Gone (src/retired.ts).
  */
 import type { PaidRoute } from "./config";
 
@@ -29,7 +29,7 @@ export const OPENAPI_TAG: Record<ProductLine, string> = {
 export const OPENAPI_TAGS = [
   { name: "trust", description: "Lumi Trades seller checks: should I pay this x402 URL?, vendor observations and reports, signed receipts. Observations, not ratings or advice." },
   { name: "badge", description: "Lumi Trades seller checks: free 'Tested by Lumi' badges and public result pages." },
-  { name: "market data", description: "Lumi Trades market data: BTC/macro backdrop, sentiment, Fear & Greed, funding, events, yen watch and the daily policy brief. Neutral data, no trade calls." },
+  { name: "market data", description: "Lumi Trades market data: Fear & Greed, funding and the daily policy brief. Neutral data, no trade calls." },
 ];
 
 /** Disclaimer on trust responses (no trading wording). */

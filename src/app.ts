@@ -16,10 +16,9 @@ import { bazaarExtension, resourceDescription, serviceMeta } from "./bazaar";
 import { indexDoc, indexHtml, openApi, skillMd, wellKnownX402, vendorReportHtml, VERSION } from "./docs";
 import { agentCard, handleA2a, A2A_CORS } from "./a2a";
 import {
-  coinList, resolveCoin, marketView, DISCLAIMER, SOURCE, type CoinRef,
+  coinList, resolveCoin, DISCLAIMER, SOURCE, type CoinRef,
 } from "./views";
 import { staleInputs, hasContent, DAILY_ROUTE_MAX_AGE_HOURS, fileMeta, withMeta, isoTimestamps, metaFrom, nextHalfHour } from "./freshness";
-import { yenView, sentimentView, eventsView } from "./products";
 import { institutionalView } from "./institutional";
 import { handleMcp, isOwnerKey, MCP_CORS, type McpDeps } from "./mcp";
 import { createSanctionsScreen, type KVLike, type SanctionsDoc } from "./sanctions";
@@ -40,7 +39,7 @@ import { productSample, sampleEntry, SAMPLE_ARGS, SAMPLE_LABEL } from "./samples
 import { applyRate, createXrpPricer, type XrpPricer } from "./pricing";
 import { D1TrafficStore, MemoryTrafficStore, TRAFFIC_RETENTION_DAYS, TrafficBuffer, trafficRow, trafficSummary, type TrafficStore } from "./traffic";
 import { D1FeedStore, MemoryFeedStore, FEEDS, dueFeed, refreshFeed, feedFresh, type FeedStore } from "./feeds";
-import { fundingView, fearGreedView, fearGreedFromContext, events48View, trustVerdict } from "./quick";
+import { fundingView, fearGreedView, fearGreedFromContext, trustVerdict } from "./quick";
 import { lookupError, withSafety } from "./trust/index";
 
 /**
@@ -170,34 +169,21 @@ export interface App {
 export const XRP_MEMO_MS = 30 * 60_000;
 
 const NEEDS: Record<PaidRoute, DataFile[]> = {
-  market: ["analysis", "prices", "context"],
-  yen: ["context", "analysis", "prices"],
-  sentiment: ["context", "prices"],
-  events: ["analysis"],
   institutional: ["institutional_brief"],
   vendor_report: [], // trust-layer data (D1), checked in prepare()
   trust_check: [], // trust catalog (D1)
   verdict: [], // trust catalog + seller_activity (D1), same lookup as /v1/check
   funding: [], // live_feeds (D1)
   fear_greed: [], // live_feeds (D1), context.json fallback in prepare()
-  events_48h: ["events"],
 };
 /** Inputs that enrich a product but whose absence does not block it (the field is simply omitted). */
-const OPTIONAL: Partial<Record<PaidRoute, DataFile[]>> = {
-  yen: ["events"],
-  events: ["events"],
-  events_48h: ["analysis"],
-};
-/** Paid paths without a {coin} parameter. */
+const OPTIONAL: Partial<Record<PaidRoute, DataFile[]>> = {};
+/** Paid paths without a {coin} parameter. (/v1/market, /v1/macro/yen, /v1/sentiment, /v1/events and /v1/events/next48h
+ *  were retired on 2026-10-25 with the site data they were built from: 410 Gone, see src/retired.ts.) */
 const FIXED: Record<string, PaidRoute> = {
-  "/v1/market": "market",
-  "/v1/macro/yen": "yen",
-  "/v1/sentiment": "sentiment",
-  "/v1/events": "events",
   "/v1/institutional": "institutional",
   "/v1/funding": "funding",
   "/v1/fear-greed": "fear_greed",
-  "/v1/events/next48h": "events_48h",
   "/v1/trust/check": "trust_check",
   "/v1/verdict": "verdict",
 };
@@ -1680,18 +1666,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
 
 function buildBody(route: PaidRoute, coin: CoinRef | undefined, d: Record<string, any>, coins: CoinRef[], now: number) {
   switch (route) {
-    case "market":
-      return marketView(d.analysis, d.prices, d.context, coins);
-    case "yen":
-      return yenView(d.context, d.analysis, d.events, d.prices, now);
-    case "sentiment":
-      return sentimentView(d.context, d.prices, coins);
-    case "events":
-      return eventsView(d.events, d.analysis, coins, now);
     case "institutional":
       return institutionalView(d.institutional_brief);
-    case "events_48h":
-      return events48View(d.events, d.analysis, coins, now);
     default:
       return null; // vendor_report, trust_check, verdict, funding, fear_greed: built in prepare()
   }

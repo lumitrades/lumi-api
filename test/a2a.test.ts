@@ -30,7 +30,7 @@ describe("A2A agent card", () => {
     expect(await (await get("/.well-known/agent.json")).json()).toEqual(card);
     expect(card).toMatchObject({
       name: "Lumi Trades",
-      version: "1.1.8",
+      version: "1.1.9",
       provider: { organization: "Lumi Trades", url: "https://lumitrades.io" },
       documentationUrl: `${BASE}/skill.md`,
       capabilities: { streaming: false, pushNotifications: false },
@@ -47,7 +47,7 @@ describe("A2A agent card", () => {
       { url: `${BASE}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "1.0" },
       { url: `${BASE}/a2a`, protocolBinding: "JSONRPC", protocolVersion: "0.3" },
     ]);
-    expect(card.skills.map((s: any) => s.id)).toEqual(["trust_check", "vendor_trust", "vendor_report", "catalog", "seller_monitoring", "trust_feed", "samples", "quote", "institutional", "market", "macro_yen", "funding", "fear_greed", "events_48h", "sentiment", "events"]);
+    expect(card.skills.map((s: any) => s.id)).toEqual(["trust_check", "vendor_trust", "vendor_report", "catalog", "seller_monitoring", "trust_feed", "samples", "quote", "institutional", "funding", "fear_greed"]);
     expect(card.iconUrl).toBe("https://lumitrades.io/assets/icon-512.png");
     for (const s of card.skills) expect(s).toMatchObject({ id: expect.any(String), name: expect.any(String), description: expect.any(String), tags: expect.any(Array) });
     const x402 = card.capabilities.extensions.find((e: any) => e.uri === "https://x402.org");
@@ -73,13 +73,13 @@ describe("A2A JSON-RPC", () => {
 
   it("message/send (0.3): paid skill returns live x402 terms for every network, nothing charged", async () => {
     const { rpc, fac } = setup();
-    const r = await rpc(send03([{ kind: "text", text: "what is the yen doing" }]));
+    const r = await rpc(send03([{ kind: "text", text: "fear and greed index" }]));
     const m = r.body.result;
-    expect(m).toMatchObject({ kind: "message", role: "agent", metadata: { skill: "macro_yen" } });
+    expect(m).toMatchObject({ kind: "message", role: "agent", metadata: { skill: "fear_greed" } });
     const d = m.parts[1].data;
-    expect(d).toMatchObject({ status: "payment_required", charged: false, url: `${BASE}/v1/macro/yen` });
+    expect(d).toMatchObject({ status: "payment_required", charged: false, url: `${BASE}/v1/fear-greed` });
     expect(d.options.map((o: any) => [o.network, o.asset, o.amount])).toEqual([
-      ["eip155:84532", "USDC", "0.01"], ["xrpl:1", "XRP", "0.0075"], ["xrpl:1", "RLUSD", "0.01"], ["xrpl:1", "USDC", "0.01"],
+      ["eip155:84532", "USDC", "0.003"], ["xrpl:1", "XRP", "0.0023"], ["xrpl:1", "RLUSD", "0.003"], ["xrpl:1", "USDC", "0.003"],
     ]);
     expect(d.x402.x402Version).toBe(2);
     expect(fac.calls).toHaveLength(0);
@@ -87,14 +87,17 @@ describe("A2A JSON-RPC", () => {
 
   it("quotes paths, never offers a retired one, and refuses stale data without a quote", async () => {
     const { rpc } = setup();
-    const q = await rpc(send1([{ text: "quote /v1/market" }]));
-    expect(q.body.result.message.parts[1].data.url).toBe(`${BASE}/v1/market`);
+    const q = await rpc(send1([{ text: "quote /v1/fear-greed" }]));
+    expect(q.body.result.message.parts[1].data.url).toBe(`${BASE}/v1/fear-greed`);
     const gone = await rpc(send1([{ data: { skill: "signal", coin: "XRP" } }]));
     expect(JSON.stringify(gone.body)).toMatch(/gone/);
     expect(JSON.stringify(gone.body)).not.toMatch(/"accepts"/);
     const stale = setup(NOW + 3 * 86_400_000);
-    const s = await stale.rpc(send1([{ data: { skill: "sentiment" } }]));
+    const s = await stale.rpc(send1([{ data: { skill: "institutional" } }]));
     expect(s.body.result.message.parts[1].data).toMatchObject({ status: 503, charged: false });
+    const retired = await rpc(send1([{ data: { skill: "sentiment" } }]));
+    expect(JSON.stringify(retired.body)).toMatch(/gone/);
+    expect(JSON.stringify(retired.body)).not.toMatch(/"accepts"/);
   });
 
   it("returns spec errors for unsupported methods and versions", async () => {

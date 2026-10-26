@@ -84,16 +84,8 @@ export function hasContent(route: string, body: Json): boolean {
       return (body.support?.length ?? 0) + (body.resistance?.length ?? 0) > 0 || !!body.commentary;
     case "slate":
       return Array.isArray(body.ideas) && (body.ideas.length > 0 || (Array.isArray(body.no_setup) ? body.no_setup.length : 0) > 0);
-    case "market":
-      return typeof body.btc_backdrop?.price?.usd === "number";
     case "brief":
       return typeof body.bitcoin?.usd === "number" && !!body.markdown;
-    case "yen":
-      return typeof body.usd_jpy?.price === "number" || typeof body.nikkei_225?.price === "number";
-    case "sentiment":
-      return typeof body.fear_greed?.value === "number";
-    case "events":
-      return (body.upcoming_timed?.length ?? 0) + (body.recent_24h?.length ?? 0) + (body.upcoming_by_date?.length ?? 0) > 0;
     case "institutional":
       return (body.items?.length ?? 0) + (body.no_notable_news?.length ?? 0) > 0 && (body.big_picture?.length ?? 0) > 0 && !!body.markdown;
     case "vendor_report":
@@ -108,8 +100,6 @@ export function hasContent(route: string, body: Json): boolean {
       return Array.isArray(body.coins) && body.coins.length > 0;
     case "fear_greed":
       return typeof body.value === "number";
-    case "events_48h":
-      return body.kind === "events_48h" && typeof body.count === "number"; // an empty window is an answer too
     default:
       return false;
   }
