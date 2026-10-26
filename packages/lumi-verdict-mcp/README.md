@@ -18,7 +18,7 @@ USDC on Base (gasless) or XRP / RLUSD / USDC on the XRP Ledger, signed locally o
 No API key, no account. The price is read live from each 402 quote. Without a wallet, `lumi_verdict` returns the price quote and pays nothing.
 **You only pay when you get an answer:** bad input is refused before any quote (4xx, nothing charged), and the API answers 503 "Not charged." when it cannot answer.
 
-Price, the proof behind each label and how to verify a signed answer: <https://lumitrades.io/prices/> (machine-readable: <https://lumitrades.io/prices.json>).
+Price, the proof behind each label and how to verify a signed answer: <https://lumitrades.io/prices/> (machine-readable: <https://lumitrades.io/prices/index.json>).
 
 Want every Lumi tool (seller lookups, full reports, seller monitoring, the trust feed)? Use [`lumi-trades-mcp`](https://www.npmjs.com/package/lumi-trades-mcp).
 This package reuses its payment code unchanged.
