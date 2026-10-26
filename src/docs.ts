@@ -170,6 +170,7 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       { method: "GET", path: "/llms.txt", summary: "Short plain-text guide for LLMs" },
       { method: "GET", path: "/v1/check?url=", summary: "Lumi Check: free, signed allow / warn / block before you pay an x402 seller, from Lumi's cached observations (rate-limited per client)" },
       { method: "GET", path: "/v1/check/keys", summary: "Public keys that sign Lumi Check answers and badges (alias /.well-known/lumi-keys.json)" },
+      { method: "GET", path: "/v1/check/wallets", summary: "Lumi's test-buy wallets: the only payers of a Lumi receipt (alias /.well-known/lumi-test-buy-wallets.json)" },
       { method: "POST", path: "/v1/check/outcome", summary: "Optional anonymous delivery outcome (seller host + delivered yes/no only; not a scoring input)" },
       { method: "GET", path: "/v1/verdict/rules", summary: "Verdict labels, public names, the allow/warn/block to label mapping, thresholds and definitions" },
       { method: "GET", path: "/v1/samples", summary: "Free truncated SAMPLE of every paid product (lists cut to 2, up to 10 min old) with USD price and full URL" },
@@ -311,6 +312,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
       responses: { "200": { description: "Signed decision" }, "400": { description: "Bad or missing url (never charged)" }, "429": { description: "Free rate limit" } },
     },
   };
+  paths["/v1/check/wallets"] = { get: { tags: ["trust"], security: [], summary: "Lumi's test-buy wallets, the only payers of a Lumi receipt (free; alias /.well-known/lumi-test-buy-wallets.json)", responses: { "200": { description: "OK" } } } };
   paths["/v1/check/keys"] = { get: { tags: ["trust"], security: [], summary: "Public signing keys for Lumi Check answers and badges (free; alias /.well-known/lumi-keys.json)", responses: { "200": { description: "OK" } } } };
   paths["/v1/check/outcome"] = {
     post: {

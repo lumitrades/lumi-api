@@ -17,6 +17,7 @@ import { VENDORS, vendorById, type Vendor, type VendorEndpoint } from "../vendor
 import type { Catalog } from "./catalog_service";
 import { XRPL_BAZAAR_SWEEP } from "./catalog_service";
 import { receiptMatchesBuy, receiptVerifyDoc, verifyReceipt, type Receipt, type ReceiptStore } from "./receipts";
+import { isLumiTestBuyWallet, normaliseWallets } from "./wallets";
 import { dataReturnedView, deliveryCounts, deliveryState, deliveryText, guardBuy, inconclusiveReason, INCONCLUSIVE_REASONS, isInconclusiveReason } from "./delivery";
 import { isStorageQuotaError, storageUnavailableBody } from "./storage_errors";
 import type { LookupQuery } from "./catalog";
@@ -1322,7 +1323,11 @@ export function createTrust(deps: TrustDeps): Trust {
       } catch { return json(400, { error: "invalid_json" }); }
       if (r && typeof r === "object" && r.receipt && !r.type) r = r.receipt;
       const check = await verifyReceipt(r);
-      const out: Record<string, unknown> = { kind: "receipt_verification_result", ...check };
+      // Step 4b (security review M4, PROPOSED): a receipt that says Lumi issued it must be paid by a published Lumi test-buy wallet.
+      const lumiIssued = r?.issuer?.name === "Lumi";
+      const onList = isLumiTestBuyWallet(normaliseWallets({ xrpl: deps.buyers, evm: deps.evmBuyers ?? [], stellar: deps.stellarBuyers ?? [] }), String(r?.payment?.network ?? ""), r?.payment?.payer);
+      if (lumiIssued && check.ok && !onList) { check.ok = false; check.errors.push("payer_not_lumi_test_buy_wallet"); }
+      const out: Record<string, unknown> = { kind: "receipt_verification_result", ...check, payer_on_lumi_wallet_list: onList, wallet_list: `${base}/.well-known/lumi-test-buy-wallets.json` };
       if (check.hash_ok && deps.receipts) {
         const known = (await deps.receipts.byTx([String(r.payment.tx_hash)]).catch(() => new Map())).get(String(r.payment.tx_hash));
         const current = !!known && known.receipt_hash === r.receipt_hash;

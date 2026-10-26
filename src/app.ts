@@ -3,6 +3,7 @@
  * used by the Worker entry (src/index.ts) and the Node server (src/node.ts).
  */
 
+import { testBuyWalletsDoc } from "./trust/wallets";
 import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCOME_FIELDS, OUTCOME_RETENTION_DAYS, OUTCOME_SUMMARY_RETENTION, type OutcomeStore } from "./trust/outcomes";
 import { createBadges } from "./trust/badge";
 import { setPrivateNames } from "./sanitize";
@@ -1071,6 +1072,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       if (path === "/v1/verdict/rules") return json(200, { kind: "lumi_verdict_rules", pricing: verdictIsPaid ? "paid" : "free", ...thresholdsDoc(verdictTh) }, { "Cache-Control": "public, max-age=3600" });
       // VERDICT_PRICING = "free" (default): a free alias of /v1/check with the shared label. "paid": falls through to x402.
       if (path === "/v1/verdict" && !verdictIsPaid) return freeVerdict(request, url, base, ctx);
+      if (path === "/v1/check/wallets" || path === "/.well-known/lumi-test-buy-wallets.json") return json(200, testBuyWalletsDoc(base, { xrpl: xrplBuyers, evm: evmBuyers, stellar: stellarBuyers }), { "Cache-Control": "public, max-age=3600" });
       if (path === "/v1/check/keys" || path === "/.well-known/lumi-keys.json") return json(200, keysDoc(await signKey(), base, { secretReused }), { "Cache-Control": "public, max-age=3600" });
       if (path === "/v1/badge") return json(200, badgeDocs(base, badgeThresholds(env)), { "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" });
       const eb = /^\/v1\/badge\/([^/]{1,200})\.(json|svg)$/.exec(path);
