@@ -96,7 +96,7 @@ export interface CuratedBuy {
  * new XRPL hosts listed after Oct 23 2026 are not covered by it.
  */
 const SWEEP_COUNTS = { as_of: "2026-10-23", as_of_label: "Oct 23 2026", hosts_checked: 98, hosts_total: 98, hosts_bought: 93, delivered: 82, not_delivered: 2, inconclusive: 9 } as const;
-// Counts from /workspace/notes/xrpl_testbuys_2026-10-23.json bazaar_coverage (98 third-party XRPL hosts; Lumi's own host excluded),
+// Counts from the Oct 23 2026 XRPL sweep notes (bazaar_coverage; (98 third-party XRPL hosts; Lumi's own host excluded),
 // recomputed by scripts/sweep_counts.py. inconclusive = paid, but Lumi recorded no HTTP response (Lumi's 90 s client timeout or
 // an interrupted run): delivery unknown, Lumi-side, not counted against the seller (correction logged Oct 23 2026).
 // Curated-vendor buys that are not Bazaar hosts (e.g. cloudpayx) are not part of this sweep.

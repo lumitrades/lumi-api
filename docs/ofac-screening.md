@@ -41,16 +41,12 @@ except `block` for one. Shipped to production on 2026-10-24 (merged into main wi
 
 ## Box side
 - `scripts/ofac_refresh_daily.sh` writes `~/.lumi/ofac/ofac_sdn_addresses.json` (or `$LUMI_OFAC_DIR`) and appends to
-  `refresh.log`. Use `--once` for a single run; with no argument it loops every 24 hours (flock single-instance). The
-  box has no crontab, so scheduling it (a Grok Bot routine running `--once` daily, or the loop under nohup) needs
-  approval.
+  `refresh.log`. Use `--once` for a single run (schedule it daily); with no argument it loops every 24 hours
+  (flock single-instance).
 - `scripts/ofac_guard.ts` exports `assertPayToAllowed(payTo, where)`, which the runners call right before paying. It
   reads the union of the box copy and the repo snapshot, appends refusals to `~/.lumi/ofac/refused.log`, and fails
   closed when no list loads.
-- `patches/tools/*.ofac.patch` adds the guard to `/workspace/tools/catalog_buys.ts`, `trust_testbuys.ts` (XRPL and
-  Stellar) and `monitor_runs.ts`. **The patches are not applied.** They import `../lumi-api/scripts/ofac_guard.ts`,
-  so this branch has to be merged into the `/workspace/lumi-api` checkout first. To apply:
-  `cd /workspace/tools && patch -p1 < …/patches/tools/<file>.ofac.patch`.
+- The test-buy runners (catalog, daily XRPL and Stellar, and monitor runs) must call the guard before every payment; that wiring lives outside this repo and is not yet confirmed.
 
 ## Free pre-pay check (`/v1/check`, Lumi Check)
 - `freeCheck` goes through the same `checkVerdict` / `payToVerdict` helpers as `/v1/trust/check`, so a listed `payTo`

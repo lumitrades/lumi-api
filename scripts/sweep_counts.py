@@ -3,7 +3,8 @@
 A bought host whose paid call got no HTTP response (status 0/null, Lumi client timeout, or Lumi run interrupted) is
 inconclusive (Lumi-side), not "not delivered"."""
 import json, sys
-p = sys.argv[1] if len(sys.argv) > 1 else "/workspace/notes/xrpl_testbuys_2026-10-23.json"
+if len(sys.argv) < 2: sys.exit("usage: sweep_counts.py <sweep notes .json>")
+p = sys.argv[1]
 d = json.load(open(p))
 att = {a.get("tx_hash"): a for a in d["attempts"] if a.get("tx_hash")}
 cov = [x for x in d["bazaar_coverage"] if x["status"] != "excluded"]

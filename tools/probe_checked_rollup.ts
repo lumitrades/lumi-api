@@ -6,7 +6,7 @@ import { registrableDomain } from "../src/trust/catalog";
 import { rollupSeller, toRow, parseProbeRow, PROBE_MAX_ROWS_PER_LOAD, type EndpointProbe, type HistoryBand, type SellerProbeResult } from "../src/trust/probe_checked";
 
 const PC = process.env.PC ?? "/tmp/pc";
-const OUT = process.env.OUT ?? "/workspace/notes/research/probe_checked_2026-10-25";
+const OUT = process.env.OUT ?? "/tmp/pc/out";
 const T = JSON.parse(readFileSync(`${PC}/targets.json`, "utf8"));
 const P = JSON.parse(readFileSync(process.env.RESULTS ?? `${PC}/probe_results.json`, "utf8"));
 const onchain = new Set<string>(T.onchain.map((o: any) => o.recipient.toLowerCase()));

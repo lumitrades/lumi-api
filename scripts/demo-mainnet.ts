@@ -6,20 +6,20 @@
  * demonstration only. It must be shown as a demo and excluded from usage/KPI counts.
  *
  * Safety rails:
- *   - seed is read from DEMO_BUYER_FILE (default /workspace/secrets/xrpl_demo_buyer.json) and never printed
+ *   - seed is read from DEMO_BUYER_FILE (default ~/.lumi/demo_buyer.json) and never printed
  *   - target must report network xrpl:0 on /health; only api.lumitrades.io unless DEMO_ALLOW_OTHER_HOST=1
  *   - pays in XRP only (accepts[0]); refuses any quote above DEMO_MAX_DROPS (default 10000 = 0.01 XRP)
  *   - one paid call per run; requires DEMO_CONFIRM=yes
- *   - appends the tx to DEMO_LOG (default /workspace/notes/wallet_log.md) and writes demo/mainnet-demo-*.json
+ *   - appends the tx to DEMO_LOG (default ~/.lumi/demo_log.md) and writes demo/mainnet-demo-*.json
  */
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Client, Wallet } from "xrpl";
 import { XRPLPresignedPaymentPayer, decodePaymentRequiredHeader, decodePaymentResponseHeader } from "x402-xrpl";
 
 const BASE = (process.env.LUMI_API_URL || "https://api.lumitrades.io").replace(/\/+$/, "");
-const PATH = process.env.DEMO_PATH || "/v1/fear-greed";
-const FILE = process.env.DEMO_BUYER_FILE || "/workspace/secrets/xrpl_demo_buyer.json";
-const LOG = process.env.DEMO_LOG || "/workspace/notes/wallet_log.md";
+const PATH = process.env.DEMO_PATH || "/v1/verdict?url=https%3A%2F%2Fexample.com%2F";
+const FILE = process.env.DEMO_BUYER_FILE || `${process.env.HOME}/.lumi/demo_buyer.json`;
+const LOG = process.env.DEMO_LOG || `${process.env.HOME}/.lumi/demo_log.md`;
 const MAX_DROPS = BigInt(process.env.DEMO_MAX_DROPS || "10000");
 const WS = process.env.XRPL_MAINNET_WS || "wss://xrplcluster.com";
 const EXPLORER = "https://livenet.xrpl.org/transactions/";

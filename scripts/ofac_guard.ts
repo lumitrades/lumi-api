@@ -1,5 +1,5 @@
 /**
- * Box-side OFAC guard for the test-buy runners (/workspace/tools/catalog_buys.ts, trust_testbuys.ts, monitor_runs.ts).
+ * Box-side OFAC guard for the test-buy runners (catalog, daily and monitor test-buys).
  * Call assertPayToAllowed(payTo, where) right before signing any payment: it throws SanctionedAddressError for an
  * OFAC SDN-listed address and appends one JSON line to the refusal log. The address set is the union of the box copy
  * written daily by scripts/ofac_refresh_daily.sh ($LUMI_OFAC_DIR or ~/.lumi/ofac/ofac_sdn_addresses.json) and the

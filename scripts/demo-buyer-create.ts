@@ -3,14 +3,14 @@
  *
  * Generates the LABELED DEMO "demo buyer" XRPL wallet used to show a real mainnet x402
  * payment to api.lumitrades.io. The seed is written ONLY to DEMO_BUYER_FILE (default
- * /workspace/secrets/xrpl_demo_buyer.json, mode 600, outside the repo). Prints only the address.
+ * ~/.lumi/demo_buyer.json, mode 600, outside the repo). Prints only the address.
  * Refuses to overwrite an existing file. Generating a wallet is offline; nothing is submitted.
  */
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 import { Wallet } from "xrpl";
 
-const FILE = process.env.DEMO_BUYER_FILE || "/workspace/secrets/xrpl_demo_buyer.json";
+const FILE = process.env.DEMO_BUYER_FILE || `${process.env.HOME}/.lumi/demo_buyer.json`;
 
 if (existsSync(FILE)) {
   console.error(`refusing: ${FILE} already exists (delete it deliberately if you really want a new wallet)`);

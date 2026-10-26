@@ -8,15 +8,17 @@ Inputs (env PC_DIR, default /tmp/pc):
                  (a list of URLs or the wrangler [{results:[{resource}]}] shape). Curated test_buy endpoints are read
                  from src/vendors.ts. Test-bought endpoints are always the probe target for their host.
   x402scan_resources_live.json, x402scan_onchain_sellers_base_30d.json  public x402scan listings
-  ACTIVITY_CSV   seller_income csv: ONLY the all_domains / payto_addresses columns are read (no income fields)
+  ACTIVITY_CSV   seller activity CSV (required): ONLY the all_domains / payto_addresses columns are read (no income fields)
 Output: targets.json
 """
-import csv, json, os, collections
+import csv, json, os, sys, collections
 from urllib.parse import urlparse
 import tldextract
 
 PC = os.environ.get("PC_DIR", "/tmp/pc")
-ACT = os.environ.get("ACTIVITY_CSV", "/workspace/notes/research/seller_income_2026-10-25.csv")
+ACT = os.environ.get("ACTIVITY_CSV", "")
+if not ACT:
+    sys.exit("set ACTIVITY_CSV to the seller activity CSV")
 ext = tldextract.TLDExtract(include_psl_private_domains=True, suffix_list_urls=())
 SELF = {"lumitrades.io"}
 
