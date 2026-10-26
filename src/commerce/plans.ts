@@ -88,7 +88,7 @@ export const MONITOR_LIMITS = {
   reminderBeforeMs: 3 * DAY_MS,
 };
 
-/** Watch tiers (per-endpoint plans, the free tier and the Watch Plus trial). Cadences are targets for the operator-box
+/** Watch tiers (per-endpoint plans, the free tier and the Watch trial; internal id watch_plus_trial kept for existing rows). Cadences are targets for the operator-box
  *  runner: quote probes (unpaid 402 checks, rolled up daily into D1) and seller-funded test-buys (one D1 run row each). */
 export interface WatchTier {
   name: string;
@@ -118,7 +118,7 @@ export const WATCH_TIERS: Record<"watch_free" | "watch" | "watch_plus" | "watch_
   watch: { name: "Watch", probeEveryMs: HOUR, buyEveryMs: 7 * DAY_MS, buysPerTerm: 5, maxBuyUsd: 0.05, chains: "one", historyDays: 30, badge: true, schemaAlerts: false, latencyAlerts: false, signedReport: false, badgeFreshMs: 9 * DAY_MS, maxEndpoints: 20 },
   watch_plus: { name: "Watch Plus", probeEveryMs: 30 * MIN, buyEveryMs: DAY_MS, buysPerTerm: 30, maxBuyUsd: 0.1, chains: "rotate", historyDays: 90, badge: true, schemaAlerts: true, latencyAlerts: true, signedReport: false, badgeFreshMs: 2 * DAY_MS, maxEndpoints: 20 },
   watch_pro: { name: "Watch Pro", probeEveryMs: 15 * MIN, buyEveryMs: DAY_MS, buysPerTerm: 30, maxBuyUsd: 0.1, chains: 3, historyDays: 90, badge: true, schemaAlerts: true, latencyAlerts: true, signedReport: true, badgeFreshMs: 2 * DAY_MS, maxEndpoints: 20 },
-  watch_plus_trial: { name: "Watch Plus free trial", probeEveryMs: 30 * MIN, buyEveryMs: DAY_MS, buysPerTerm: 14, maxBuyUsd: 0.1, chains: "rotate", historyDays: 90, badge: true, schemaAlerts: true, latencyAlerts: true, signedReport: false, badgeFreshMs: 2 * DAY_MS, maxEndpoints: 3 },
+  watch_plus_trial: { name: "Watch free trial", probeEveryMs: 30 * MIN, buyEveryMs: DAY_MS, buysPerTerm: 14, maxBuyUsd: 0.1, chains: "rotate", historyDays: 90, badge: true, schemaAlerts: true, latencyAlerts: true, signedReport: false, badgeFreshMs: 2 * DAY_MS, maxEndpoints: 3 },
 };
 /** Retired Watch Plus founder rows (sold before 2026-10-25) keep the Watch Plus cadence to their term end; their budget
  *  is whatever was stored at purchase. */
@@ -140,7 +140,7 @@ export const PLATFORM_LICENCE = {
 } as const;
 
 export const WATCH_FREE = { endpoints: 1, termDays: TERM_DAYS, label: "free tier, no test-buys" };
-export const WATCH_TRIAL = { days: 14, capUsd: 0.25, endpoints: WATCH_TIERS.watch_plus_trial.maxEndpoints, label: "Watch Plus free trial" };
+export const WATCH_TRIAL = { days: 14, capUsd: 0.25, endpoints: WATCH_TIERS.watch_plus_trial.maxEndpoints, label: "Watch free trial" };
 /** Watch Pro test-buy wording, used the same way on every surface (legal review 3-H1). */
 export const WATCH_PRO_BUYS = "daily buys on up to 3 chains, limited by the test-buy budget";
 /** What happens when the free trial ends (legal review 3-M1). Keep in sync with tierState/badgeStatus/statusPage. */
@@ -148,6 +148,8 @@ export const WATCH_TRIAL_END = "On day 14 the trial ends: nothing is charged, ch
 /** Badge labels: a paid plan says so on the embeddable SVG itself (legal review 3-H2); the trial is labelled free. */
 export const PAID_BADGE_LABEL = "Monitored by Lumi · paid plan";
 export const TRIAL_BADGE_LABEL = "Monitored by Lumi · free trial";
+/** A seller with an unexpired test-buy pack (and no monitoring tier): says paid on the SVG too. */
+export const PACK_BADGE_LABEL = "Test-bought by Lumi · paid pack";
 /** Volume and prepay discounts. They do NOT stack: when both apply (10+ endpoints prepaid for 3 terms) only the larger
  *  one is used (20% volume), never 0.8 × 0.9. */
 export const WATCH_DISCOUNTS = { volumeMinEndpoints: 10, volume: 0.2, prepayTerms: 3, prepay: 0.1, maxEndpoints: 20 };
@@ -268,5 +270,5 @@ export const iso = (t: number | null | undefined) => (t == null ? null : new Dat
 export const MONITOR_PRICE_TEXT =
   `For x402 sellers, priced per endpoint per 30 days: Watch $${PLANS.watch.usd} (hourly quote checks, weekly test-buy, alerts), ` +
   `Watch Pro $${PLANS.watch_pro.usd} (15 min checks, daily buys on up to 3 chains, limited by the test-buy budget, signed monthly report); ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints -${WATCH_DISCOUNTS.volume * 100}%, ${WATCH_DISCOUNTS.prepayTerms} terms prepaid -${WATCH_DISCOUNTS.prepay * 100}% (discounts do not stack: the larger applies). ` +
-  `Audit $${PLANS.audit.usd} one-off (every listed endpoint, signed report). Test-buy packs, one-off: Re-test pack $${usd2(PLANS.retest_pack.usd)} for ${PLANS.retest_pack.pack!.buys} test-buys ("Fixed something? Get re-tested now"), Founder pack $${usd2(PLANS.founder_pack.usd)} for ${PLANS.founder_pack.pack!.buys} test-buys (first ${PLANS.founder_pack.pack!.founder!.seats} sellers, one place per company); both valid 12 months, each buy capped at $${PACK_LIMITS.maxBuyUsd.toFixed(2)}. Free Watch tier (${WATCH_FREE.endpoints} endpoint, daily quote check, no test-buys) and a one-per-seller ${WATCH_TRIAL.days}-day Watch Plus trial (no card, never converts; on day ${WATCH_TRIAL.days} nothing is charged, checks stop, the badge comes off and history freezes read-only). ` +
+  `Audit $${PLANS.audit.usd} one-off (every listed endpoint, signed report). Test-buy packs, one-off: Re-test pack $${usd2(PLANS.retest_pack.usd)} for ${PLANS.retest_pack.pack!.buys} test-buys ("Fixed something? Get re-tested now"), Founder pack $${usd2(PLANS.founder_pack.usd)} for ${PLANS.founder_pack.pack!.buys} test-buys (first ${PLANS.founder_pack.pack!.founder!.seats} sellers, one place per company); both valid 12 months, each buy capped at $${PACK_LIMITS.maxBuyUsd.toFixed(2)}. Free Watch tier (${WATCH_FREE.endpoints} endpoint, daily quote check, no test-buys) and a one-per-seller ${WATCH_TRIAL.days}-day Watch trial (no card, never converts; on day ${WATCH_TRIAL.days} nothing is charged, checks stop, the badge comes off and history freezes read-only). ` +
   `The old Monitor, Monitor Plus and Watch Plus plans are no longer sold; existing terms run to their end.`;

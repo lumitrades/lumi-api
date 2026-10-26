@@ -222,7 +222,7 @@ describe("Free Watch", () => {
   });
 });
 
-describe("Watch Plus trial", () => {
+describe("Watch trial (internal id watch_plus_trial)", () => {
   it("needs a signed challenge for the domain and payTo plus a published token; one per seller", async () => {
     const s = setup();
     const e = await enroll(s);
@@ -363,6 +363,21 @@ describe("uptime rollups and status page", () => {
   });
 });
 
+describe("the 14-day free trial is called the Watch trial everywhere user-facing", () => {
+  it("no public doc says 'Watch Plus trial'; the internal id stays watch_plus_trial", async () => {
+    const s = setup();
+    let seen = "";
+    for (const p of ["/", "/llms.txt", "/skill.md", "/openapi.json", "/.well-known/x402", "/v1/monitor", "/v1/feed"]) {
+      const t = await (await s.req(p)).text();
+      expect(t, p).not.toMatch(/Watch Plus (free )?trial/);
+      seen += t;
+    }
+    expect(seen).toContain("Watch trial");
+    expect(WATCH_TRIAL.label).toBe("Watch free trial");
+    expect(WATCH_TIERS.watch_plus_trial.name).toBe("Watch free trial"); // internal id kept for existing rows
+  });
+});
+
 describe("independence: no tier changes a score", () => {
   it("trust answers are identical before and after free, trial, Watch, Watch Pro, Audit and a test-buy pack", async () => {
     const strip = (x: any) => JSON.parse(JSON.stringify(x, (k, v) => (k === "commercial_relationship" || k === "generated_at" || k === "as_of" ? undefined : v)));
@@ -381,6 +396,17 @@ describe("independence: no tier changes a score", () => {
       } else {
         const qs = PLANS[tier as keyof typeof PLANS].perEndpoint ? "&endpoints=1" : "";
         expect((await pay(s, `/v1/monitor/subscribe/${tier}?enrollment=${e.enrollment_id}${qs}`)).status).toBe(201);
+      }
+      if (tier === "retest_pack") {
+        // a pack result is posted (delivered, then a paid retry the same day): it dates the seller badge, never a score
+        const job = (await (await s.req("/v1/owner/monitor/due", { headers: auth })).json()).pack_jobs[0];
+        const res = { enrollment_id: e.enrollment_id, plan_id: job.plan_id, endpoint: job.endpoint.url ?? job.endpoint, ts: s.now(), network: "xrpl:1", tx_hash: "E".repeat(64), http_status: 200, data_returned: true, cost_usd: 0.003, outcome: "delivered", pack_job_id: job.pack_job_id };
+        const rec = (await (await s.post("/v1/owner/monitor/results", { results: [res] }, auth)).json()).recorded[0]; expect(rec, JSON.stringify(rec)).toMatchObject({ pack_job: "done" });
+        const badge = await (await s.req(`/v1/monitor/badge/${e.enrollment_id}.json`)).json();
+        expect(badge).toMatchObject({ status: "monitored", plan: "retest_pack", last_test: new Date(s.now()).toISOString() }); // owner-flagged test wallet here, so labelled test
+        const page = await (await s.req(`/v1/monitor/sellers/${e.enrollment_id}`)).json();
+        expect(page.test_buys[0]).toMatchObject({ counted: true, funding: "seller-funded" });
+        expect(page.counting.rule).toContain("UTC day");
       }
       const after = await (await s.req(`/v1/trust/vendors?payTo=${SELLER}`)).json();
       const catAfter = await (await s.req("/v1/trust/catalog")).json();

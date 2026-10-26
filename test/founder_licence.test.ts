@@ -2,11 +2,11 @@ import { describe, it, expect } from "vitest";
 import { deriveAddress, deriveKeypair, generateSeed, sign } from "ripple-keypairs";
 import { createApp } from "../src/app";
 import { FACILITATOR, DATA, NOW, happyFacilitator, makeFetch, paymentHeaderFor } from "./helpers";
-import { MONITOR_LIMITS, PLANS, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TIERS, planPriceUsd, watchDiscount, watchPrice, MONITOR_PRICE_TEXT, WATCH_PRO_BUYS, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL } from "../src/commerce/plans";
-import { watchEconomics } from "../src/commerce/monitor";
+import { MONITOR_LIMITS, PLANS, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TIERS, planPriceUsd, watchDiscount, watchPrice, MONITOR_PRICE_TEXT, WATCH_PRO_BUYS, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL, PACK_BADGE_LABEL } from "../src/commerce/plans";
+import { watchEconomics, founderCompanyKeys } from "../src/commerce/monitor";
 import { MemoryCommerceStore } from "../src/commerce/store";
 import { PLATFORM_LICENCE, watchTier, PACK_LIMITS, PACK_PLANS, SOLD_MONITOR_PLANS, isPack, usd2 } from "../src/commerce/plans";
-import { PACK_TERMS } from "../src/commerce/policy";
+import { FOUNDER_RACE_TEXT, PACK_TERMS } from "../src/commerce/policy";
 
 const BASE = "https://lumi.test";
 const OWNER = "owner-key-for-tests-0123456789-abcdefghijklmnop";
@@ -197,6 +197,36 @@ describe("test-buy packs: purchase, balance, queue, fulfilment", () => {
     const bal = await (await s.req(`/v1/monitor/packs?enrollment=${e.enrollment_id}`, { headers: { Authorization: `Bearer ${e.management_token}` } })).json();
     expect(bal.balance.left).toBe(29);
   });
+  it("pack results date the seller badge like any counted buy: one per endpoint per UTC day, failures count, paid label", async () => {
+    const store = new MemoryCommerceStore();
+    const s = setup({}, store);
+    await seededPay(s);
+    const e = await enroll(s);
+    const r = await pay(s, `/v1/monitor/subscribe/retest_pack?enrollment=${e.enrollment_id}`);
+    const H = { Authorization: `Bearer ${e.management_token}` };
+    const post = async (job: any, outcome: string, tx: string) => (await (await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: r.body.pack_id, endpoint: `${BASE}/v1/fear-greed`, ts: s.now(), network: "xrpl:1", tx_hash: tx.repeat(64), http_status: outcome === "delivered" ? 200 : 502, data_returned: outcome === "delivered", cost_usd: 0.003, outcome, pack_job_id: job }] }, auth)).json()).recorded[0];
+    const badge = async () => (await s.req(`/v1/monitor/badge/${e.enrollment_id}.json`)).json();
+    expect((await badge()).reason).toBe("no_test_yet");
+    expect(await post(r.body.first_retest.job_id, "delivered", "A")).toMatchObject({ pack_job: "done" });
+    const b1 = await badge();
+    expect(b1).toMatchObject({ status: "monitored", label: PACK_BADGE_LABEL, paid: true, plan: "retest_pack", last_test: new Date(s.now()).toISOString() });
+    const day1 = b1.last_test;
+    // next UTC day: a failure is counted and removes the badge; the removed badge still shows the last delivered date
+    s.advance(DAY);
+    const j2 = (await (await s.post("/v1/monitor/packs/use", { enrollment_id: e.enrollment_id }, H)).json()).job.job_id;
+    await post(j2, "error_status", "B");
+    expect(await badge()).toMatchObject({ status: "removed", reason: "monitoring_failed", last_test: day1 });
+    // both results are published and counted (different UTC days); same-day retries are covered in badge_counting.test.ts
+    const page = await (await s.req(`/v1/monitor/sellers/${e.enrollment_id}`)).json();
+    expect(page.test_buys.map((t: any) => [t.outcome, t.counted])).toEqual([["error_status", true], ["delivered", true]]);
+    // 30 days after the last delivered counted buy (pack still unexpired) the badge lapses
+    s.advance(DAY);
+    const j3 = (await (await s.post("/v1/monitor/packs/use", { enrollment_id: e.enrollment_id }, H)).json()).job.job_id;
+    await post(j3, "delivered", "C");
+    expect((await badge()).status).toBe("monitored");
+    s.advance(31 * DAY);
+    expect(await badge()).toMatchObject({ status: "removed", reason: "no_recent_test" });
+  });
   it("preflight before payment: endpoints above the $0.10 cap are refused and nothing settles", async () => {
     const store = new MemoryCommerceStore();
     const s = setup({}, store);
@@ -237,8 +267,15 @@ describe("Founder pack: first 10 sellers, one place per company, 12 purchases", 
   const fp = (i: number, enrollment_id: string) => ({ id: `fp${enrollment_id}${i}`, enrollment_id, plan: "founder_pack", starts_at: NOW, ends_at: NOW + 365 * DAY, paid_tx: `tx${enrollment_id}${i}`, paid_network: "xrpl:1", paid_asset: "XRP", paid_amount: "1", payer: null, usd: 5, budget_usd: 2.4, spent_usd: 0, is_test: false, reminded: 0, created_at: NOW, credits: 24 }) as any;
   const en = (id: string, pay_to: string, domain: string | null, url = `https://api.${id}.com/x`) => ({ id, network: "xrpl:1", pay_to, pay_to_lc: pay_to.toLowerCase(), domain, proof: "", nonce: id, endpoints: [{ url, method: "GET", price_usd: "0.01", asset: null, amount: null, checked_at: null, source: "seller" }], webhook_url: null, webhook_secret: null, email: null, token_hash: "h" + id, is_test: false, created_at: NOW }) as any;
   const path = (id: string) => `/v1/monitor/subscribe/founder_pack?enrollment=${id}`;
+  /** A settled Founder purchase as the worker records it: the plan row plus the atomic claim (migration 0030 tables). */
+  async function seedBuy(store: MemoryCommerceStore, i: number, e: any) {
+    const p = fp(i, e.id);
+    const c = await store.claimFounder({ keys: [...founderCompanyKeys(e)], enrollment_id: e.id, plan_id: p.id, paid_tx: p.paid_tx, t: NOW, seats: 10, maxPurchases: 12 });
+    if (c.ok) await store.addPlan(p);
+    return c;
+  }
   async function fill(store: MemoryCommerceStore, n: number, start = 0) {
-    for (let i = start; i < start + n; i++) { await store.addEnrollment(en(`co${i}`, `rCompany${i}xxxxxxxxxxxxxxxxxxxx`, null)); await store.addPlan(fp(0, `co${i}`)); }
+    for (let i = start; i < start + n; i++) { const e = en(`co${i}`, `rCompany${i}xxxxxxxxxxxxxxxxxxxx`, null); await store.addEnrollment(e); expect((await seedBuy(store, 0, e)).ok).toBe(true); }
   }
   it("closes to new companies once 10 hold a place; the Re-test pack is still sold; test rows take no place", async () => {
     const store = new MemoryCommerceStore();
@@ -259,8 +296,9 @@ describe("Founder pack: first 10 sellers, one place per company, 12 purchases", 
   it("a holder can rebuy up to 12 times in total; the 13th is refused before payment", async () => {
     const store = new MemoryCommerceStore();
     await fill(store, 9);
-    await store.addEnrollment(en("mineOld", SELLER, null, "https://api.mineold.com/x"));
-    for (let i = 0; i < 11; i++) await store.addPlan(fp(i, "mineOld"));
+    const old = en("mineOld", SELLER, null, "https://api.mineold.com/x");
+    await store.addEnrollment(old);
+    for (let i = 0; i < 11; i++) await seedBuy(store, i, old);
     const s = setup({}, store);
     await (async () => { let n = 0; s.fac.settle = (b: any) => new Response(JSON.stringify({ success: true, transaction: String(++n).padStart(64, "D"), network: b.paymentRequirements.network, payer: "rPayer" }), { headers: { "Content-Type": "application/json" } }); })();
     const e = await enroll(s); // same payTo as mineOld: same company, so not refused as full
@@ -274,14 +312,79 @@ describe("Founder pack: first 10 sellers, one place per company, 12 purchases", 
   it("a different payTo on a shared domain is the same company (one place)", async () => {
     const store = new MemoryCommerceStore();
     await fill(store, 9);
-    await store.addEnrollment(en("sameDomain", "rSomeOtherWalletxxxxxxxxxxxxxxx", null, `${BASE}/v1/events`));
-    await store.addPlan(fp(0, "sameDomain"));
+    const sd = en("sameDomain", "rSomeOtherWalletxxxxxxxxxxxxxxx", null, `${BASE}/v1/events`);
+    await store.addEnrollment(sd);
+    await seedBuy(store, 0, sd);
     const s = setup({}, store);
     const e = await enroll(s); // endpoint on lumi.test, as sameDomain
     expect((await quote(s, path(e.enrollment_id))).status).toBe(402); // 10 places taken, but this company holds one
     await store.addEnrollment(en("co77", "rCompany77xxxxxxxxxxxxxxxxxxxx", null));
     const s2 = setup({}, store);
     expect((await (await s2.req("/v1/monitor/packs")).json()).founder_places_left).toBe(0);
+  });
+});
+
+describe("Founder pack: the place race is settled atomically at settlement", () => {
+  const en = (id: string, pay_to: string, url = `https://api.${id}.com/x`) => ({ id, network: "xrpl:1", pay_to, pay_to_lc: pay_to.toLowerCase(), domain: null, proof: "", nonce: id, endpoints: [{ url, method: "GET", price_usd: "0.01", asset: null, amount: null, checked_at: null, source: "seller" }], webhook_url: null, webhook_secret: null, email: null, token_hash: "h" + id, is_test: false, created_at: NOW }) as any;
+  const claim = (store: MemoryCommerceStore, e: any, tx: string) => store.claimFounder({ keys: [...founderCompanyKeys(e)], enrollment_id: e.id, plan_id: `p_${tx}`, paid_tx: tx, t: NOW, seats: 10, maxPurchases: 12 });
+  const path = (id: string) => `/v1/monitor/subscribe/founder_pack?enrollment=${id}`;
+
+  it("two companies racing for the 10th place: exactly one gets it", async () => {
+    const store = new MemoryCommerceStore();
+    for (let i = 0; i < 9; i++) expect((await claim(store, en(`c${i}`, `rC${i}`), `t${i}`)).ok).toBe(true);
+    const [a, b] = await Promise.all([claim(store, en("ra", "rA"), "ta"), claim(store, en("rb", "rB"), "tb")]);
+    expect([a.ok, b.ok].sort()).toEqual([false, true]);
+    expect([a, b].find((x) => !x.ok)).toMatchObject({ ok: false, reason: "founder_offer_full" });
+    expect((await store.founderState([])).taken).toBe(10);
+    expect((await claim(store, en("c0b", "rC0"), "again")).ok).toBe(true); // an existing company still rebuys
+  });
+
+  it("enrolments sharing a domain (or a wallet) join one place; the same payment cannot be counted twice", async () => {
+    const store = new MemoryCommerceStore();
+    const x = await claim(store, en("a1", "rWalletOne", "https://api.shared.com/a"), "tx1");
+    const y = await claim(store, en("a2", "rWalletTwo", "https://data.shared.com/b"), "tx2");
+    expect(x.ok && y.ok && x.place === y.place).toBe(true);
+    expect(await store.founderState(["pay:rwallettwo"])).toEqual({ taken: 1, place: x.ok ? x.place : null, used: 2 });
+    expect(await claim(store, en("a1", "rWalletOne", "https://api.shared.com/a"), "tx1")).toEqual({ ok: false, reason: "duplicate_payment" });
+  });
+
+  it("the 10th place taken while this payment settles: 409, paid but no credit, recorded for manual review, nothing refunded", async () => {
+    const store = new MemoryCommerceStore();
+    for (let i = 0; i < 9; i++) await claim(store, en(`c${i}`, `rC${i}`), `t${i}`);
+    const s = setup({}, store);
+    const e = await enroll(s);
+    const ok = s.fac.settle;
+    s.fac.settle = async (b: any) => { await claim(store, en("racer", "rRacer"), "racer_tx"); return ok(b); };
+    const r = await pay(s, path(e.enrollment_id));
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ error: "founder_offer_full_at_settlement", paid: true, credited: false, what_happens_next: FOUNDER_RACE_TEXT });
+    expect(r.body.tx).toBeTruthy();
+    expect(r.body.detail).toContain("No pack was added");
+    expect(FOUNDER_RACE_TEXT).toContain("Nothing is refunded automatically");
+    expect(store.plans.filter((p) => p.enrollment_id === e.enrollment_id)).toHaveLength(0);
+    expect(store.jobs).toHaveLength(0);
+    expect(store.refusals).toHaveLength(1);
+    expect(store.refusals[0]).toMatchObject({ enrollment_id: e.enrollment_id, plan: "founder_pack", reason: "founder_offer_full", paid_tx: r.body.tx });
+    const owner = await (await s.req("/v1/owner/monitor/packs", { headers: auth })).json();
+    expect(owner.refused_at_settlement).toHaveLength(1);
+    expect(owner.refused_at_settlement[0].note).toContain("owner's approval");
+    expect(owner.founder_places_taken).toBe(10);
+    expect(PACK_TERMS.terms.join(" ")).toContain("Nothing is refunded automatically");
+  });
+
+  it("the company's 12th purchase settling first: the racing 13th is refused at settlement with no credit", async () => {
+    const store = new MemoryCommerceStore();
+    const old = en("mineOld", SELLER);
+    for (let i = 0; i < 11; i++) await claim(store, old, `o${i}`);
+    const s = setup({}, store);
+    const e = await enroll(s);
+    const ok = s.fac.settle;
+    s.fac.settle = async (b: any) => { await claim(store, old, "o11"); return ok(b); };
+    const r = await pay(s, path(e.enrollment_id));
+    expect(r.status).toBe(409);
+    expect(r.body).toMatchObject({ error: "founder_purchases_used_at_settlement", paid: true, credited: false });
+    expect(store.plans.filter((p) => p.enrollment_id === e.enrollment_id)).toHaveLength(0);
+    expect(store.refusals.map((x) => x.reason)).toEqual(["founder_purchases_used"]);
   });
 });
 

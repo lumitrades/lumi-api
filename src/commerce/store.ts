@@ -22,6 +22,17 @@ export interface PackJobRow {
   id: string; plan_id: string; enrollment_id: string; endpoint: string; day: string; status: "queued" | "done" | "cancelled";
   run_id: number | null; note: string | null; created_at: number; updated_at: number;
 }
+/** Founder pack claim, made atomically at settlement (migration 0030): one place per company (any shared payTo / domain key),
+ *  at most `seats` places in total and `maxPurchases` purchases per place. */
+export interface FounderClaim { keys: string[]; enrollment_id: string; plan_id: string; paid_tx: string; t: number; seats: number; maxPurchases: number }
+export type FounderClaimResult =
+  | { ok: true; place: string; seat: number; n: number; new_place: boolean }
+  | { ok: false; reason: "founder_offer_full" | "founder_purchases_used" | "duplicate_payment"; place?: string };
+/** A settled pack payment that was refused at settlement (no credit was added). Kept for manual review; never refunded automatically. */
+export interface PackRefusalRow {
+  paid_tx: string; enrollment_id: string; plan: string; reason: string; paid_network: string; paid_asset: string; paid_amount: string;
+  payer: string | null; usd: number | null; is_test: boolean; created_at: number;
+}
 export interface TrialRow { id: string; enrollment_id: string; plan_id: string; domain_lc: string; pay_to_lc: string; nonce: string; proof: string; created_at: number }
 export interface UptimeRow {
   enrollment_id: string; endpoint: string; day: string; checks: number; ok: number; p50_ms: number | null; p95_ms: number | null;
@@ -53,6 +64,12 @@ export interface CommerceStore {
   plansFor(enrollmentId: string): Promise<PlanRow[]>;
   /** Non-test enrolments that bought `plan` (e.g. the founder pack), with how many times each bought it (places are grouped per payTo and per domain by the caller). */
   founderHolders(plan: string): Promise<{ enrollment_id: string; terms: number }[]>;
+  /** Founder places as recorded by the claim tables: places taken, the place holding any of `keys`, and its purchases. */
+  founderState(keys: string[]): Promise<{ taken: number; place: string | null; used: number }>;
+  /** Atomic founder claim at settlement: takes (or joins) a place and numbers the purchase; refuses when full / used up. */
+  claimFounder(c: FounderClaim): Promise<FounderClaimResult>;
+  addPackRefusal(r: PackRefusalRow): Promise<void>;
+  packRefusals(limit: number): Promise<PackRefusalRow[]>;
   /** Pack fulfilment queue. "duplicate" when that endpoint already has a live (not cancelled) job that UTC day. */
   addPackJob(j: PackJobRow): Promise<"inserted" | "duplicate">;
   packJob(id: string): Promise<PackJobRow | null>;
@@ -114,6 +131,36 @@ export class MemoryCommerceStore implements CommerceStore {
   trials: TrialRow[] = [];
   uptime = new Map<string, UptimeRow>();
   jobs: PackJobRow[] = [];
+  founderPlacesTbl: { place: string; seat: number; enrollment_id: string; created_at: number }[] = [];
+  founderClaimsTbl = new Map<string, string>();
+  founderBuys: { place: string; n: number; plan_id: string; paid_tx: string; created_at: number }[] = [];
+  refusals: PackRefusalRow[] = [];
+  private placeOf(keys: string[]) {
+    const ps = [...new Set(keys.map((k) => this.founderClaimsTbl.get(k)).filter((x): x is string => !!x))];
+    return this.founderPlacesTbl.filter((p) => ps.includes(p.place)).sort((a, b) => a.seat - b.seat)[0]?.place ?? null;
+  }
+  async founderState(keys: string[]) {
+    const place = this.placeOf(keys);
+    return { taken: this.founderPlacesTbl.length, place, used: place ? this.founderBuys.filter((b) => b.place === place).length : 0 };
+  }
+  async claimFounder(c: FounderClaim): Promise<FounderClaimResult> {
+    if (this.founderBuys.some((b) => b.paid_tx === c.paid_tx)) return { ok: false, reason: "duplicate_payment" };
+    let place = this.placeOf(c.keys), fresh = false;
+    if (!place) {
+      const m = Math.max(0, ...this.founderPlacesTbl.map((p) => p.seat));
+      if (m >= c.seats) return { ok: false, reason: "founder_offer_full" };
+      place = `fpl_${c.plan_id}`;
+      this.founderPlacesTbl.push({ place, seat: m + 1, enrollment_id: c.enrollment_id, created_at: c.t });
+      fresh = true;
+    }
+    for (const k of c.keys) if (!this.founderClaimsTbl.has(k)) this.founderClaimsTbl.set(k, place);
+    const n = this.founderBuys.filter((b) => b.place === place).length;
+    if (n >= c.maxPurchases) return { ok: false, reason: "founder_purchases_used", place };
+    this.founderBuys.push({ place, n: n + 1, plan_id: c.plan_id, paid_tx: c.paid_tx, created_at: c.t });
+    return { ok: true, place, seat: this.founderPlacesTbl.find((p) => p.place === place)!.seat, n: n + 1, new_place: fresh };
+  }
+  async addPackRefusal(r: PackRefusalRow) { if (!this.refusals.some((x) => x.paid_tx === r.paid_tx)) this.refusals.push({ ...r }); }
+  async packRefusals(limit: number) { return [...this.refusals].sort((a, b) => b.created_at - a.created_at).slice(0, limit); }
   async addPackJob(j: PackJobRow) {
     if (this.jobs.some((x) => x.enrollment_id === j.enrollment_id && x.endpoint === j.endpoint && x.day === j.day && x.status !== "cancelled")) return "duplicate" as const;
     this.jobs.push({ ...j });
@@ -237,6 +284,65 @@ export class D1CommerceStore implements CommerceStore {
   }
   async plansFor(id: string) { return (await this.all<any>("SELECT * FROM monitor_plans WHERE enrollment_id = ?1 ORDER BY starts_at DESC LIMIT 50", id)).map(planFrom); }
   async plansEndingAfter(t: number) { return (await this.all<any>("SELECT * FROM monitor_plans WHERE ends_at > ?1 ORDER BY ends_at LIMIT 500", t)).map(planFrom); }
+  private async d1PlaceOf(keys: string[]) {
+    if (!keys.length) return null;
+    const ph = keys.map((_, i) => `?${i + 1}`).join(",");
+    return (await this.first<{ place: string }>(`SELECT c.place AS place FROM monitor_founder_claims c JOIN monitor_founder_places p ON p.place = c.place WHERE c.key IN (${ph}) ORDER BY p.seat LIMIT 1`, ...keys))?.place ?? null;
+  }
+  async founderState(keys: string[]) {
+    const place = await this.d1PlaceOf(keys);
+    const taken = Number((await this.first<{ n: number }>("SELECT COUNT(*) AS n FROM monitor_founder_places"))?.n ?? 0);
+    const used = place ? Number((await this.first<{ n: number }>("SELECT COUNT(*) AS n FROM monitor_founder_purchases WHERE place = ?1", place))?.n ?? 0) : 0;
+    return { taken, place, used };
+  }
+  async claimFounder(c: FounderClaim): Promise<FounderClaimResult> {
+    const keys = [...new Set(c.keys)];
+    if (await this.first("SELECT 1 AS x FROM monitor_founder_purchases WHERE paid_tx = ?1", c.paid_tx)) return { ok: false, reason: "duplicate_payment" };
+    let place = await this.d1PlaceOf(keys), fresh = false;
+    if (!place) {
+      const np = `fpl_${c.plan_id}`;
+      // One transaction (D1 batch): the place row is inserted only while fewer than `seats` exist (single INSERT..SELECT,
+      // serialized by D1; UNIQUE(seat) and CHECK(seat <= 10) back it up), and every key of the company is claimed for it.
+      // A key already claimed by another place (a racing seller of the same company) fails the batch and rolls it back.
+      try {
+        await this.db.batch([
+          this.db.prepare("INSERT INTO monitor_founder_places (place, seat, enrollment_id, created_at) SELECT ?1, m + 1, ?2, ?3 FROM (SELECT COALESCE(MAX(seat), 0) AS m FROM monitor_founder_places) WHERE m < ?4").bind(np, c.enrollment_id, c.t, c.seats),
+          ...keys.map((k) => this.db.prepare("INSERT INTO monitor_founder_claims (key, place, created_at) SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM monitor_founder_places WHERE place = ?2)").bind(k, np, c.t)),
+        ]);
+      } catch (err) {
+        if (!/UNIQUE|CHECK|constraint/i.test(String(err))) throw err;
+      }
+      place = await this.d1PlaceOf(keys);
+      if (!place) return { ok: false, reason: "founder_offer_full" };
+      fresh = place === np;
+    } else if (keys.length) {
+      await this.db.batch(keys.map((k) => this.db.prepare("INSERT OR IGNORE INTO monitor_founder_claims (key, place, created_at) VALUES (?1, ?2, ?3)").bind(k, place, c.t)));
+    }
+    let changes = 0;
+    try {
+      const r = await this.run(
+        "INSERT INTO monitor_founder_purchases (place, n, plan_id, paid_tx, created_at) SELECT ?1, m + 1, ?2, ?3, ?4 FROM (SELECT COALESCE(MAX(n), 0) AS m FROM monitor_founder_purchases WHERE place = ?1) WHERE m < ?5",
+        place, c.plan_id, c.paid_tx, c.t, c.maxPurchases,
+      );
+      changes = Number(r?.meta?.changes ?? 0);
+    } catch (err) {
+      if (/UNIQUE.*paid_tx/i.test(String(err))) return { ok: false, reason: "duplicate_payment" };
+      if (/UNIQUE|CHECK|constraint/i.test(String(err))) return { ok: false, reason: "founder_purchases_used", place };
+      throw err;
+    }
+    if (!changes) return { ok: false, reason: "founder_purchases_used", place };
+    const row = await this.first<{ n: number; seat: number }>("SELECT b.n AS n, p.seat AS seat FROM monitor_founder_purchases b JOIN monitor_founder_places p ON p.place = b.place WHERE b.paid_tx = ?1", c.paid_tx);
+    return { ok: true, place, seat: Number(row?.seat ?? 0), n: Number(row?.n ?? 0), new_place: fresh };
+  }
+  async addPackRefusal(r: PackRefusalRow) {
+    await this.run(
+      "INSERT OR IGNORE INTO monitor_pack_refusals (paid_tx, enrollment_id, plan, reason, paid_network, paid_asset, paid_amount, payer, usd, is_test, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+      r.paid_tx, r.enrollment_id, r.plan, r.reason, r.paid_network, r.paid_asset, r.paid_amount, r.payer, r.usd, r.is_test ? 1 : 0, r.created_at,
+    );
+  }
+  async packRefusals(limit: number) {
+    return (await this.all<any>("SELECT * FROM monitor_pack_refusals ORDER BY created_at DESC LIMIT ?1", limit)).map((x) => ({ ...x, is_test: !!x.is_test })) as PackRefusalRow[];
+  }
   async addPackJob(j: PackJobRow) {
     try {
       await this.run(

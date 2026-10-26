@@ -7,12 +7,19 @@ import { canonicalJson, json, requirePayment, assetLabel, paymentRequiredRespons
 import { verifyXrplSignature, xrplAddressOf } from "../trust/verify";
 import { explorerFor, registrableDomain } from "../trust/catalog";
 import { sendPlainEmail } from "../sales";
-import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, SOLD_MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, isPack, PACK_LIMITS, PACK_PLANS, usd2, type PlanId, type WatchTier } from "./plans";
-import { MONITOR_METHODOLOGY, MONITOR_SAFEGUARDS, MONITOR_TERMS, PACK_TERMS } from "./policy";
+import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, SOLD_MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, WATCH_TRIAL_END, PAID_BADGE_LABEL, PACK_BADGE_LABEL, TRIAL_BADGE_LABEL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, isPack, PACK_LIMITS, PACK_PLANS, usd2, type PlanId, type WatchTier } from "./plans";
+import { FOUNDER_RACE_TEXT, MONITOR_METHODOLOGY, MONITOR_SAFEGUARDS, MONITOR_TERMS, PACK_TERMS } from "./policy";
+const CONTACT_EMAIL = "hello@lumitrades.io";
 import { makeChallenge, verifyProof } from "./proof";
+import { BADGE_LAPSE_MS, COUNTING, countBuys, countedSummary, type CountedBuy } from "./counting";
+import type { BuyRow } from "../trust/catalog";
 import { NO_STORE, acceptAsset, acceptUsd, bad, bearer, parse402, readJson, safeEmail, safeHttpsUrl, type CommerceDeps, type WaitUntil } from "./common";
 import type { EndpointChain, Enrollment, FindingRow, MonitorEndpoint, PackJobRow, PlanRow, RunRow, UptimeRow } from "./store";
 
+/** Company keys for the Founder offer: the payTo plus every registrable domain the enrolment uses. Enrolments sharing any key are one company. */
+export function founderCompanyKeys(x: Enrollment): Set<string> {
+  return new Set([`pay:${x.pay_to_lc}`, ...[x.domain, ...x.endpoints.map((ep) => { try { return new URL(ep.url).hostname; } catch { return null; } })].filter((d): d is string => !!d).map((d) => registrableDomain(d) ?? d.toLowerCase()).map((d) => `dom:${d}`)]);
+}
 const ENROLL_ID_RE = /^men_[a-f0-9]{24}$/;
 const OK_OUTCOMES = new Set(["delivered"]);
 /** Plans whose rows earn a badge and run test-buys over a term (Audit is one-off; the free tier has neither). */
@@ -149,21 +156,42 @@ const badgeFreshMs = (plan: string) => watchTier(plan)?.badgeFreshMs ?? MONITOR_
 /** Paid tiers outrank the trial for which row the badge reports. */
 const tierRank = (plan: string) => ({ watch_pro: 6, watch_plus: 5, watch_plus_founder: 5, monitor_plus: 4, watch: 3, monitor: 2, watch_plus_trial: 1 } as Record<string, number>)[plan] ?? 0;
 
-export function badgeStatus(e: Enrollment, plans: PlanRow[], runs: RunRow[], now: number) {
-  const active = plans.filter((p) => MONITORING.has(p.plan) && p.starts_at <= now && now < p.ends_at).sort((a, b) => tierRank(b.plan) - tierRank(a.plan))[0];
+/**
+ * The seller-monitoring badge (adopted rules 2026-10-25, see counting.ts): seller-paid runs (plans and packs) and Lumi's
+ * baseline buys are pooled; at most one counted buy per endpoint per UTC day (first wins, baseline first on a tie);
+ * failures count like successes (the latest counted result per endpoint decides); the badge is dated with the last
+ * delivered counted buy and lapses when that is older than the tier window, never more than 30 days.
+ */
+export function badgeStatus(e: Enrollment, plans: PlanRow[], runs: RunRow[], now: number, baseline: BuyRow[] = []) {
+  const live = (p: PlanRow) => p.starts_at <= now && now < p.ends_at;
+  const active = plans.filter((p) => MONITORING.has(p.plan) && live(p)).sort((a, b) => tierRank(b.plan) - tierRank(a.plan))[0]
+    ?? plans.filter((p) => isPack(p.plan) && !p.is_test && live(p)).sort((a, b) => b.ends_at - a.ends_at)[0]
+    ?? plans.filter((p) => isPack(p.plan) && live(p))[0];
   if (!active) {
-    if (plans.some((p) => p.plan === "watch_free" && p.starts_at <= now && now < p.ends_at)) return { ok: false as const, reason: "free_tier_no_badge" };
-    return { ok: false as const, reason: plans.some((p) => MONITORING.has(p.plan)) ? (plans.some((p) => MONITORING.has(p.plan) && p.plan !== "watch_plus_trial") ? "plan_lapsed" : "trial_ended") : "no_monitoring_plan" };
+    if (plans.some((p) => p.plan === "watch_free" && live(p))) return { ok: false as const, reason: "free_tier_no_badge" };
+    const had = plans.filter((p) => MONITORING.has(p.plan) || isPack(p.plan));
+    return { ok: false as const, reason: had.length ? (had.some((p) => p.plan !== "watch_plus_trial") ? "plan_lapsed" : "trial_ended") : "no_monitoring_plan" };
   }
   const eps = planEndpoints(e, active.plan, active.endpoints).map((x) => x.url);
-  const latest = eps.map((u) => runs.find((r) => r.endpoint === u && r.outcome !== "skipped"));
-  const seen = latest.filter((x): x is RunRow => !!x);
+  const buys = countBuys(runs, baseline, eps);
+  const { latest, lastDelivered } = countedSummary(buys, eps);
+  const seen = latest.filter((x): x is CountedBuy => !!x);
   if (!seen.length) return { ok: false as const, reason: "no_test_yet", plan: active };
-  const last = Math.max(...seen.map((r) => r.ts));
-  if (seen.some((r) => failed(r))) return { ok: false as const, reason: "monitoring_failed", plan: active, last_test: last };
-  if (now - last > badgeFreshMs(active.plan)) return { ok: false as const, reason: "no_recent_test", plan: active, last_test: last };
+  const lastAny = Math.max(...seen.map((b) => b.ts));
+  if (seen.some((b) => !b.delivered)) return { ok: false as const, reason: "monitoring_failed", plan: active, last_test: lastDelivered ?? lastAny };
+  const windowMs = isPack(active.plan) ? BADGE_LAPSE_MS : Math.min(badgeFreshMs(active.plan) || BADGE_LAPSE_MS, BADGE_LAPSE_MS);
+  const last = lastDelivered!;
+  if (now - last > windowMs) return { ok: false as const, reason: "no_recent_test", plan: active, last_test: last };
   return { ok: true as const, plan: active, last_test: last, result: seen.length < eps.length ? "pass (partial)" : "pass" };
 }
+
+/** Public wording of the counting rules (seller page, docs). */
+export const COUNTING_TEXT = {
+  rule: `At most ${COUNTING.perEndpointPerUtcDay} counted test-buy per endpoint per UTC day: Lumi's own baseline buy or a seller-paid buy (plan or pack), whichever came first. Later buys that day are shown as history with counted:false and never change the badge.`,
+  failures: "Failures are published and counted exactly like successes; the latest counted result per endpoint decides the badge.",
+  dating: `The badge shows the date of the last delivered counted test-buy and lapses ${COUNTING.badgeLapseDays} days after it (sooner on tiers with a shorter window).`,
+  score: "Paying never changes a score: Lumi's trust score and the earned 'Tested by Lumi' badge read only Lumi's own baseline buys, never seller-paid runs.",
+};
 
 const REASON_TEXT: Record<string, string> = {
   plan_lapsed: "plan lapsed", no_monitoring_plan: "not monitored", no_test_yet: "no test yet", monitoring_failed: "latest test failed", no_recent_test: "no recent test",
@@ -239,7 +267,7 @@ export function createMonitor(deps: CommerceDeps) {
       }])),
       free_tier: { price_usd: "0", endpoints: WATCH_FREE.endpoints, checks: "a daily quote check", test_buys: "none", badge: false, label: WATCH_FREE.label, start: `POST ${base}/v1/monitor/free {enrollment_id} with Authorization: Bearer <management token>. One active free tier per payTo; renew each 30 days.` },
       trial: {
-        plan: "Watch Plus", days: WATCH_TRIAL.days, endpoints: WATCH_TRIAL.endpoints, test_buy_cap_usd: WATCH_TRIAL.capUsd, card_required: false, auto_converts: false,
+        plan: "Watch trial", days: WATCH_TRIAL.days, endpoints: WATCH_TRIAL.endpoints, test_buy_cap_usd: WATCH_TRIAL.capUsd, card_required: false, auto_converts: false,
         eligibility: "One per seller: a domain and a payTo can each start one trial, ever. Prove control of both in one challenge.",
         after: "History and the status page freeze (read-only) at the trial end unless a paid plan is active.",
         start: `GET ${base}/v1/monitor/trial/challenge?pay_to=<payTo>&domain=<your API domain> -> publish the domain token -> sign the message with the payTo -> POST ${base}/v1/monitor/trial {enrollment_id, message, signature, public_key?} with the management token.`,
@@ -249,7 +277,7 @@ export function createMonitor(deps: CommerceDeps) {
       steps: [
         `1. GET ${base}/v1/monitor/challenge?pay_to=<your payTo> (free): a message to sign. XRPL: sign the UTF-8 hex of the message with the payTo's master or regular key (ripple-keypairs) and send public_key. Base: EIP-191 personal_sign from the payTo (smart-contract wallets/EIP-1271 are not supported yet).`,
         `2. POST ${base}/v1/monitor/enroll {message, signature, public_key?, endpoints:[{url, method?, body?}], webhook_url?, email?} (free). Each endpoint is quote-checked: it must pay the proven payTo and cost ≤ $${MONITOR_LIMITS.maxBuyUsd} per buy, or it is rejected with the reason. Returns enrollment_id, a management token and the webhook signing secret (shown once).`,
-        `3. Pay a plan: GET ${base}/v1/monitor/subscribe/{watch|watch_pro|audit}?enrollment=<id>&endpoints=<N>&terms=<1|3> (x402), or buy a test-buy pack: GET ${base}/v1/monitor/subscribe/{retest_pack|founder_pack}?enrollment=<id> (x402, exact price). Or start the free tier / the one-time Watch Plus trial (no payment).`,
+        `3. Pay a plan: GET ${base}/v1/monitor/subscribe/{watch|watch_pro|audit}?enrollment=<id>&endpoints=<N>&terms=<1|3> (x402), or buy a test-buy pack: GET ${base}/v1/monitor/subscribe/{retest_pack|founder_pack}?enrollment=<id> (x402, exact price). Or start the free tier / the one-time Watch trial (no payment).`,
         `4. Public entry: ${base}/v1/monitor/sellers/<id>; status page: ${base}/v1/monitor/status/<id>; badge: ${base}/v1/monitor/badge/<id>.svg (or .json).`,
       ],
       alerts: {
@@ -486,8 +514,13 @@ export function createMonitor(deps: CommerceDeps) {
     if (!e) return null;
     const plans = await store.plansFor(id);
     if (!plans.length) return null; // not public until a plan is paid
-    const [runs, findings, replies] = await Promise.all([store.runsFor(id, 200), store.findingsFor(id, 100), store.repliesFor(id)]);
-    return { e, plans, runs, findings, replies };
+    const urls = e.endpoints.map((x) => x.url);
+    const [runs, findings, replies, baseline] = await Promise.all([
+      store.runsFor(id, 200), store.findingsFor(id, 100), store.repliesFor(id),
+      // Lumi's own baseline buys of these endpoints: pooled with paid runs for the one-counted-buy-per-day rule (read-only).
+      urls.length ? deps.catalogStore.buysFor(urls).catch((err) => { deps.log({ event: "monitor_baseline_read_error", error: String(err) }); return [] as BuyRow[]; }) : Promise.resolve([] as BuyRow[]),
+    ]);
+    return { e, plans, runs, findings, replies, baseline };
   }
 
   function relationshipView(e: Enrollment, plans: PlanRow[], base: string) {
@@ -514,7 +547,10 @@ export function createMonitor(deps: CommerceDeps) {
     const st = tierState(plans, now());
     // Frozen after an unpaid trial: history stops at the trial end (read-only) until the seller pays.
     const runs = st.frozen ? x.runs.filter((r) => r.ts <= st.freezeAt!) : x.runs;
-    const badge = badgeStatus(e, plans, runs, now());
+    const baseline = st.frozen ? x.baseline.filter((b) => b.ts <= st.freezeAt!) : x.baseline;
+    const badge = badgeStatus(e, plans, runs, now(), baseline);
+    const pooled = countBuys(runs, baseline);
+    const flag = new Map(pooled.filter((b) => b.run).map((b) => [b.run!, b]));
     const reports = await Promise.all(plans.filter((p) => p.plan === "audit" || p.plan === "watch_pro").map((p) => store.report(p.id)));
     return json(200, {
       kind: "lumi_monitored_seller",
@@ -529,7 +565,9 @@ export function createMonitor(deps: CommerceDeps) {
       commercial_relationship: relationshipView(e, plans, base),
       badge: { ...badgeJson(e, badge), svg: `${base}/v1/monitor/badge/${e.id}.svg`, json: `${base}/v1/monitor/badge/${e.id}.json` },
       endpoints: e.endpoints.map(epView),
-      test_buys: runs.slice(0, 30).map((r) => ({ endpoint: r.endpoint, tested_at: iso(r.ts), outcome: r.outcome, http_status: r.http_status, data_returned: r.data_returned, funding: r.funding, ...(r.network ? { network: r.network } : {}) })),
+      test_buys: runs.slice(0, 30).map((r) => { const c = flag.get(r); return { endpoint: r.endpoint, tested_at: iso(r.ts), outcome: r.outcome, http_status: r.http_status, data_returned: r.data_returned, funding: r.funding, ...(r.network ? { network: r.network } : {}), counted: !!c?.counted, ...(c?.not_counted_reason ? { not_counted_reason: c.not_counted_reason } : !c ? { not_counted_reason: "not_a_test_buy" } : {}) }; }),
+      lumi_baseline_buys: pooled.filter((b) => b.source === "lumi_baseline").slice(0, 30).map((b) => ({ endpoint: b.endpoint, tested_at: iso(b.ts), delivered: b.delivered, funding: "lumi", counted: b.counted, ...(b.not_counted_reason ? { not_counted_reason: b.not_counted_reason } : {}) })),
+      counting: COUNTING_TEXT,
       findings: (st.frozen ? findings.filter((f) => f.ts <= st.freezeAt!) : findings).map((f) => ({ id: f.id, at: iso(f.ts), kind: f.kind, endpoint: f.endpoint, detail: f.detail, replies: replies.filter((r) => r.finding_id === f.id).map((r) => ({ at: iso(r.ts), by: "seller", text: r.text })) })),
       audit_reports: reports.filter((r): r is NonNullable<typeof r> => !!r).map((r) => ({ plan_id: r.plan_id, kind: plans.find((p) => p.id === r.plan_id)?.plan === "watch_pro" ? "watch_pro_monthly" : "audit", signed_at: iso(r.created_at), report_hash: r.report_hash, signer: r.signer, signature: r.signature, public_key: r.public_key, signed_message: `lumi-audit-report:${r.plan_id}:${r.report_hash}`, full_report: `${base}/v1/monitor/sellers/${e.id}/report?plan_id=${r.plan_id} (management token or the seller's own copy)` })),
       evidence: "Answer-only: test-buy outcomes and dates. Tx hashes are in the seller's signed audit report and Lumi's paid trust products.",
@@ -539,7 +577,7 @@ export function createMonitor(deps: CommerceDeps) {
     }, { "Cache-Control": "public, max-age=60" });
   }
 
-  const badgeLabel = (e: Enrollment, plan: string) => (e.is_test ? TEST_BADGE_LABEL : plan === "watch_plus_trial" ? TRIAL_BADGE_LABEL : PAID_BADGE_LABEL);
+  const badgeLabel = (e: Enrollment, plan: string) => (e.is_test ? TEST_BADGE_LABEL : plan === "watch_plus_trial" ? TRIAL_BADGE_LABEL : isPack(plan) ? PACK_BADGE_LABEL : PAID_BADGE_LABEL);
 
   function badgeJson(e: Enrollment, b: ReturnType<typeof badgeStatus>) {
     if (b.ok) return { status: "monitored", label: badgeLabel(e, b.plan.plan), paid: !e.is_test && !UNPAID.has(b.plan.plan), last_test: iso(b.last_test), result: b.result, plan: b.plan.plan, ...(b.plan.plan === "watch_plus_trial" ? { trial: true } : {}), ...(e.is_test ? { test: true } : {}) };
@@ -553,7 +591,7 @@ export function createMonitor(deps: CommerceDeps) {
       if (fmt === "json") return json(404, { status: "unknown", detail: "No monitored seller with this id." }, hdr);
       return new Response(badgeSvg("Lumi monitoring", "unknown seller", false), { status: 404, headers: { ...hdr, "Content-Type": "image/svg+xml" } });
     }
-    const b = badgeStatus(x.e, x.plans, x.runs, now());
+    const b = badgeStatus(x.e, x.plans, x.runs, now(), x.baseline);
     const j = { ...badgeJson(x.e, b), enrollment_id: id, seller_page: `${base}/v1/monitor/sellers/${id}`, live: true, note: "Computed on every request: removed automatically when a test fails, no recent test exists, or the plan lapses." };
     if (fmt === "json") return json(200, j, hdr);
     const right = b.ok ? `last test ${iso(b.last_test)!.slice(0, 10)} · ${b.result}${x.e.is_test ? " · test" : ""}` : `badge removed: ${REASON_TEXT[b.reason]}`;
@@ -986,7 +1024,7 @@ export function createMonitor(deps: CommerceDeps) {
     if (!c) return bad("invalid_pay_to_or_domain", "pay_to must be an XRPL r-address or Base 0x address; domain a hostname.");
     const token = await domainToken(registrable(domain)!, c.address.toLowerCase());
     return json(200, {
-      ...c, trial: { plan: "Watch Plus", days: WATCH_TRIAL.days, endpoints: WATCH_TRIAL.endpoints, test_buy_cap_usd: WATCH_TRIAL.capUsd, card_required: false, auto_converts: false },
+      ...c, trial: { plan: "Watch trial", days: WATCH_TRIAL.days, endpoints: WATCH_TRIAL.endpoints, test_buy_cap_usd: WATCH_TRIAL.capUsd, card_required: false, auto_converts: false },
       prove_domain: {
         token, either: [`https://${domain}/.well-known/lumi-monitor.txt containing the line: lumi-monitor-verify=${token}`, `DNS TXT record _lumi-monitor.${registrable(domain)} = "lumi-monitor-verify=${token}"`],
       },
@@ -1177,21 +1215,11 @@ export function createMonitor(deps: CommerceDeps) {
 
   const utcDay = (t: number) => new Date(t).toISOString().slice(0, 10);
   /** Company keys: the payTo wallet and the registrable domain of the enrolled domain and of every endpoint host. */
-  const companyKeys = (x: Enrollment) => new Set([`pay:${x.pay_to_lc}`, ...[x.domain, ...x.endpoints.map((ep) => { try { return new URL(ep.url).hostname; } catch { return null; } })].filter((d): d is string => !!d).map((d) => registrableDomain(d) ?? d.toLowerCase()).map((d) => `dom:${d}`)]);
-  /** Founder places: non-test holders merged into one place per company (any shared key). `used` = purchases by e's company. */
-  async function founderPlaces(plan: PlanId, e: Enrollment | null) {
-    const holders = await store.founderHolders(plan);
-    const places: { keys: Set<string>; n: number }[] = [];
-    for (const h of holders) {
-      const he = e && h.enrollment_id === e.id ? e : await store.enrollment(h.enrollment_id);
-      const hk = he ? companyKeys(he) : new Set([`id:${h.enrollment_id}`]);
-      const hit = places.filter((p) => [...hk].some((k) => p.keys.has(k)));
-      for (const p of hit) places.splice(places.indexOf(p), 1);
-      places.push({ keys: new Set([...hk, ...hit.flatMap((p) => [...p.keys])]), n: h.terms + hit.reduce((n, p) => n + p.n, 0) });
-    }
-    const mine = e ? companyKeys(e) : new Set<string>();
-    const ours = places.filter((p) => [...p.keys].some((k) => mine.has(k)));
-    return { taken: places.length, holdsPlace: ours.length > 0, used: ours.reduce((n, p) => n + p.n, 0) };
+  /** Founder places, read from the claim tables written atomically at settlement (migration 0030): places taken, whether
+   *  e's company (any shared payTo / domain key) holds one, and how many Founder packs that place has bought. */
+  async function founderPlaces(_plan: PlanId, e: Enrollment | null) {
+    const st = await store.founderState(e ? [...founderCompanyKeys(e)] : []);
+    return { taken: st.taken, holdsPlace: !!st.place, used: st.used };
   }
   /** The endpoint a pack job buys: the one asked for (must be an enrolled seller endpoint within the cap) or the first eligible. */
   function pickPackEndpoint(e: Enrollment, want: string | null): { ok: true; ep: MonitorEndpoint } | { ok: false; res: Response } {
@@ -1293,6 +1321,25 @@ export function createMonitor(deps: CommerceDeps) {
         paid_amount: String(req.amount), payer: s.payer ?? null, usd: Number(usd), budget_usd: Math.round(k.buys * PACK_LIMITS.maxBuyUsd * 1e6) / 1e6, spent_usd: 0,
         is_test: e.is_test, reminded: 0, created_at: t, credits: k.buys,
       };
+      // Founder pack: the place and the purchase number are claimed atomically HERE, at settlement (the pre-payment check
+      // above can be overtaken by a racing buyer). A payment that loses the race is recorded for manual review, no credit.
+      if (k.founder && !e.is_test) {
+        const c = await store.claimFounder({ keys: [...founderCompanyKeys(e)], enrollment_id: e.id, plan_id: row.id, paid_tx: tx, t, seats: k.founder.seats, maxPurchases: k.founder.maxPurchases });
+        if (!c.ok && c.reason !== "duplicate_payment") {
+          await store.addPackRefusal({ paid_tx: tx, enrollment_id: e.id, plan, reason: c.reason, paid_network: s.network, paid_asset: assetLabel(req), paid_amount: String(req.amount), payer: s.payer ?? null, usd: Number(usd), is_test: e.is_test, created_at: t })
+            .catch((err) => deps.log({ event: "monitor_pack_refusal_error", error: String(err) }));
+          deps.log({ event: "monitor_pack_refused_at_settlement", plan, enrollment: e.id, reason: c.reason, tx });
+          return json(409, {
+            error: c.reason === "founder_offer_full" ? "founder_offer_full_at_settlement" : "founder_purchases_used_at_settlement",
+            plan, paid: true, credited: false, tx, network: s.network, enrollment_id: e.id,
+            detail: c.reason === "founder_offer_full"
+              ? `Your payment settled, but the last of the ${k.founder.seats} Founder places was taken by another seller while it was settling. No pack was added and no test-buys were queued.`
+              : `Your payment settled, but your company had already used its ${k.founder.maxPurchases} Founder pack purchases (another purchase settled first). No pack was added and no test-buys were queued.`,
+            what_happens_next: FOUNDER_RACE_TEXT,
+            contact: CONTACT_EMAIL,
+          }, NO_STORE);
+        }
+      }
       const ins = await store.addPlan(row).catch((err) => { deps.log({ event: "monitor_pack_error", error: String(err) }); return "error" as const; });
       let job: PackJobRow | null = null, jobNote: string | null = null;
       if (ins === "inserted") {
@@ -1341,7 +1388,8 @@ export function createMonitor(deps: CommerceDeps) {
     const t = now();
     const f = await founderPlaces("founder_pack", null);
     const queued = await store.queuedPackJobs(100);
-    return json(200, { kind: "owner_monitor_packs", founder_places_taken: f.taken, founder_seats: PLANS.founder_pack.pack!.founder!.seats, queued: queued.map((j) => ({ ...jobView(j), enrollment_id: j.enrollment_id })), tasks: await packJobTasks(t), due: `${base}/v1/owner/monitor/due`, cancel: `POST ${base}/v1/owner/monitor/packs/cancel {job_id, note}` }, NO_STORE);
+    const refused = await store.packRefusals(50);
+    return json(200, { kind: "owner_monitor_packs", refused_at_settlement: refused.map((r) => ({ ...r, created_at: iso(r.created_at), note: "Paid, no credit added. Manual review: any refund or credit needs the owner's approval; nothing is refunded automatically." })), founder_places_taken: f.taken, founder_seats: PLANS.founder_pack.pack!.founder!.seats, queued: queued.map((j) => ({ ...jobView(j), enrollment_id: j.enrollment_id })), tasks: await packJobTasks(t), due: `${base}/v1/owner/monitor/due`, cancel: `POST ${base}/v1/owner/monitor/packs/cancel {job_id, note}` }, NO_STORE);
   }
 
   async function packCancel(request: Request) {
