@@ -140,14 +140,15 @@ describe("Watch pricing", () => {
       const t = WATCH_TIERS[id], chains = typeof t.chains === "number" ? t.chains : 1;
       expect(t.buysPerTerm * chains * t.maxBuyUsd, id).toBeLessThanOrEqual(Number(PLANS[id].usd) * 0.5);
     }
-    expect(MONITOR_PRICE_TEXT).toMatch(/Watch \$5.*Watch Plus \$12.*Watch Pro \$20/);
+    expect(MONITOR_PRICE_TEXT).toMatch(/Watch \$5.*Watch Pro \$20/);
+    expect(MONITOR_PRICE_TEXT).toMatch(/Re-test pack \$6\.50 for 30 test-buys.*Founder pack \$5 for 24 test-buys/);
   });
 
   it("quotes N endpoints x T terms, validates the quantity and never charges on a bad one", async () => {
     const s = setup();
-    const list = await quote(s, "/v1/monitor/subscribe/watch_plus?endpoints=10&terms=3");
+    const list = await quote(s, "/v1/monitor/subscribe/watch_pro?endpoints=10&terms=3");
     expect(list.status).toBe(402);
-    expect(Number(iou(list.body))).toBeCloseTo(288, 6); // 12 x 10 x 3 x 0.8: volume only, prepay not stacked
+    expect(Number(iou(list.body))).toBeCloseTo(480, 6); // 20 x 10 x 3 x 0.8: volume only, prepay not stacked
     const e = await enroll(s);
     expect(e.pay.watch).toContain("&endpoints=1");
     const q = await quote(s, `/v1/monitor/subscribe/watch?enrollment=${e.enrollment_id}&endpoints=1`);
@@ -363,9 +364,9 @@ describe("uptime rollups and status page", () => {
 });
 
 describe("independence: no tier changes a score", () => {
-  it("trust answers are identical before and after free, trial, Watch, Watch Plus, Watch Pro and Audit", async () => {
+  it("trust answers are identical before and after free, trial, Watch, Watch Pro, Audit and a test-buy pack", async () => {
     const strip = (x: any) => JSON.parse(JSON.stringify(x, (k, v) => (k === "commercial_relationship" || k === "generated_at" || k === "as_of" ? undefined : v)));
-    for (const tier of ["watch_free", "watch_plus_trial", "watch", "watch_plus", "watch_pro", "audit"]) {
+    for (const tier of ["watch_free", "watch_plus_trial", "watch", "watch_pro", "audit", "retest_pack"]) {
       const s = setup({ SALES_TEST_WALLETS: SELLER });
       const before = await (await s.req(`/v1/trust/vendors?payTo=${SELLER}`)).json();
       const catBefore = await (await s.req("/v1/trust/catalog")).json();

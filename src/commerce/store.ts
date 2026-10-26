@@ -14,6 +14,13 @@ export interface PlanRow {
   payer: string | null; usd: number | null; budget_usd: number; spent_usd: number; is_test: boolean; reminded: number; created_at: number;
   /** Watch tiers: endpoints covered and per-endpoint list price (migration 0025). Null/absent on legacy rows. */
   endpoints?: number | null; unit_usd?: number | null;
+  /** Test-buy packs: test-buys bought with this row (migration 0030). Null/absent on every other plan. */
+  credits?: number | null;
+}
+/** One queued test-buy from a pack, fulfilled by hand / the operator box runner (migration 0030). One live job per endpoint per UTC day. */
+export interface PackJobRow {
+  id: string; plan_id: string; enrollment_id: string; endpoint: string; day: string; status: "queued" | "done" | "cancelled";
+  run_id: number | null; note: string | null; created_at: number; updated_at: number;
 }
 export interface TrialRow { id: string; enrollment_id: string; plan_id: string; domain_lc: string; pay_to_lc: string; nonce: string; proof: string; created_at: number }
 export interface UptimeRow {
@@ -44,9 +51,14 @@ export interface CommerceStore {
   enrollments(limit: number): Promise<Enrollment[]>;
   addPlan(p: PlanRow): Promise<"inserted" | "duplicate">;
   plansFor(enrollmentId: string): Promise<PlanRow[]>;
-  /** Distinct non-test enrolments that ever bought `plan` (founder seat count). */
-  /** Non-test enrolments holding a founder plan, with the terms each has bought (places are grouped per payTo and per domain by the caller). */
+  /** Non-test enrolments that bought `plan` (e.g. the founder pack), with how many times each bought it (places are grouped per payTo and per domain by the caller). */
   founderHolders(plan: string): Promise<{ enrollment_id: string; terms: number }[]>;
+  /** Pack fulfilment queue. "duplicate" when that endpoint already has a live (not cancelled) job that UTC day. */
+  addPackJob(j: PackJobRow): Promise<"inserted" | "duplicate">;
+  packJob(id: string): Promise<PackJobRow | null>;
+  packJobsFor(enrollmentId: string): Promise<PackJobRow[]>;
+  queuedPackJobs(limit: number): Promise<PackJobRow[]>;
+  setPackJob(id: string, patch: { status: PackJobRow["status"]; run_id?: number | null; note?: string | null; updated_at: number }): Promise<void>;
   plansEndingAfter(t: number): Promise<PlanRow[]>;
   setReminded(planId: string, n: number): Promise<void>;
   addSpent(planId: string, usd: number): Promise<void>;
@@ -101,6 +113,19 @@ export class MemoryCommerceStore implements CommerceStore {
   changes: ChangeRow[] = [];
   trials: TrialRow[] = [];
   uptime = new Map<string, UptimeRow>();
+  jobs: PackJobRow[] = [];
+  async addPackJob(j: PackJobRow) {
+    if (this.jobs.some((x) => x.enrollment_id === j.enrollment_id && x.endpoint === j.endpoint && x.day === j.day && x.status !== "cancelled")) return "duplicate" as const;
+    this.jobs.push({ ...j });
+    return "inserted" as const;
+  }
+  async packJob(id: string) { const j = this.jobs.find((x) => x.id === id); return j ? { ...j } : null; }
+  async packJobsFor(id: string) { return this.jobs.filter((x) => x.enrollment_id === id).sort((a, b) => b.created_at - a.created_at).map((x) => ({ ...x })); }
+  async queuedPackJobs(limit: number) { return this.jobs.filter((x) => x.status === "queued").sort((a, b) => a.created_at - b.created_at).slice(0, limit).map((x) => ({ ...x })); }
+  async setPackJob(id: string, patch: { status: PackJobRow["status"]; run_id?: number | null; note?: string | null; updated_at: number }) {
+    const j = this.jobs.find((x) => x.id === id);
+    if (j) Object.assign(j, Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined)));
+  }
   async addTrial(t: TrialRow) {
     if (this.trials.some((x) => x.domain_lc === t.domain_lc || x.pay_to_lc === t.pay_to_lc || x.nonce === t.nonce)) return "taken" as const;
     this.trials.push({ ...t });
@@ -199,9 +224,10 @@ export class D1CommerceStore implements CommerceStore {
   async enrollments(limit: number) { return (await this.all<any>("SELECT * FROM monitor_enrollments ORDER BY created_at DESC LIMIT ?1", limit)).map(enrollFrom); }
   async addPlan(p: PlanRow) {
     const r = await this.run(
-      `INSERT OR IGNORE INTO monitor_plans (id, enrollment_id, plan, starts_at, ends_at, paid_tx, paid_network, paid_asset, paid_amount, payer, usd, budget_usd, spent_usd, is_test, reminded, created_at, endpoints, unit_usd)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)`,
+      `INSERT OR IGNORE INTO monitor_plans (id, enrollment_id, plan, starts_at, ends_at, paid_tx, paid_network, paid_asset, paid_amount, payer, usd, budget_usd, spent_usd, is_test, reminded, created_at, endpoints, unit_usd${p.credits != null ? ", credits" : ""})
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18${p.credits != null ? ",?19" : ""})`,
       p.id, p.enrollment_id, p.plan, p.starts_at, p.ends_at, p.paid_tx, p.paid_network, p.paid_asset, p.paid_amount, p.payer, p.usd, p.budget_usd, p.spent_usd, p.is_test ? 1 : 0, p.reminded, p.created_at, p.endpoints ?? null, p.unit_usd ?? null,
+      ...(p.credits != null ? [p.credits] : []),
     );
     return (r?.meta?.changes ?? 1) > 0 ? ("inserted" as const) : ("duplicate" as const);
   }
@@ -211,6 +237,24 @@ export class D1CommerceStore implements CommerceStore {
   }
   async plansFor(id: string) { return (await this.all<any>("SELECT * FROM monitor_plans WHERE enrollment_id = ?1 ORDER BY starts_at DESC LIMIT 50", id)).map(planFrom); }
   async plansEndingAfter(t: number) { return (await this.all<any>("SELECT * FROM monitor_plans WHERE ends_at > ?1 ORDER BY ends_at LIMIT 500", t)).map(planFrom); }
+  async addPackJob(j: PackJobRow) {
+    try {
+      await this.run(
+        `INSERT INTO monitor_pack_jobs (id, plan_id, enrollment_id, endpoint, day, status, run_id, note, created_at, updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)`,
+        j.id, j.plan_id, j.enrollment_id, j.endpoint, j.day, j.status, j.run_id, j.note, j.created_at, j.updated_at,
+      );
+      return "inserted" as const;
+    } catch (err) {
+      if (/UNIQUE/i.test(String(err))) return "duplicate" as const;
+      throw err;
+    }
+  }
+  async packJob(id: string) { return this.first<PackJobRow>("SELECT * FROM monitor_pack_jobs WHERE id = ?1", id); }
+  async packJobsFor(id: string) { return this.all<PackJobRow>("SELECT * FROM monitor_pack_jobs WHERE enrollment_id = ?1 ORDER BY created_at DESC LIMIT 500", id); }
+  async queuedPackJobs(limit: number) { return this.all<PackJobRow>("SELECT * FROM monitor_pack_jobs WHERE status = 'queued' ORDER BY created_at LIMIT ?1", limit); }
+  async setPackJob(id: string, patch: { status: PackJobRow["status"]; run_id?: number | null; note?: string | null; updated_at: number }) {
+    await this.run("UPDATE monitor_pack_jobs SET status = ?2, run_id = COALESCE(?3, run_id), note = COALESCE(?4, note), updated_at = ?5 WHERE id = ?1", id, patch.status, patch.run_id ?? null, patch.note ?? null, patch.updated_at);
+  }
   async setReminded(id: string, n: number) { await this.run("UPDATE monitor_plans SET reminded = ?2 WHERE id = ?1", id, n); }
   async addSpent(id: string, usd: number) { await this.run("UPDATE monitor_plans SET spent_usd = ROUND(spent_usd + ?2, 6) WHERE id = ?1", id, usd); }
   async addRun(r: RunRow) {

@@ -12,6 +12,22 @@ export const MONITOR_TERMS = {
   ],
 };
 
+/** Test-buy pack terms (Re-test pack, Founder pack), returned in the purchase response and GET /v1/monitor/packs.
+ *  Keep the numbers in sync with PLANS.retest_pack / PLANS.founder_pack / PACK_LIMITS (test/testbuy_packs.test.ts checks). */
+export const PACK_TERMS = {
+  version: "2026-10-25",
+  terms: [
+    "What you buy: a fixed number of test-buys (Re-test pack 30, Founder pack 24) for one exact price, paid once via x402. No auto-renew, no subscription.",
+    "Each test-buy is one real paid call to one of your enrolled seller endpoints whose enrolled price is at most $0.10. Endpoints above $0.10 are refused before you pay.",
+    "You choose when: the first re-test is queued when you buy; queue the rest with POST /v1/monitor/packs/use. At most one counted test-buy per endpoint per UTC day.",
+    "Expiry: unused test-buys expire 12 months after purchase.",
+    "Refunds: none, except that if Lumi stops selling test-buys, unused test-buys are refunded. A failed result on your endpoint is a delivered result and uses the test-buy. If Lumi cannot run a queued test-buy because of a fault on Lumi's side, the test-buy goes back to your pack.",
+    "Fulfilment: during the pre-sale, queued test-buys are run by hand from Lumi's operator box (no guaranteed turnaround). Every result is dated, kept with a receipt signed by the paying wallet, and published on your seller page like any other result, failures included.",
+    "Founder pack: first 10 sellers only, one place per company (enrolments sharing a payTo wallet or a domain count as one company), up to 12 purchases per company at $5 each.",
+    "Paying never changes a score, tier or label, and Lumi's own baseline test-buys continue for every seller, paying or not.",
+  ],
+};
+
 export const MONITOR_SAFEGUARDS = [
   "Paying never changes a score, tier or label. The scoring and catalog code does not read monitoring tables; a monitored seller is checked exactly like everyone else.",
   "Seller-funded test-buys are labelled funding: 'seller-funded' everywhere they appear; Lumi's own independent checks stay separate.",
@@ -33,7 +49,7 @@ export const MONITOR_METHODOLOGY = {
     "schema_changed: the structure (keys and types) of the paid response changed",
     "recovered: a previously failing endpoint delivers again",
   ],
-  cadence: { watch: "per endpoint: hourly quote checks, a weekly test-buy", watch_plus: "per endpoint: quote checks every 30 min, a daily test-buy rotating across the chains it accepts", watch_plus_founder: "same as Watch Plus (founder price for the first 10 sellers, kept for 12 terms; full Watch Plus test-buy budget)", watch_pro: "per endpoint: quote checks every 15 min, daily buys on up to 3 chains, limited by the test-buy budget, a monthly signed report", watch_free: "1 endpoint, a daily quote check, no test-buys", watch_plus_trial: "14 days of Watch Plus quote checks, Lumi-funded test-buys capped at $0.25 in total. On day 14 the trial ends: nothing is charged, checks and test-buys stop, the Monitored badge comes off, and history freezes read-only. It never converts to a paid plan.", legacy_monitor_terms: "Monitor and Monitor Plus are no longer sold (retired 2026-10-25); terms bought before then run to their end at their original cadence", audit: "one-off: every listed endpoint once (catalog listings for the payTo + endpoints the seller names)" },
+  cadence: { watch: "per endpoint: hourly quote checks, a weekly test-buy", legacy_watch_plus_terms: "Watch Plus and its founder offer are no longer sold (replaced by the test-buy packs on 2026-10-25); terms bought before then run to their end (quote checks every 30 min, a daily test-buy rotating across chains)", retest_pack: "30 test-buys queued by the seller (POST /v1/monitor/packs/use), one per endpoint per UTC day, valid 12 months", founder_pack: "24 test-buys queued by the seller, one per endpoint per UTC day, valid 12 months (first 10 sellers, one place per company)", watch_pro: "per endpoint: quote checks every 15 min, daily buys on up to 3 chains, limited by the test-buy budget, a monthly signed report", watch_free: "1 endpoint, a daily quote check, no test-buys", watch_plus_trial: "14 days of Watch Plus quote checks, Lumi-funded test-buys capped at $0.25 in total. On day 14 the trial ends: nothing is charged, checks and test-buys stop, the Monitored badge comes off, and history freezes read-only. It never converts to a paid plan.", legacy_monitor_terms: "Monitor and Monitor Plus are no longer sold (retired 2026-10-25); terms bought before then run to their end at their original cadence", audit: "one-off: every listed endpoint once (catalog listings for the payTo + endpoints the seller names)" },
   test_buy_cap: "Each test-buy is capped at $0.10 ($0.05 on Watch) and funded from the plan fee (the free trial is Lumi-funded, capped at $0.25 in total); planned test-buy spend must stay within 50% of the fee. Endpoints above the cap are rejected at enrolment (Audit: quote-checked only, no buy).",
   safeguards: MONITOR_SAFEGUARDS,
   terms: MONITOR_TERMS.terms,

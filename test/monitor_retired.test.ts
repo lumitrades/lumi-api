@@ -74,9 +74,10 @@ describe("Monitor ($9) and Monitor Plus ($29) retired 2026-10-25", () => {
       expect(paid.status).toBe(410);
     }
     expect(s.fac.calls).toHaveLength(0);
-    // the Watch tiers are still sold
-    expect((await quote(s, `/v1/monitor/subscribe/watch_plus?enrollment=${e.enrollment_id}&endpoints=1`)).status).toBe(402);
-    expect(Object.keys(e.pay).sort()).toEqual(["audit", "watch", "watch_plus", "watch_plus_founder", "watch_pro"]);
+    // Watch, Watch Pro, Audit and the test-buy packs are sold (Watch Plus retired 2026-10-25)
+    expect((await quote(s, `/v1/monitor/subscribe/watch?enrollment=${e.enrollment_id}&endpoints=1`)).status).toBe(402);
+    expect((await quote(s, `/v1/monitor/subscribe/watch_plus?enrollment=${e.enrollment_id}&endpoints=1`)).status).toBe(410);
+    expect(Object.keys(e.pay).sort()).toEqual(["audit", "founder_pack", "retest_pack", "watch", "watch_pro"]);
     expect(Object.keys(e.plans)).not.toContain("monitor");
     expect(Object.keys(e.plans)).not.toContain("monitor_plus");
   });

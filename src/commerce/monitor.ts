@@ -7,11 +7,11 @@ import { canonicalJson, json, requirePayment, assetLabel, paymentRequiredRespons
 import { verifyXrplSignature, xrplAddressOf } from "../trust/verify";
 import { explorerFor, registrableDomain } from "../trust/catalog";
 import { sendPlainEmail } from "../sales";
-import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, SOLD_MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, budgetBaseUsd, type PlanId, type WatchTier } from "./plans";
-import { MONITOR_METHODOLOGY, MONITOR_SAFEGUARDS, MONITOR_TERMS } from "./policy";
+import { DAY_MS, MONITOR_LIMITS, MONITOR_PLANS, SOLD_MONITOR_PLANS, PLANS, TEST_PRICE_USD, WATCH_DISCOUNTS, WATCH_FREE, WATCH_PLANS, WATCH_TIERS, WATCH_TRIAL, WATCH_TRIAL_END, PAID_BADGE_LABEL, TRIAL_BADGE_LABEL, hmacHex, iso, isTestWallet, planPriceUsd, planQuote, randHex, sha256, watchPrice, watchTier, isPack, PACK_LIMITS, PACK_PLANS, usd2, type PlanId, type WatchTier } from "./plans";
+import { MONITOR_METHODOLOGY, MONITOR_SAFEGUARDS, MONITOR_TERMS, PACK_TERMS } from "./policy";
 import { makeChallenge, verifyProof } from "./proof";
 import { NO_STORE, acceptAsset, acceptUsd, bad, bearer, parse402, readJson, safeEmail, safeHttpsUrl, type CommerceDeps, type WaitUntil } from "./common";
-import type { EndpointChain, Enrollment, FindingRow, MonitorEndpoint, PlanRow, RunRow, UptimeRow } from "./store";
+import type { EndpointChain, Enrollment, FindingRow, MonitorEndpoint, PackJobRow, PlanRow, RunRow, UptimeRow } from "./store";
 
 const ENROLL_ID_RE = /^men_[a-f0-9]{24}$/;
 const OK_OUTCOMES = new Set(["delivered"]);
@@ -30,7 +30,7 @@ const ENROLL_PER_PAYTO_PER_DAY = 5;
 /** Badge label for Lumi's own owner-flagged test enrolment (never shown as a real "Monitored by Lumi" seller). */
 export const TEST_BADGE_LABEL = "Lumi test enrolment";
 export const SELLERS_DISCLOSURE = "Sellers listed here have paid Lumi for a monitoring plan (active or past). Lumi's own test enrolments and free-tier/trial-only sellers (no payment) are excluded from this list. Paying never changes a score.";
-export const MONITOR_POST_PATHS = ["/v1/monitor/enroll", "/v1/monitor/replies", "/v1/monitor/free", "/v1/monitor/trial", "/v1/owner/monitor/results", "/v1/owner/monitor/report", "/v1/owner/monitor/uptime", "/v1/owner/corrections"];
+export const MONITOR_POST_PATHS = ["/v1/monitor/enroll", "/v1/monitor/replies", "/v1/monitor/free", "/v1/monitor/trial", "/v1/monitor/packs/use", "/v1/owner/monitor/results", "/v1/owner/monitor/packs/cancel", "/v1/owner/monitor/report", "/v1/owner/monitor/uptime", "/v1/owner/corrections"];
 
 function failed(r: RunRow | undefined) { return !!r && r.outcome !== "skipped" && r.outcome !== "quote_only" && !OK_OUTCOMES.has(r.outcome); }
 
@@ -43,6 +43,7 @@ export const defaultWatchEndpoints = (e: Enrollment) => Math.max(1, Math.min(WAT
  *  catalog listings. */
 export function planEndpoints(e: Enrollment, plan: string, n?: number | null): MonitorEndpoint[] {
   const seller = sellerEps(e);
+  if (isPack(plan)) return seller; // packs: any enrolled seller endpoint (each job names one; the per-buy cap is checked when queued)
   if (plan === "monitor") return seller.slice(0, 1);
   if (plan === "monitor_plus") return seller.slice(0, MONITOR_LIMITS.endpoints.monitor_plus);
   const tier = watchTier(plan);
@@ -81,7 +82,7 @@ export function watchEconomics(e: Enrollment, plan: PlanId, endpoints: number, t
   const spend = eps.map((ep) => watchEndpointSpend(ep, e, tier));
   const buyable = spend.filter((x) => x.buyable).length;
   const est = spend.reduce((s, x) => s + x.est, 0);
-  const budget = Math.round(budgetBaseUsd(plan, price.per_term_usd, endpoints) * MONITOR_LIMITS.budgetShare * 1e6) / 1e6;
+  const budget = Math.round(price.per_term_usd * MONITOR_LIMITS.budgetShare * 1e6) / 1e6;
   const eligible = buyable > 0 && est <= budget + 1e-9;
   return {
     price_usd: price.total_usd, price_per_endpoint_usd: PLANS[plan].usd, endpoints, terms,
@@ -100,11 +101,28 @@ export function watchEconomics(e: Enrollment, plan: PlanId, endpoints: number, t
   };
 }
 
+/** Seller endpoints a pack can test-buy: priced within the pack cap on at least one chain. */
+export const packEndpoints = (e: Enrollment) => sellerEps(e).filter((ep) => buyChains(ep, e, PACK_LIMITS.maxBuyUsd).length > 0);
+/** Pack economics shown at enrolment: exact price, buys, and whether any enrolled endpoint is within the cap. */
+export function packEconomics(e: Enrollment, id: PlanId) {
+  const k = PLANS[id].pack!;
+  const eps = packEndpoints(e);
+  const worst = eps.length ? Math.max(...eps.map((ep) => Math.min(...buyChains(ep, e, PACK_LIMITS.maxBuyUsd).map((c) => c.usd!)))) : 0;
+  return {
+    price_usd: PLANS[id].usd, test_buys: k.buys, expiry_days: k.expiryDays, max_usd_per_test_buy: PACK_LIMITS.maxBuyUsd,
+    endpoints_within_cap: eps.length, ...(sellerEps(e).length - eps.length ? { endpoints_above_cap: sellerEps(e).length - eps.length } : {}),
+    est_max_test_buy_cost_usd: Math.round(worst * k.buys * 10_000) / 10_000,
+    eligible: eps.length > 0, ...(eps.length ? {} : { reason: `No enrolled seller endpoint priced within the $${PACK_LIMITS.maxBuyUsd.toFixed(2)} per-test-buy cap.` }),
+    ...(k.founder ? { founder: { seats: k.founder.seats, max_purchases_per_company: k.founder.maxPurchases } } : {}),
+  };
+}
+
 /** Test-buy economics per plan: endpoints covered, planned spend, and whether it fits the fee (list price; Watch tiers
  *  for the default endpoint count and 1 term, or the given quantity). */
 export function planEconomics(e: Enrollment, qty: { endpoints?: number; terms?: number } = {}) {
   const out: Record<string, unknown> = {};
   for (const id of MONITOR_PLANS.filter((p) => !PLANS[p].retired)) {
+    if (PLANS[id].pack) { out[id] = packEconomics(e, id); continue; }
     if (PLANS[id].perEndpoint) { out[id] = watchEconomics(e, id, qty.endpoints ?? defaultWatchEndpoints(e), qty.terms ?? 1); continue; }
     const eps = planEndpoints(e, id);
     const buyable = eps.filter((x) => x.price_usd != null && Number(x.price_usd) <= MONITOR_LIMITS.maxBuyUsd);
@@ -154,10 +172,11 @@ const REASON_TEXT: Record<string, string> = {
 
 /** The highest tier active now (any kind, incl. free) and whether the seller's data is frozen (only ended free/trial rows). */
 export function tierState(plans: PlanRow[], now: number) {
-  const active = plans.filter((p) => p.starts_at <= now && now < p.ends_at && p.plan !== "audit");
+  // Audit and test-buy packs are not monitoring tiers (no cadence, no badge): never the "top" tier.
+  const active = plans.filter((p) => p.starts_at <= now && now < p.ends_at && p.plan !== "audit" && !isPack(p.plan));
   const top = [...active].sort((a, b) => tierRank(b.plan) - tierRank(a.plan) || (b.plan === "watch_free" ? -1 : 0))[0] ?? null;
   const paidEver = plans.some((p) => !UNPAID.has(p.plan));
-  const paidActive = active.some((p) => !UNPAID.has(p.plan)) || plans.some((p) => p.plan === "audit" && p.starts_at <= now && now < p.starts_at + 30 * DAY_MS);
+  const paidActive = active.some((p) => !UNPAID.has(p.plan)) || plans.some((p) => p.plan === "audit" && p.starts_at <= now && now < p.starts_at + 30 * DAY_MS) || plans.some((p) => isPack(p.plan) && p.starts_at <= now && now < p.ends_at);
   const trial = plans.find((p) => p.plan === "watch_plus_trial") ?? null;
   // Frozen: the trial ended, nothing paid is active and no free tier is running -> history and status stop at the trial end.
   const frozen = !!trial && trial.ends_at <= now && !paidActive && !active.length;
@@ -204,14 +223,17 @@ export function createMonitor(deps: CommerceDeps) {
         ...(PLANS[id].retired ? { retired: true } : {}),
       })),
       pricing: {
-        per_endpoint: `Watch $${PLANS.watch.usd}, Watch Plus $${PLANS.watch_plus.usd}, Watch Pro $${PLANS.watch_pro.usd} per endpoint per 30 days; price = per-endpoint price × endpoints.`,
+        per_endpoint: `Watch $${PLANS.watch.usd}, Watch Pro $${PLANS.watch_pro.usd} per endpoint per 30 days; price = per-endpoint price × endpoints.`,
         volume_discount: `${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints: -${WATCH_DISCOUNTS.volume * 100}%.`,
         prepay_discount: `Prepay ${WATCH_DISCOUNTS.prepayTerms} terms (&terms=${WATCH_DISCOUNTS.prepayTerms}): -${WATCH_DISCOUNTS.prepay * 100}%.`,
         discounts_combine: `Discounts do not stack: with ${WATCH_DISCOUNTS.volumeMinEndpoints}+ endpoints and ${WATCH_DISCOUNTS.prepayTerms} prepaid terms only the larger one applies (-${Math.max(WATCH_DISCOUNTS.volume, WATCH_DISCOUNTS.prepay) * 100}%).`,
         test_buy_budget: `Seller-funded test-buys never exceed ${MONITOR_LIMITS.budgetShare * 100}% of the fee.`,
-        example: (() => { const x = watchPrice("watch_plus", 10, 1)!; return `Watch Plus for 10 endpoints, 1 term: $${x.total_usd}.`; })(),
+        example: (() => { const x = watchPrice("watch", 10, 1)!; return `Watch for 10 endpoints, 1 term: $${x.total_usd}.`; })(),
+        test_buy_packs: `Re-test pack $${usd2(PLANS.retest_pack.usd)} for ${PLANS.retest_pack.pack!.buys} test-buys; Founder pack $${usd2(PLANS.founder_pack.usd)} for ${PLANS.founder_pack.pack!.buys} test-buys (first ${PLANS.founder_pack.pack!.founder!.seats} sellers). Exact prices, no discounts. Details: ${base}/v1/monitor/packs`,
+        retired: "Watch Plus (and its founder offer) is no longer sold since 2026-10-25; the test-buy packs replace it. Existing terms run to their end.",
       },
-      tiers: Object.fromEntries(Object.entries(WATCH_TIERS).map(([k, v]) => [k, {
+      packs: packsDoc(base),
+      tiers: Object.fromEntries(Object.entries(WATCH_TIERS).filter(([k]) => k !== "watch_plus").map(([k, v]) => [k, {
         name: v.name, quote_check_every_min: v.probeEveryMs / 60_000, test_buys: v.buysPerTerm ? (v.buyEveryMs >= 7 * DAY_MS ? "weekly" : "daily") : "none",
         max_usd_per_test_buy: v.maxBuyUsd || null, chains: v.chains, history_days: v.historyDays, badge: v.badge, schema_alerts: v.schemaAlerts, latency_p95_alerts: v.latencyAlerts, signed_monthly_report: v.signedReport,
       }])),
@@ -227,7 +249,7 @@ export function createMonitor(deps: CommerceDeps) {
       steps: [
         `1. GET ${base}/v1/monitor/challenge?pay_to=<your payTo> (free): a message to sign. XRPL: sign the UTF-8 hex of the message with the payTo's master or regular key (ripple-keypairs) and send public_key. Base: EIP-191 personal_sign from the payTo (smart-contract wallets/EIP-1271 are not supported yet).`,
         `2. POST ${base}/v1/monitor/enroll {message, signature, public_key?, endpoints:[{url, method?, body?}], webhook_url?, email?} (free). Each endpoint is quote-checked: it must pay the proven payTo and cost ≤ $${MONITOR_LIMITS.maxBuyUsd} per buy, or it is rejected with the reason. Returns enrollment_id, a management token and the webhook signing secret (shown once).`,
-        `3. Pay a plan: GET ${base}/v1/monitor/subscribe/{watch|watch_plus|watch_pro|audit}?enrollment=<id>&endpoints=<N>&terms=<1|3> (x402). Or start the free tier / the one-time Watch Plus trial (no payment).`,
+        `3. Pay a plan: GET ${base}/v1/monitor/subscribe/{watch|watch_pro|audit}?enrollment=<id>&endpoints=<N>&terms=<1|3> (x402), or buy a test-buy pack: GET ${base}/v1/monitor/subscribe/{retest_pack|founder_pack}?enrollment=<id> (x402, exact price). Or start the free tier / the one-time Watch Plus trial (no payment).`,
         `4. Public entry: ${base}/v1/monitor/sellers/<id>; status page: ${base}/v1/monitor/status/<id>; badge: ${base}/v1/monitor/badge/<id>.svg (or .json).`,
       ],
       alerts: {
@@ -386,7 +408,7 @@ export function createMonitor(deps: CommerceDeps) {
 
   async function subscribe(request: Request, url: URL, plan: PlanId, base: string, ctx?: WaitUntil) {
     const def = PLANS[plan];
-    if (def.retired) return json(410, { error: "plan_retired", plan, detail: `${def.name} is no longer sold; existing terms run to their end. Pick a Watch tier: ${base}/v1/monitor`, note: "Not charged." }, NO_STORE);
+    if (def.retired) return json(410, { error: "plan_retired", plan, detail: `${def.name} is no longer sold; existing terms run to their end. ${plan === "watch_plus" || plan === "watch_plus_founder" ? `Watch Plus was replaced by the test-buy packs (Re-test pack, Founder pack) next to Watch $${PLANS.watch.usd}: ${base}/v1/monitor/packs` : `Pick a Watch tier: ${base}/v1/monitor`}`, note: "Not charged." }, NO_STORE);
     const id = url.searchParams.get("enrollment") ?? "";
     const paid = !!(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT));
     const e = ENROLL_ID_RE.test(id) ? await store.enrollment(id) : null;
@@ -408,27 +430,7 @@ export function createMonitor(deps: CommerceDeps) {
     }
     const sx = await sanctioned("monitor_subscribe", e.pay_to, { enrollment_id: e.id });
     if (sx) return sanctionedRes(sx); // before any 402 or settlement
-    if (def.founder && !e.is_test) {
-      const f = def.founder;
-      // One place per company: enrolments sharing a payTo wallet or a domain (enrolled domain or an endpoint's registrable
-      // domain) hold one place between them, and share its locked terms.
-      const keys = (x: Enrollment) => new Set([`pay:${x.pay_to_lc}`, ...[x.domain, ...x.endpoints.map((ep) => { try { return new URL(ep.url).hostname; } catch { return null; } })].filter((d): d is string => !!d).map((d) => registrableDomain(d) ?? d.toLowerCase()).map((d) => `dom:${d}`)]);
-      const mine = keys(e);
-      const holders = await store.founderHolders(plan);
-      const places: { keys: Set<string>; terms: number }[] = []; // one entry per company holding a place
-      for (const h of holders) {
-        const he = h.enrollment_id === e.id ? e : await store.enrollment(h.enrollment_id);
-        const hk = he ? keys(he) : new Set([`id:${h.enrollment_id}`]);
-        const hit = places.filter((p) => [...hk].some((k) => p.keys.has(k)));
-        for (const p of hit) places.splice(places.indexOf(p), 1);
-        places.push({ keys: new Set([...hk, ...hit.flatMap((p) => [...p.keys])]), terms: h.terms + hit.reduce((n, p) => n + p.terms, 0) });
-      }
-      const ours = places.filter((p) => [...p.keys].some((k) => mine.has(k)));
-      const holdsPlace = ours.length > 0;
-      const used = ours.reduce((n, p) => n + p.terms, 0);
-      if (!holdsPlace && places.length >= f.seats) return json(409, { error: "founder_offer_full", plan, detail: `The founder offer is limited to the first ${f.seats} sellers and all places are taken. Watch Plus at list price: ${base}${PLANS[f.listPlan].path}?enrollment=${e.id}${qs}`, note: "Not charged." }, NO_STORE);
-      if (used + qty.terms > f.lockedTerms) return json(409, { error: "founder_terms_used", plan, detail: `The founder price is kept for ${f.lockedTerms} terms per seller (one place per payTo wallet and per domain); this seller has used ${used}. Watch Plus at list price: ${base}${PLANS[f.listPlan].path}?enrollment=${e.id}${qs}`, terms_left: Math.max(0, f.lockedTerms - used), note: "Not charged." }, NO_STORE);
-    }
+    if (def.pack) return buyPack(request, url, plan, e, base, ctx);
     const econ = (per ? watchEconomics(e, plan, qty.endpoints, qty.terms) : planEconomics(e)[plan]) as { eligible: boolean; reason?: string };
     if (!econ.eligible) return json(409, { error: "plan_not_eligible", plan, reason: econ.reason, enrollment_id: e.id, ...(per ? { endpoints: qty.endpoints, terms: qty.terms } : {}), note: "Not charged." }, NO_STORE);
     const usd = planPriceUsd(plan, e.is_test, deps.testPriceUsd, qty);
@@ -443,8 +445,7 @@ export function createMonitor(deps: CommerceDeps) {
       for (let k = 1; k <= qty.terms; k++) {
         // Watch: the fee is split evenly over the prepaid terms; each term's test-buy budget is 50% of its share.
         const termUsd = wp ? Number(usd) / qty.terms : Number(usd);
-        // Founder plans: the budget comes from the list price of the tier (full test-buys), not the founder fee.
-        const budget = wp ? Math.round(budgetBaseUsd(plan, wp.per_term_usd, qty.endpoints) * MONITOR_LIMITS.budgetShare * 1e6) / 1e6 : Number(def.usd) * MONITOR_LIMITS.budgetShare;
+        const budget = wp ? Math.round(wp.per_term_usd * MONITOR_LIMITS.budgetShare * 1e6) / 1e6 : Number(def.usd) * MONITOR_LIMITS.budgetShare;
         rows.push({
           id: `mpl_${randHex(10)}`, enrollment_id: e.id, plan, starts_at: start, ends_at: start + 30 * DAY_MS, paid_tx: k === 1 ? tx : `${tx}#${k}`,
           paid_network: s.network, paid_asset: assetLabel(req), paid_amount: k === 1 ? String(req.amount) : "0", payer: s.payer ?? null, usd: Math.round(termUsd * 1e6) / 1e6,
@@ -640,7 +641,8 @@ export function createMonitor(deps: CommerceDeps) {
   async function due(base: string) {
     const t = now();
     // The free tier has no test-buys (quote probes only: GET /v1/owner/monitor/probes).
-    const plans = (await store.plansEndingAfter(t)).filter((p) => p.starts_at <= t && p.plan !== "watch_free").slice(0, 10);
+    // Test-buy packs are not scheduled: their buys come from the seller-queued jobs listed under pack_jobs.
+    const plans = (await store.plansEndingAfter(t)).filter((p) => p.starts_at <= t && p.plan !== "watch_free" && !isPack(p.plan)).slice(0, 10);
     const tasks: Record<string, unknown>[] = [];
     const reportsDue: Record<string, unknown>[] = [];
     for (const p of plans) {
@@ -707,7 +709,10 @@ export function createMonitor(deps: CommerceDeps) {
       }
       if (tasks.length >= 25) break;
     }
-    return json(200, { kind: "monitor_due", generated_at: iso(t), tasks, ...(reportsDue.length ? { reports_due: reportsDue } : {}), post_results: `${base}/v1/owner/monitor/results` }, NO_STORE);
+    const packJobs = await packJobTasks(t);
+    return json(200, { kind: "monitor_due", generated_at: iso(t), tasks, ...(reportsDue.length ? { reports_due: reportsDue } : {}), pack_jobs: packJobs,
+      ...(packJobs.length ? { pack_jobs_how: `Run each pack job as one test-buy (preflight the 402 first; never above max_usd), then POST ${base}/v1/owner/monitor/results with plan_id, endpoint and pack_job_id. Cancel a job you cannot run (fault on Lumi's side; the buy returns to the pack): POST ${base}/v1/owner/monitor/packs/cancel {job_id, note}.` } : {}),
+      post_results: `${base}/v1/owner/monitor/results` }, NO_STORE);
   }
 
   /** XRP amounts are stored in drops; show them in XRP. */
@@ -751,7 +756,14 @@ export function createMonitor(deps: CommerceDeps) {
       if (plan.plan === "watch_free" && x.tx_hash) { out.push({ error: "free_tier_no_test_buys", plan_id: plan.id, endpoint: ep.url }); continue; }
       // A trial (or free tier) that has ended is frozen: nothing new is recorded on it.
       if (UNPAID.has(plan.plan) && (num(x.ts) ?? t) >= plan.ends_at) { out.push({ error: "plan_frozen", plan_id: plan.id, endpoint: ep.url }); continue; }
-      const cost = Math.max(0, Math.min(tier ? tier.maxBuyUsd : MONITOR_LIMITS.maxBuyUsd, num(x.cost_usd) ?? 0));
+      // Pack rows record a run only against a queued job of that pack and endpoint (one job = one counted test-buy).
+      let packJob: PackJobRow | null = null;
+      if (isPack(plan.plan)) {
+        packJob = x.pack_job_id ? await store.packJob(String(x.pack_job_id).slice(0, 40)) : null;
+        if (!packJob || packJob.plan_id !== plan.id || packJob.endpoint !== ep.url) { out.push({ error: "pack_job_required", plan_id: plan.id, endpoint: ep.url, detail: "Pack runs need the pack_job_id of a queued job for this pack and endpoint (GET /v1/owner/monitor/due -> pack_jobs)." }); continue; }
+        if (packJob.status !== "queued") { out.push({ error: "pack_job_not_queued", pack_job_id: packJob.id, status: packJob.status }); continue; }
+      }
+      const cost = Math.max(0, Math.min(tier ? tier.maxBuyUsd : isPack(plan.plan) ? PACK_LIMITS.maxBuyUsd : MONITOR_LIMITS.maxBuyUsd, num(x.cost_usd) ?? 0));
       const run: RunRow = {
         enrollment_id: c.e.id, plan_id: plan.id, endpoint: ep.url, ts: num(x.ts) ?? t, network: str(x.network, 40), tx_hash: str(x.tx_hash, 100), amount: str(x.amount, 40), asset: str(x.asset, 60),
         cost_usd: x.tx_hash ? cost : 0, http_status: num(x.http_status), data_returned: x.data_returned === true, latency_ms: num(x.latency_ms),
@@ -767,6 +779,7 @@ export function createMonitor(deps: CommerceDeps) {
       const runId = await store.addRun(run);
       run.id = runId;
       if (run.cost_usd) await store.addSpent(plan.id, run.cost_usd);
+      if (packJob) await store.setPackJob(packJob.id, { status: "done", run_id: runId, updated_at: t });
       const kinds: { kind: string; detail: string }[] = [];
       const paidNote = run.tx_hash ? "Payment settled" : "Paid retry";
       if (run.outcome === "no_data") kinds.push({ kind: "paid_no_data", detail: `${paidNote} but no data came back (HTTP ${run.http_status ?? "?"}).` });
@@ -791,7 +804,7 @@ export function createMonitor(deps: CommerceDeps) {
         alerts.push(deliver(c.e, f, base));
       }
       c.runs.unshift(run);
-      out.push({ run_id: runId, endpoint: ep.url, outcome: run.outcome, findings: kinds.map((k) => k.kind), finding_ids: fids });
+      out.push({ run_id: runId, endpoint: ep.url, outcome: run.outcome, findings: kinds.map((k) => k.kind), finding_ids: fids, ...(packJob ? { pack_job_id: packJob.id, pack_job: "done" } : {}) });
     }
     const all = Promise.allSettled(alerts);
     if (ctx) ctx.waitUntil(all); else await all;
@@ -879,7 +892,7 @@ export function createMonitor(deps: CommerceDeps) {
       if (!e) continue;
       const qs = p.endpoints ? `&endpoints=${p.endpoints}` : "";
       const name = PLANS[p.plan as PlanId]?.name ?? (p.plan === "watch_free" ? "Free Watch" : WATCH_TRIAL.label);
-      const renewUrl = p.plan === "watch_free" ? `POST ${base}/v1/monitor/free` : p.plan === "watch_plus_trial" ? `${base}${PLANS.watch_plus.path}?enrollment=${e.id}${qs}` : `${base}${PLANS[p.plan as PlanId].path}?enrollment=${e.id}${qs}`;
+      const renewUrl = p.plan === "watch_free" ? `POST ${base}/v1/monitor/free` : p.plan === "watch_plus_trial" || PLANS[p.plan as PlanId]?.retired ? `${base}${PLANS.watch.path}?enrollment=${e.id}${qs}` : `${base}${PLANS[p.plan as PlanId].path}?enrollment=${e.id}${qs}`;
       const f: FindingRow = p.plan === "watch_plus_trial"
         ? remind
           ? { enrollment_id: e.id, endpoint: null, ts: t, kind: "renewal_due", detail: `Your ${name} ends ${iso(p.ends_at)}. It never converts and nothing will be charged. To keep monitoring, pay a plan: ${renewUrl}. Otherwise history and the status page become read-only.`, run_id: null, delivered: null }
@@ -1033,14 +1046,14 @@ export function createMonitor(deps: CommerceDeps) {
       trial: true, plan: WATCH_TRIAL.label, plan_id: row.id, enrollment_id: e.id, starts_at: iso(row.starts_at), ends_at: iso(row.ends_at), price_usd: "0",
       endpoints: planEndpoints(e, "watch_plus_trial", row.endpoints).map(epView), test_buy_cap_usd: WATCH_TRIAL.capUsd, funding: "lumi-funded (free trial)",
       card_required: false, auto_converts: false, after: "At the end, history and the status page freeze (read-only) unless you pay a plan. Nothing is charged.",
-      status_page: `${base}/v1/monitor/status/${e.id}`, keep_it: `${base}${PLANS.watch_plus.path}?enrollment=${e.id}&endpoints=${row.endpoints}`,
+      status_page: `${base}/v1/monitor/status/${e.id}`, keep_it: `${base}${PLANS.watch.path}?enrollment=${e.id}&endpoints=${row.endpoints}`,
     }, NO_STORE);
   }
 
   /** Box-side probe targets: every active plan's endpoints with the tier's cadence. Read-only (zero writes). */
   async function probes(base: string) {
     const t = now();
-    const plans = (await store.plansEndingAfter(t)).filter((p) => p.starts_at <= t && p.plan !== "audit").slice(0, 200);
+    const plans = (await store.plansEndingAfter(t)).filter((p) => p.starts_at <= t && p.plan !== "audit" && !isPack(p.plan)).slice(0, 200);
     const targets = new Map<string, { enrollment_id: string; endpoint: string; method: string; body?: Record<string, unknown>; every_ms: number; plan: string; network: string; pay_to: string }>();
     for (const p of plans) {
       const e = await store.enrollment(p.enrollment_id);
@@ -1160,6 +1173,186 @@ export function createMonitor(deps: CommerceDeps) {
     return new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8", ...hdr } });
   }
 
+  // ---------------- test-buy packs (Re-test pack, Founder pack): x402 purchase, credit balance, manual fulfilment queue
+
+  const utcDay = (t: number) => new Date(t).toISOString().slice(0, 10);
+  /** Company keys: the payTo wallet and the registrable domain of the enrolled domain and of every endpoint host. */
+  const companyKeys = (x: Enrollment) => new Set([`pay:${x.pay_to_lc}`, ...[x.domain, ...x.endpoints.map((ep) => { try { return new URL(ep.url).hostname; } catch { return null; } })].filter((d): d is string => !!d).map((d) => registrableDomain(d) ?? d.toLowerCase()).map((d) => `dom:${d}`)]);
+  /** Founder places: non-test holders merged into one place per company (any shared key). `used` = purchases by e's company. */
+  async function founderPlaces(plan: PlanId, e: Enrollment | null) {
+    const holders = await store.founderHolders(plan);
+    const places: { keys: Set<string>; n: number }[] = [];
+    for (const h of holders) {
+      const he = e && h.enrollment_id === e.id ? e : await store.enrollment(h.enrollment_id);
+      const hk = he ? companyKeys(he) : new Set([`id:${h.enrollment_id}`]);
+      const hit = places.filter((p) => [...hk].some((k) => p.keys.has(k)));
+      for (const p of hit) places.splice(places.indexOf(p), 1);
+      places.push({ keys: new Set([...hk, ...hit.flatMap((p) => [...p.keys])]), n: h.terms + hit.reduce((n, p) => n + p.n, 0) });
+    }
+    const mine = e ? companyKeys(e) : new Set<string>();
+    const ours = places.filter((p) => [...p.keys].some((k) => mine.has(k)));
+    return { taken: places.length, holdsPlace: ours.length > 0, used: ours.reduce((n, p) => n + p.n, 0) };
+  }
+  /** The endpoint a pack job buys: the one asked for (must be an enrolled seller endpoint within the cap) or the first eligible. */
+  function pickPackEndpoint(e: Enrollment, want: string | null): { ok: true; ep: MonitorEndpoint } | { ok: false; res: Response } {
+    const eps = packEndpoints(e);
+    if (want) {
+      const ep = sellerEps(e).find((x) => x.url === want);
+      if (!ep) return { ok: false, res: json(409, { error: "endpoint_not_enrolled", endpoint: want.slice(0, 300), detail: "Name one of the seller endpoints of this enrolment (enrol it first).", note: "Not charged." }, NO_STORE) };
+      if (!eps.includes(ep)) return { ok: false, res: json(409, { error: "endpoint_above_cap", endpoint: ep.url, listed_price_usd: ep.price_usd, detail: `Pack test-buys are capped at $${PACK_LIMITS.maxBuyUsd.toFixed(2)} per buy; this endpoint's enrolled price is above it (or unpriced).`, note: "Not charged." }, NO_STORE) };
+      return { ok: true, ep };
+    }
+    if (!eps.length) return { ok: false, res: json(409, { error: "no_endpoint_within_cap", detail: `No enrolled seller endpoint is priced at or below $${PACK_LIMITS.maxBuyUsd.toFixed(2)}, so a pack could not be used.`, note: "Not charged." }, NO_STORE) };
+    return { ok: true, ep: eps[0] };
+  }
+  async function packBalance(e: Enrollment, t: number) {
+    const rows = (await store.plansFor(e.id)).filter((p) => isPack(p.plan));
+    const jobs = await store.packJobsFor(e.id);
+    const packs = rows.map((p) => {
+      const total = p.credits ?? PLANS[p.plan as PlanId].pack!.buys;
+      const used = jobs.filter((j) => j.plan_id === p.id && j.status !== "cancelled").length;
+      const expired = t >= p.ends_at;
+      return { pack_id: p.id, pack: p.plan, name: PLANS[p.plan as PlanId].name, bought_at: iso(p.created_at), expires_at: iso(p.ends_at), test_buys: total, used, left: expired ? 0 : Math.max(0, total - used), ...(expired ? { expired: true } : {}), ...(p.is_test ? { test: true } : {}), _row: p };
+    });
+    return { packs, left: packs.reduce((n, p) => n + p.left, 0), jobs };
+  }
+  const packView = (p: { _row: PlanRow } & Record<string, unknown>) => { const { _row, ...v } = p; return v; };
+  const jobView = (j: PackJobRow) => ({ job_id: j.id, pack_id: j.plan_id, endpoint: j.endpoint, day: j.day, status: j.status, ...(j.run_id ? { run_id: j.run_id } : {}), ...(j.note ? { note: j.note } : {}), queued_at: iso(j.created_at) });
+  /** Queue one test-buy from the pack that expires first and still has buys left. */
+  async function queuePackJob(e: Enrollment, ep: MonitorEndpoint, t: number, only?: string): Promise<{ ok: true; job: PackJobRow } | { ok: false; error: string; detail: string }> {
+    const bal = await packBalance(e, t);
+    const pick = bal.packs.filter((p) => p.left > 0 && (!only || p.pack_id === only)).sort((a, b) => a._row.ends_at - b._row.ends_at)[0];
+    if (!pick) return { ok: false, error: "no_pack_balance", detail: `No unexpired pack with test-buys left. Buy one: GET /v1/monitor/subscribe/retest_pack?enrollment=${e.id}` };
+    const job: PackJobRow = { id: `mpj_${randHex(10)}`, plan_id: pick.pack_id, enrollment_id: e.id, endpoint: ep.url, day: utcDay(t), status: "queued", run_id: null, note: null, created_at: t, updated_at: t };
+    if ((await store.addPackJob(job)) === "duplicate") return { ok: false, error: "already_queued_today", detail: `This endpoint already has a test-buy queued or run today (${job.day} UTC). One counted test-buy per endpoint per day; try again tomorrow or pick another endpoint.` };
+    return { ok: true, job };
+  }
+
+  function packsDoc(base: string) {
+    return {
+      packs: PACK_PLANS.map((id) => {
+        const p = PLANS[id], k = p.pack!;
+        return { plan: id, name: p.name, price_usd: p.usd, checkout_usd: usd2(p.usd), test_buys: k.buys, expiry_days: k.expiryDays, max_usd_per_test_buy: PACK_LIMITS.maxBuyUsd,
+          ...(id === "retest_pack" ? { pitch: "Fixed something? Get re-tested now." } : {}),
+          ...(k.founder ? { founder: { seats: k.founder.seats, one_place_per_company: "enrolments sharing a payTo wallet or a registrable domain", max_purchases_per_company: k.founder.maxPurchases } } : {}),
+          buy: `${base}${p.path}?enrollment=<enrollment_id>[&endpoint=<enrolled endpoint URL>]`, summary: p.summary };
+      }),
+      use: `POST ${base}/v1/monitor/packs/use {enrollment_id, endpoint?} with Authorization: Bearer <management token>: queues one test-buy (one per endpoint per UTC day).`,
+      balance: `GET ${base}/v1/monitor/packs?enrollment=<id> with Authorization: Bearer <management token>.`,
+      single_test_buy: { status: "coming_soon", detail: "A single paid test-buy without a pack is not sold yet; no price is published until its checkout is live." },
+      terms: PACK_TERMS,
+    };
+  }
+
+  async function packsGet(request: Request, url: URL, base: string) {
+    const t = now();
+    const f = await founderPlaces("founder_pack", null);
+    const pub = { kind: "lumi_testbuy_packs", ...packsDoc(base), founder_places_left: Math.max(0, PLANS.founder_pack.pack!.founder!.seats - f.taken), docs: `${base}/v1/monitor` };
+    const id = url.searchParams.get("enrollment");
+    if (!id) return json(200, pub, { "Cache-Control": "public, max-age=60" });
+    if (!bearer(request)) return json(401, { error: "management_token_required", hint: "Authorization: Bearer <management token from enrolment>" }, { ...NO_STORE, "WWW-Authenticate": "Bearer" });
+    const e = ENROLL_ID_RE.test(id) ? await store.enrollment(id) : null;
+    if (!e) return json(404, { error: "unknown_enrollment" }, NO_STORE);
+    if (!(await tokenOk(request, e))) return json(401, { error: "management_token_required" }, NO_STORE);
+    const bal = await packBalance(e, t);
+    return json(200, { ...pub, enrollment_id: e.id, balance: { left: bal.left, packs: bal.packs.map(packView), jobs: bal.jobs.slice(0, 50).map(jobView) }, endpoints_within_cap: packEndpoints(e).map(epView) }, NO_STORE);
+  }
+
+  async function packUse(request: Request, base: string) {
+    const a = await authEnrollment(request);
+    if (!a.ok) return a.res;
+    const { e, b } = a;
+    const sx = await sanctioned("monitor_pack_use", e.pay_to, { enrollment_id: e.id });
+    if (sx) return sanctionedRes(sx);
+    const pe = pickPackEndpoint(e, b.endpoint ? String(b.endpoint).slice(0, 500) : null);
+    if (!pe.ok) return pe.res;
+    const t = now();
+    const q = await queuePackJob(e, pe.ep, t);
+    if (!q.ok) return json(409, { error: q.error, detail: q.detail }, NO_STORE);
+    const bal = await packBalance(e, t);
+    return json(201, { queued: true, job: jobView(q.job), balance_left: bal.left, seller_page: `${base}/v1/monitor/sellers/${e.id}`, note: "Run by hand from Lumi's operator box during the pre-sale (no guaranteed turnaround). The result is published on your seller page, failures included." }, NO_STORE);
+  }
+
+  async function buyPack(request: Request, url: URL, plan: PlanId, e: Enrollment, base: string, ctx?: WaitUntil) {
+    const def = PLANS[plan], k = def.pack!;
+    // Preflight, all before any 402 (never charged): an endpoint within the cap, and (Founder pack) a place and purchases left.
+    const pe = pickPackEndpoint(e, url.searchParams.get("endpoint"));
+    if (!pe.ok) return pe.res;
+    if (k.founder && !e.is_test) {
+      const f = await founderPlaces(plan, e);
+      if (!f.holdsPlace && f.taken >= k.founder.seats) return json(409, { error: "founder_offer_full", plan, detail: `The Founder pack is limited to the first ${k.founder.seats} sellers and all places are taken. Re-test pack: ${base}${PLANS.retest_pack.path}?enrollment=${e.id}`, note: "Not charged." }, NO_STORE);
+      if (f.used >= k.founder.maxPurchases) return json(409, { error: "founder_purchases_used", plan, detail: `The Founder pack can be bought ${k.founder.maxPurchases} times per company (one place per payTo wallet and per domain); this company has bought it ${f.used} times. Re-test pack: ${base}${PLANS.retest_pack.path}?enrollment=${e.id}`, purchases_left: 0, note: "Not charged." }, NO_STORE);
+    }
+    const usd = def.usd; // exact price for everyone (no test-price override, no discounts)
+    const quote = planQuote(deps.cfg, plan, e.id, usd, `${base}${def.path}?enrollment=${e.id}`, false);
+    return requirePayment(request, deps.cfg, deps.paywall(ctx), quote, async (s: Settlement, req: PaymentRequirements) => {
+      const t = now();
+      const tx = s.transaction || `unknown_${randHex(8)}`;
+      const row: PlanRow = {
+        id: `mpl_${randHex(10)}`, enrollment_id: e.id, plan, starts_at: t, ends_at: t + k.expiryDays * DAY_MS, paid_tx: tx, paid_network: s.network, paid_asset: assetLabel(req),
+        paid_amount: String(req.amount), payer: s.payer ?? null, usd: Number(usd), budget_usd: Math.round(k.buys * PACK_LIMITS.maxBuyUsd * 1e6) / 1e6, spent_usd: 0,
+        is_test: e.is_test, reminded: 0, created_at: t, credits: k.buys,
+      };
+      const ins = await store.addPlan(row).catch((err) => { deps.log({ event: "monitor_pack_error", error: String(err) }); return "error" as const; });
+      let job: PackJobRow | null = null, jobNote: string | null = null;
+      if (ins === "inserted") {
+        const q = await queuePackJob(e, pe.ep, t, row.id).catch((err) => ({ ok: false as const, error: "queue_error", detail: String(err).slice(0, 200) }));
+        if (q.ok) job = q.job; else jobNote = q.detail;
+      }
+      deps.log({ event: "monitor_pack_paid", plan, enrollment: e.id, test: e.is_test, inserted: ins, job: job?.id ?? null });
+      const bal = await packBalance(e, t);
+      return json(201, {
+        paid: true, plan: def.name, pack_id: row.id, enrollment_id: e.id, price_usd: usd2(usd), ...(e.is_test ? { test: true } : {}),
+        test_buys: k.buys, expires_at: iso(row.ends_at), auto_renew: false, max_usd_per_test_buy: PACK_LIMITS.maxBuyUsd,
+        ...(ins === "duplicate" ? { note_duplicate: "This payment was already recorded; no second pack was added." } : {}),
+        first_retest: job ? jobView(job) : { queued: false, ...(jobNote ? { reason: jobNote } : {}) },
+        balance_left: bal.left,
+        use: `POST ${base}/v1/monitor/packs/use {enrollment_id, endpoint?} with your management token`,
+        balance: `GET ${base}/v1/monitor/packs?enrollment=${e.id} with your management token`,
+        seller_page: `${base}/v1/monitor/sellers/${e.id}`,
+        terms: PACK_TERMS,
+        note: "Test-buys are run by hand from Lumi's operator box during the pre-sale (no guaranteed turnaround). Each result is dated, kept with a signed receipt and published on your seller page, failures included. Paying never changes a score.",
+      }, NO_STORE);
+    });
+  }
+
+  /** Box-runner tasks for queued pack jobs (sanctioned payTos and expired packs are skipped, never handed to the runner). */
+  async function packJobTasks(t: number) {
+    const out: Record<string, unknown>[] = [];
+    for (const j of await store.queuedPackJobs(25)) {
+      const e = await store.enrollment(j.enrollment_id);
+      const plan = e ? (await store.plansFor(e.id)).find((p) => p.id === j.plan_id) : null;
+      const ep = e?.endpoints.find((x) => x.url === j.endpoint);
+      if (!e || !plan || !ep) continue;
+      if (t >= plan.ends_at) continue;
+      if (await sanctioned("monitor_pack_due", e.pay_to, { enrollment_id: e.id, plan_id: plan.id })) continue;
+      const chain = buyChains(ep, e, PACK_LIMITS.maxBuyUsd)[0];
+      if (!chain) continue;
+      out.push({
+        pack_job_id: j.id, plan_id: plan.id, plan: plan.plan, enrollment_id: e.id, network: chain.network, pay_to: chain.pay_to, ...(chain.proven ? {} : { pay_to_proven: false }),
+        endpoint: { url: ep.url, method: ep.method, ...(ep.body ? { body: ep.body } : {}) }, mode: "buy",
+        max_usd: Math.round(Math.min(PACK_LIMITS.maxBuyUsd, chain.usd! * 1.15) * 1e6) / 1e6, enrolled_price_usd: String(chain.usd), funding: "seller-funded (pack)", queued_at: iso(j.created_at), ...(plan.is_test ? { test: true } : {}),
+      });
+    }
+    return out;
+  }
+
+  async function ownerPacks(base: string) {
+    const t = now();
+    const f = await founderPlaces("founder_pack", null);
+    const queued = await store.queuedPackJobs(100);
+    return json(200, { kind: "owner_monitor_packs", founder_places_taken: f.taken, founder_seats: PLANS.founder_pack.pack!.founder!.seats, queued: queued.map((j) => ({ ...jobView(j), enrollment_id: j.enrollment_id })), tasks: await packJobTasks(t), due: `${base}/v1/owner/monitor/due`, cancel: `POST ${base}/v1/owner/monitor/packs/cancel {job_id, note}` }, NO_STORE);
+  }
+
+  async function packCancel(request: Request) {
+    const b = await readJson(request);
+    const j = b?.job_id ? await store.packJob(String(b.job_id).slice(0, 40)) : null;
+    if (!j) return json(404, { error: "unknown_job" }, NO_STORE);
+    if (j.status !== "queued") return json(409, { error: "job_not_queued", status: j.status }, NO_STORE);
+    await store.setPackJob(j.id, { status: "cancelled", note: b?.note ? String(b.note).slice(0, 300) : "cancelled by Lumi", updated_at: now() });
+    return json(200, { cancelled: true, job_id: j.id, note: "The test-buy went back to the pack." }, NO_STORE);
+  }
+
   async function handle(request: Request, path: string, url: URL, base: string, ctx?: WaitUntil): Promise<Response | null> {
     const m = request.method;
     const get = m === "GET" || m === "HEAD";
@@ -1177,6 +1370,8 @@ export function createMonitor(deps: CommerceDeps) {
     if (path === "/v1/monitor/free") return m === "POST" ? freeTier(request, base) : json(405, { error: "method_not_allowed", detail: `POST {enrollment_id} with the management token. Docs: ${base}/v1/monitor` }, { Allow: "POST, OPTIONS" });
     if (path === "/v1/monitor/trial/challenge" && get) return trialChallenge(url, base);
     if (path === "/v1/monitor/trial") return m === "POST" ? trial(request, base) : json(405, { error: "method_not_allowed", detail: `GET ${base}/v1/monitor/trial/challenge first, then POST here.` }, { Allow: "POST, OPTIONS" });
+    if (path === "/v1/monitor/packs" && get) return packsGet(request, url, base);
+    if (path === "/v1/monitor/packs/use") return m === "POST" ? packUse(request, base) : json(405, { error: "method_not_allowed", detail: `POST {enrollment_id, endpoint?} with the management token. Docs: ${base}/v1/monitor/packs` }, { Allow: "POST, OPTIONS" });
     const stp = path.match(/^\/v1\/monitor\/status\/([^/.]+)(?:\.(json))?$/);
     if (stp && get) return statusPage(stp[1], stp[2] ?? "html", base);
     const sub = path.match(/^\/v1\/monitor\/subscribe\/([^/]+)$/);
@@ -1204,6 +1399,8 @@ export function createMonitor(deps: CommerceDeps) {
       if (path === "/v1/owner/monitor/report" && m === "POST") return putReport(request);
       if (path === "/v1/owner/monitor/probes" && get) return probes(base);
       if (path === "/v1/owner/monitor/uptime" && m === "POST") return uptime(request, base, ctx);
+      if (path === "/v1/owner/monitor/packs" && get) return ownerPacks(base);
+      if (path === "/v1/owner/monitor/packs/cancel" && m === "POST") return packCancel(request);
       if (path === "/v1/owner/corrections" && m === "POST") {
         const b = await readJson(request);
         const subject = String(b?.subject ?? "").slice(0, 200), summary = String(b?.summary ?? "").slice(0, 2000);

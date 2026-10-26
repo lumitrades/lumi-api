@@ -4,7 +4,9 @@
 | id | price | checks | test-buys | per-buy cap | extras |
 |---|---|---|---|---|---|
 | watch | $5 / endpoint / 30 d | hourly | weekly | $0.05 | badge, status page |
-| watch_plus | $12 / endpoint / 30 d | every 30 min | daily, rotating chains | $0.10 | schema + p95 alerts, 90-day history |
+| watch_plus | retired 2026-10-25 (was $12 / endpoint / 30 d); existing terms run to their end | every 30 min | daily, rotating chains | $0.10 | replaced by the test-buy packs |
+| retest_pack | $6.50 one-off, 30 test-buys, valid 12 months | | seller-queued, one per endpoint per UTC day | $0.10 | "Fixed something? Get re-tested now" |
+| founder_pack | $5 one-off, 24 test-buys, valid 12 months | | seller-queued, one per endpoint per UTC day | $0.10 | first 10 sellers, one place per company, rebuy up to 12 times |
 | watch_pro | $20 / endpoint / 30 d | every 15 min | daily buys on up to 3 chains, limited by the test-buy budget | $0.10 | monthly signed report |
 | audit | $99 one-off (unchanged) | | | | |
 | watch_free | $0, 1 endpoint | daily | none | | no badge, label "free tier, no test-buys" |

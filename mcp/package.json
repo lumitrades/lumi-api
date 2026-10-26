@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "start": "node src/index.js",
-    "test": "node --test test/"
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "mcp",
@@ -61,5 +61,8 @@
     "x402-xrpl": "^0.3.4",
     "xrpl": "^4.7.0",
     "zod": "^4.6.6"
+  },
+  "overrides": {
+    "zod": "$zod"
   }
 }

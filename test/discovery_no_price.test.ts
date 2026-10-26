@@ -72,7 +72,7 @@ describe("paid-route discovery descriptions carry no embedded price", () => {
       for (const test of [false, true]) {
         const q: any = planQuote(cfg, id, "sub", test ? "0.01" : PLANS[id].usd, `${BASE}${PLANS[id].path}`, test);
         expect(q.description, id).not.toMatch(PRICE);
-        if (test) expect(q.description).toMatch(/TEST price/);
+        if (test && !PLANS[id].pack) expect(q.description).toMatch(/TEST price/); // packs: one exact price for everyone
       }
     }
   });
