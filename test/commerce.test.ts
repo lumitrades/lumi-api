@@ -125,8 +125,8 @@ describe("seller monitoring (legacy Monitor terms, simulated as bought before th
     expect(b1).toMatchObject({ status: "monitored", label: TEST_BADGE_LABEL, result: expect.any(String) });
     const svg = await (await test.req(`/v1/monitor/badge/${e2.body.enrollment_id}.svg`)).text();
     expect(svg).toContain(TEST_BADGE_LABEL);
-    // one counted buy per endpoint per UTC day: a failure the next day is the latest counted result and removes the badge
-    test.advance(24 * 3_600_000);
+    // a failure later the same UTC day takes the badge away at once (any failure that day is the day's counted result)
+    test.advance(2 * 3_600_000);
     await test.post("/v1/owner/monitor/results", { results: [{ ...base, outcome: "no_data", http_status: 200, data_returned: false, tx_hash: "C".repeat(64), cost_usd: 0.003 }] }, auth);
     const b2 = await (await test.req(`/v1/monitor/badge/${e2.body.enrollment_id}.json`)).json();
     expect(b2.status).toBe("removed");
@@ -134,6 +134,8 @@ describe("seller monitoring (legacy Monitor terms, simulated as bought before th
     const f = page2.findings.find((x: any) => x.kind === "paid_no_data");
     expect(f).toBeDefined();
     expect(page2.test_buys.every((t: any) => t.funding === "seller-funded")).toBe(true);
+    expect(page2.test_buys[0].tested_at.slice(0, 10)).toBe(page2.test_buys[1].tested_at.slice(0, 10)); // same UTC day
+    expect(page2.test_buys.map((t: any) => [t.outcome, t.counted, t.not_counted_reason])).toEqual([["no_data", true, undefined], ["delivered", false, "failure_same_day"]]);
     expect(JSON.stringify(page2)).not.toContain("B".repeat(64)); // answer-only
 
     // replies need the management token; findings cannot be removed

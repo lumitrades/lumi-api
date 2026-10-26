@@ -35,11 +35,12 @@ Test-buy pack holders (no monitoring tier): "Test-bought by Lumi · paid pack" (
 
 ## Which test-buys count (src/commerce/counting.ts)
 - Seller-paid runs (Watch, Pro, legacy plans, packs) and Lumi's own baseline buys of the same endpoint are pooled and counted the same way.
-- At most one counted test-buy per endpoint per UTC day: whichever came first (Lumi's baseline buy wins an exact tie).
-  Later buys that day stay on the seller page as history with `counted: false` and `not_counted_reason`
-  (`lumi_baseline_buy_first` or `earlier_buy_same_day`), and never change the badge. So a paid retry after a failure
-  the same day cannot replace the failure; equally, a failure after a delivered buy the same day is published and alerted
-  but only counts from the next counted buy.
+- At most one counted test-buy per endpoint per UTC day. If ANY buy that day failed (Lumi's baseline buy or a
+  seller-paid buy), the day's counted result is that day's first failure, even when a success came earlier; otherwise
+  the first success counts (Lumi's baseline buy wins an exact tie). A failure later in the day removes the badge at once.
+  Extra buys that day stay on the seller page as history with `counted: false` and `not_counted_reason`
+  (`failure_same_day`, `lumi_baseline_buy_first` or `earlier_buy_same_day`) and never add anything: a paid success
+  cannot bury a failure, and paying cannot freshen the badge more than once a day.
 - Failures count exactly like successes: the latest counted result per endpoint decides the badge.
 - The badge shows the date of the last delivered counted test-buy and lapses when that is older than the tier window
   (Watch 9 days, Pro and trial 2 days) and never later than 30 days (packs: 30 days).
@@ -60,8 +61,8 @@ payment was settling), **the payment has already settled on-chain and Lumi's cod
 tx hash; no plan row, credit or job is created. The payment is stored in `monitor_pack_refusals` and listed under
 `refused_at_settlement` on `GET /v1/owner/monitor/packs`, and logged as `monitor_pack_refused_at_settlement`.
 **Nothing is refunded automatically. Any refund (or turning it into another credit) needs the owner's explicit yes,
-case by case.** The sale event is still emitted when the payment settles (before the refusal), so revenue reports
-count it until it is handled by hand.
+case by case.** The sale row is still written when the payment settles (before the refusal), but `/v1/owner/sales`
+excludes every tx in `monitor_pack_refusals` from all revenue totals and lists them under `refused_at_settlement_30d`.
 
 ## Deploy checklist (needs owner approval)
 1. `wrangler d1 migrations apply lumi_trust --remote` with migrations/0025_monitor_watch.sql (additive; renumbered from 0023 at the 2026-10-24 release) and migrations/0030_testbuy_packs.sql (packs, pack jobs, Founder claim tables, refusals; additive).

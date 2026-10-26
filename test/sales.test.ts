@@ -142,3 +142,19 @@ describe("sales ledger", () => {
     expect(await salesSummary(new MemorySalesStore(), NOW)).toMatchObject({ last_30d: { sales: 0 } });
   });
 });
+
+describe("payments refused at settlement are not revenue", () => {
+  it("salesSummary drops refused txs from every total and lists them separately", async () => {
+    const store = new MemorySalesStore();
+    const now = Date.UTC(2026, 9, 25, 12);
+    await store.insert(toRow({ route: "monitor", rail: "xrpl", network: "xrpl:0", asset: "RLUSD", amount: "5", usd: 5, payer: "rBuyerA", tx: "KEEP" }, now - 1000));
+    await store.insert(toRow({ route: "monitor", rail: "xrpl", network: "xrpl:0", asset: "RLUSD", amount: "5", usd: 5, payer: "rBuyerB", tx: "LOST" }, now - 500));
+    const s = await salesSummary(store, now, { refusedTx: ["LOST"] });
+    expect(s.last_30d).toMatchObject({ sales: 1, usd_list_total: 5 });
+    expect(s.today_utc.sales).toBe(1);
+    expect(s.by_route_30d.monitor.sales).toBe(1);
+    expect(s.recent.map((r) => r.tx)).toEqual(["KEEP"]);
+    expect(s.refused_at_settlement_30d).toMatchObject({ sales: 1, usd_list_total: 5, excluded_from_revenue: true, txs: ["LOST"] });
+    expect((await salesSummary(store, now)).last_30d.sales).toBe(2);
+  });
+});

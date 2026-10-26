@@ -2,13 +2,15 @@
  * Which test-buys count (adopted badge rules, 2026-10-25). Pure: no storage, no clock.
  *
  * - Seller-paid runs (Watch / Pro / packs / legacy plans) and Lumi's own baseline buys are pooled and counted the same way.
- * - At most ONE counted test-buy per endpoint per UTC day: whichever came first (Lumi's baseline buy wins a tie). Later
- *   runs that day are kept and published as history, flagged counted:false, but never move the badge.
- * - Failures count exactly like successes: a counted failure is the latest counted result until a later counted buy.
+ * - At most ONE counted test-buy per endpoint per UTC day. If ANY buy that day failed (Lumi's baseline buy or a seller-paid
+ *   buy), the day's counted result is the first failure of that day; otherwise it is the first success (Lumi's baseline
+ *   buy wins an exact tie). A failure later in the day therefore removes the badge at once, and extra successes never add
+ *   anything: they are kept and published as history, flagged counted:false, but never move the badge.
+ * - Failures count exactly like successes: a counted failure is the latest counted result until a later day's counted buy.
  * - Lumi-side inconclusive baseline buys (Lumi never saw a response) and unpaid quote-only / skipped runs are not test-buys.
  *
- * Because a paid run can only take the single daily slot a baseline buy would otherwise take, and a baseline buy that came
- * first always wins, paying cannot add counted buys beyond what one baseline buy a day would give. Lumi's trust score and
+ * Because a paid run can only take the single daily slot a baseline buy would otherwise take, a paid success can never
+ * replace or bury a failure the same day, and paying cannot add counted buys beyond what one baseline buy a day would give. Lumi's trust score and
  * the /v1/badge "Tested by Lumi" badge do not read monitoring runs at all (see MONITOR_SAFEGUARDS).
  */
 import type { RunRow } from "./store";
@@ -27,7 +29,7 @@ export interface CountedBuy {
   source: CountSource;
   counted: boolean;
   /** Why a buy is not counted (counted:false only). */
-  not_counted_reason?: "lumi_baseline_buy_first" | "earlier_buy_same_day";
+  not_counted_reason?: "failure_same_day" | "lumi_baseline_buy_first" | "earlier_buy_same_day";
   run?: RunRow;
 }
 
@@ -65,12 +67,20 @@ export function countBuys(runs: RunRow[], baseline: BuyRow[], endpoints?: string
   const mine = want ? all.filter((x) => want.has(endpointKey(x.endpoint))) : all;
   // Oldest first; on an exact tie Lumi's baseline buy comes first.
   mine.sort((a, b) => a.ts - b.ts || (a.source === b.source ? 0 : a.source === "lumi_baseline" ? -1 : 1));
-  const first = new Map<string, CountedBuy>();
+  // Group per endpoint per UTC day; the day's counted buy is its first failure if any buy failed, else its first buy.
+  const days = new Map<string, CountedBuy[]>();
   for (const x of mine) {
     const k = `${endpointKey(x.endpoint)} ${x.day}`;
-    const f = first.get(k);
-    if (!f) { x.counted = true; first.set(k, x); continue; }
-    x.not_counted_reason = f.source === "lumi_baseline" ? "lumi_baseline_buy_first" : "earlier_buy_same_day";
+    const g = days.get(k);
+    if (g) g.push(x); else days.set(k, [x]);
+  }
+  for (const g of days.values()) {
+    const pick = g.find((x) => !x.delivered) ?? g[0];
+    pick.counted = true;
+    for (const x of g) {
+      if (x === pick) continue;
+      x.not_counted_reason = !pick.delivered && x.delivered ? "failure_same_day" : pick.source === "lumi_baseline" ? "lumi_baseline_buy_first" : "earlier_buy_same_day";
+    }
   }
   return mine.reverse();
 }

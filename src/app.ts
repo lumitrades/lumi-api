@@ -1255,7 +1255,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       if (!bearer || !(await isOwnerKey(bearer, env.OWNER_MCP_KEY))) {
         return json(401, { error: "owner_key_required", hint: "Authorization: Bearer <OWNER_MCP_KEY>" }, { "Cache-Control": "no-store", "WWW-Authenticate": "Bearer" });
       }
+      const refusedTx = (await commerceStore.packRefusals(500).catch(() => [])).map((r) => r.paid_tx);
       const summary = await salesSummary(sales, now(), {
+        refusedTx,
         includeTests: url.searchParams.get("include_tests") === "1",
         recent: Math.min(200, Math.max(0, Number(url.searchParams.get("recent") ?? 20) || 0)),
       });

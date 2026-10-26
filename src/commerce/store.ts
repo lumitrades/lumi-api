@@ -341,7 +341,9 @@ export class D1CommerceStore implements CommerceStore {
     );
   }
   async packRefusals(limit: number) {
-    return (await this.all<any>("SELECT * FROM monitor_pack_refusals ORDER BY created_at DESC LIMIT ?1", limit)).map((x) => ({ ...x, is_test: !!x.is_test })) as PackRefusalRow[];
+    // Before migration 0030 is applied the table does not exist: no refusals yet.
+    const rows = await this.all<any>("SELECT * FROM monitor_pack_refusals ORDER BY created_at DESC LIMIT ?1", limit).catch((e) => { if (/no such table/i.test(String(e))) return [] as any[]; throw e; });
+    return rows.map((x) => ({ ...x, is_test: !!x.is_test })) as PackRefusalRow[];
   }
   async addPackJob(j: PackJobRow) {
     try {

@@ -187,7 +187,7 @@ export function badgeStatus(e: Enrollment, plans: PlanRow[], runs: RunRow[], now
 
 /** Public wording of the counting rules (seller page, docs). */
 export const COUNTING_TEXT = {
-  rule: `At most ${COUNTING.perEndpointPerUtcDay} counted test-buy per endpoint per UTC day: Lumi's own baseline buy or a seller-paid buy (plan or pack), whichever came first. Later buys that day are shown as history with counted:false and never change the badge.`,
+  rule: `At most ${COUNTING.perEndpointPerUtcDay} counted test-buy per endpoint per UTC day, from Lumi's own baseline buys and seller-paid buys (plan or pack) together. If any buy that day failed, the day counts as a failure (the first failure), even if it came after a success; otherwise the first success counts. Extra buys that day are shown as history with counted:false and never add anything, so paying cannot hide a failure or freshen the badge more than once a day.`,
   failures: "Failures are published and counted exactly like successes; the latest counted result per endpoint decides the badge.",
   dating: `The badge shows the date of the last delivered counted test-buy and lapses ${COUNTING.badgeLapseDays} days after it (sooner on tiers with a shorter window).`,
   score: "Paying never changes a score: Lumi's trust score and the earned 'Tested by Lumi' badge read only Lumi's own baseline buys, never seller-paid runs.",
@@ -1389,7 +1389,7 @@ export function createMonitor(deps: CommerceDeps) {
     const f = await founderPlaces("founder_pack", null);
     const queued = await store.queuedPackJobs(100);
     const refused = await store.packRefusals(50);
-    return json(200, { kind: "owner_monitor_packs", refused_at_settlement: refused.map((r) => ({ ...r, created_at: iso(r.created_at), note: "Paid, no credit added. Manual review: any refund or credit needs the owner's approval; nothing is refunded automatically." })), founder_places_taken: f.taken, founder_seats: PLANS.founder_pack.pack!.founder!.seats, queued: queued.map((j) => ({ ...jobView(j), enrollment_id: j.enrollment_id })), tasks: await packJobTasks(t), due: `${base}/v1/owner/monitor/due`, cancel: `POST ${base}/v1/owner/monitor/packs/cancel {job_id, note}` }, NO_STORE);
+    return json(200, { kind: "owner_monitor_packs", refused_at_settlement: refused.map((r) => ({ ...r, created_at: iso(r.created_at), note: "Paid, no credit added; excluded from revenue totals on /v1/owner/sales. Manual review: any refund or credit needs the owner's approval; nothing is refunded automatically." })), founder_places_taken: f.taken, founder_seats: PLANS.founder_pack.pack!.founder!.seats, queued: queued.map((j) => ({ ...jobView(j), enrollment_id: j.enrollment_id })), tasks: await packJobTasks(t), due: `${base}/v1/owner/monitor/due`, cancel: `POST ${base}/v1/owner/monitor/packs/cancel {job_id, note}` }, NO_STORE);
   }
 
   async function packCancel(request: Request) {

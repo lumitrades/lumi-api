@@ -152,8 +152,13 @@ function windowStats(rows: SaleRow[]) {
 }
 
 /** Owner summary: today (UTC), 7d, 30d and by-route, excluding Lumi's own test wallets. */
-export async function salesSummary(store: SalesStore, now: number, opts: { includeTests?: boolean; recent?: number } = {}) {
-  const all = await store.since(now - 30 * DAY);
+export async function salesSummary(store: SalesStore, now: number, opts: { includeTests?: boolean; recent?: number; refusedTx?: Iterable<string> } = {}) {
+  const fetched = await store.since(now - 30 * DAY);
+  // Payments refused at settlement (e.g. a Founder pack that lost the place race): settled on-chain but nothing was
+  // delivered or credited, so they are not revenue. Listed separately until handled by hand (owner decides any refund).
+  const refusedSet = new Set(opts.refusedTx ?? []);
+  const refused = fetched.filter((r) => refusedSet.has(r.tx));
+  const all = fetched.filter((r) => !refusedSet.has(r.tx));
   const real = opts.includeTests ? all : all.filter((r) => !r.isTest);
   const tests = all.filter((r) => r.isTest);
   const dayStart = Math.floor(now / DAY) * DAY;
@@ -170,6 +175,7 @@ export async function salesSummary(store: SalesStore, now: number, opts: { inclu
     last_30d: windowStats(real),
     by_route_30d: byRoute,
     by_rail_30d: byRail,
+    refused_at_settlement_30d: { ...windowStats(refused), excluded_from_revenue: true, txs: refused.map((r) => r.tx), note: "Paid but refused at settlement (no credit added). Not revenue. Any refund needs the owner's approval; nothing is refunded automatically." },
     test_sales_30d: { sales: tests.length, usd_list_total: round(tests.reduce((s, r) => s + (r.usd ?? 0), 0), 4) },
     recent: real.slice(0, opts.recent ?? 20).map((r) => ({
       ts: new Date(r.ts).toISOString(),
@@ -182,7 +188,7 @@ export async function salesSummary(store: SalesStore, now: number, opts: { inclu
       ...(r.client ? { client: r.client } : {}),
       ...(r.isTest ? { is_test: true } : {}),
     })),
-    note: "usd_list_total sums each sale's USD value: stablecoins at face value, XRP at the XRP actually received times the XRP/USD rate at settlement. Test wallets (Lumi's own wallets and demo buyers) are excluded from revenue.",
+    note: "usd_list_total sums each sale's USD value: stablecoins at face value, XRP at the XRP actually received times the XRP/USD rate at settlement. Test wallets (Lumi's own wallets and demo buyers) and payments refused at settlement are excluded from revenue.",
   };
 }
 

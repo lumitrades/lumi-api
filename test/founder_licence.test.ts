@@ -370,6 +370,11 @@ describe("Founder pack: the place race is settled atomically at settlement", () 
     expect(owner.refused_at_settlement[0].note).toContain("owner's approval");
     expect(owner.founder_places_taken).toBe(10);
     expect(PACK_TERMS.terms.join(" ")).toContain("Nothing is refunded automatically");
+    // the settled sale row is kept, but excluded from revenue totals and listed as refused at settlement
+    const sales = await (await s.req("/v1/owner/sales?include_tests=1&recent=50", { headers: auth })).json();
+    expect(sales.refused_at_settlement_30d).toMatchObject({ sales: 1, excluded_from_revenue: true, txs: [r.body.tx] });
+    expect(sales.recent.map((x: any) => x.tx)).not.toContain(r.body.tx);
+    expect(sales.last_30d.sales).toBe(0);
   });
 
   it("the company's 12th purchase settling first: the racing 13th is refused at settlement with no credit", async () => {

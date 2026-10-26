@@ -19,25 +19,58 @@ const newest = (rs: RunRow[]) => [...rs].sort((a, b) => b.ts - a.ts);
 describe("counting: one counted test-buy per endpoint per UTC day", () => {
   it("rules are the adopted ones", () => {
     expect(COUNTING).toEqual({ perEndpointPerUtcDay: 1, badgeLapseDays: 30 });
-    expect(COUNTING_TEXT.rule).toContain("whichever came first");
+    expect(COUNTING_TEXT.rule).toContain("If any buy that day failed, the day counts as a failure");
     expect(COUNTING_TEXT.score).toContain("never seller-paid runs");
   });
   it("a paid retry the same day after a failure is not counted; the failure stands and removes the badge", () => {
     const runs = newest([run(T0, "error_status"), run(T0 + 3_600_000, "delivered")]);
     const c = countBuys(runs, []);
-    expect(c.map((x) => [x.delivered, x.counted, x.not_counted_reason])).toEqual([[true, false, "earlier_buy_same_day"], [false, true, undefined]]);
+    expect(c.map((x) => [x.delivered, x.counted, x.not_counted_reason])).toEqual([[true, false, "failure_same_day"], [false, true, undefined]]);
     const b = badgeStatus(en, [plan("retest_pack")], runs, T0 + 4 * 3_600_000);
     expect(b).toMatchObject({ ok: false, reason: "monitoring_failed" });
     // next UTC day a delivered buy counts and restores it
     const next = newest([...runs, run(T0 + DAY, "delivered")]);
     expect(badgeStatus(en, [plan("retest_pack")], next, T0 + DAY + 60_000)).toMatchObject({ ok: true, last_test: T0 + DAY });
   });
+  it("success then failure the same UTC day: the failure is the day's counted result and the badge is removed the same day", () => {
+    const ok = [run(T0, "delivered")];
+    expect(badgeStatus(en, [plan("retest_pack")], ok, T0 + 3_600_000)).toMatchObject({ ok: true, last_test: T0 });
+    const runs = newest([...ok, run(T0 + 5 * 3_600_000, "no_data")]); // 15:00 UTC, same day
+    const c = countBuys(runs, []);
+    expect(c.map((x) => [x.delivered, x.counted, x.not_counted_reason])).toEqual([[false, true, undefined], [true, false, "failure_same_day"]]);
+    expect(badgeStatus(en, [plan("retest_pack")], runs, T0 + 5 * 3_600_000 + 60_000)).toMatchObject({ ok: false, reason: "monitoring_failed" });
+    // Lumi baseline success then a seller-paid failure: same result
+    const b = [buy(T0, true)];
+    const r2 = [run(T0 + 3_600_000, "error_status")];
+    expect(badgeStatus(en, [plan("retest_pack")], r2, T0 + 2 * 3_600_000, b)).toMatchObject({ ok: false, reason: "monitoring_failed" });
+    expect(countBuys(r2, b).find((x) => x.source === "lumi_baseline")).toMatchObject({ counted: false, not_counted_reason: "failure_same_day" });
+    // seller-paid success then a Lumi baseline failure later that day: removed too
+    expect(badgeStatus(en, [plan("retest_pack")], [run(T0, "delivered")], T0 + 3 * 3_600_000, [buy(T0 + 2 * 3_600_000, false)])).toMatchObject({ ok: false, reason: "monitoring_failed" });
+  });
+  it("failure then a paid success the same UTC day: still failed (a paid success never buries a failure)", () => {
+    for (const fail of [{ runs: [run(T0, "no_data")], base: [] as BuyRow[] }, { runs: [] as RunRow[], base: [buy(T0, false)] }]) {
+      const runs = newest([...fail.runs, run(T0 + 3_600_000, "delivered"), run(T0 + 2 * 3_600_000, "delivered")]);
+      const c = countBuys(runs, fail.base);
+      expect(c.filter((x) => x.counted)).toHaveLength(1);
+      expect(c.find((x) => x.counted)!.delivered).toBe(false);
+      expect(c.filter((x) => x.delivered).every((x) => x.not_counted_reason === "failure_same_day")).toBe(true);
+      expect(badgeStatus(en, [plan("retest_pack")], runs, T0 + 3 * 3_600_000, fail.base)).toMatchObject({ ok: false, reason: "monitoring_failed" });
+    }
+  });
+  it("two successes the same day count once (the first); the second never freshens the badge", () => {
+    const runs = newest([run(T0, "delivered"), run(T0 + 6 * 3_600_000, "delivered")]);
+    expect(countBuys(runs, []).map((x) => [x.counted, x.not_counted_reason])).toEqual([[false, "earlier_buy_same_day"], [true, undefined]]);
+    expect(badgeStatus(en, [plan("retest_pack")], runs, T0 + 7 * 3_600_000)).toMatchObject({ ok: true, last_test: T0 });
+  });
   it("Lumi's baseline buy that came first takes the day: a later paid run that day is history only", () => {
     const baseline = [buy(T0, false)]; // Lumi baseline saw a failure at 10:00
     const runs = [run(T0 + 2 * 3_600_000, "delivered")]; // seller pays a re-test at 12:00
     const c = countBuys(runs, baseline);
-    expect(c.find((x) => x.source === "seller_paid")).toMatchObject({ counted: false, not_counted_reason: "lumi_baseline_buy_first" });
+    expect(c.find((x) => x.source === "seller_paid")).toMatchObject({ counted: false, not_counted_reason: "failure_same_day" });
     expect(c.find((x) => x.source === "lumi_baseline")).toMatchObject({ counted: true, delivered: false });
+    // both succeed: Lumi's earlier baseline buy is the day's counted buy, the paid one is history
+    const ok = countBuys(runs, [buy(T0, true)]);
+    expect(ok.find((x) => x.source === "seller_paid")).toMatchObject({ counted: false, not_counted_reason: "lumi_baseline_buy_first" });
     expect(badgeStatus(en, [plan("retest_pack")], runs, T0 + 3 * 3_600_000, baseline)).toMatchObject({ ok: false, reason: "monitoring_failed" });
   });
   it("an exact tie goes to the baseline buy; inconclusive baseline buys (Lumi-side) are not test-buys", () => {
