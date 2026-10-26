@@ -27,15 +27,12 @@ XRPL_NETWORK = "xrpl:0"                                  # mainnet
 PAY_TO = "rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM"             # Lumi's receiving wallet (address only)
 FACILITATOR_URL = "https://xrpl-facilitator-mainnet.t54.ai"
 SOURCE_TAG = "804681468"
-PRICE_INSTITUTIONAL_XRP = "0.077"                        # $0.10 at XRP ~= $1.30 (Oct 23 2026); XRP_PRICING=live reprices it
 PRICE_VENDOR_REPORT_XRP = "0.015"                        # $0.02 at XRP ~= $1.32 (Oct 22 2026); fixed, not repriced live
 # Stablecoins (XRPL issued tokens), offered as accepts[1] RLUSD and accepts[2] USDC. Issuers default to the
 # official ones per network (Ripple rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De, Circle rGm7WCVp9gb4jZHWTEtGUr4dd74z2XuWhE).
 ACCEPT_RLUSD = "true"
 ACCEPT_USDC = "true"
-PRICE_INSTITUTIONAL_RLUSD = "0.10"
 PRICE_VENDOR_REPORT_RLUSD = "0.02"
-PRICE_INSTITUTIONAL_USDC = "0.10"
 PRICE_VENDOR_REPORT_USDC = "0.02"
 DATA_BASE_URL = "https://lumitrades.io/data"
 DATA_TTL_SECONDS = "60"
@@ -81,7 +78,7 @@ database_id = "7ddfc495-8500-40cf-88eb-6d7d4121f19b"
 migrations_dir = "migrations"
 
 # */30: free 402-quote checks of allowlisted vendors and the x402 catalog (no payment).
-# every minute: live signals for the 4 stalest coins (1 daily refresh) of the top-50 universe (src/live.ts; must match LIVE_CRON in src/index.ts).
+# every minute: kept for the scheduled jobs that key off it (src/index.ts LIVE_CRON); market feeds were retired 2026-10-25, so it does no external fetch.
 [triggers]
 crons = ["*/30 * * * *", "* * * * *"]
 
@@ -126,7 +123,6 @@ XRPL_NETWORK = "xrpl:1"
 PAY_TO = "rUJvhZ513MnBQVBcNap9NPJmKDWdKjyhC5"            # throwaway testnet receiver from `npm run testnet:setup`; replace with yours
 FACILITATOR_URL = "https://xrpl-facilitator-testnet.t54.ai"
 SOURCE_TAG = "804681468"
-PRICE_INSTITUTIONAL_XRP = "0.077"
 PRICE_VENDOR_REPORT_XRP = "0.015"
 DATA_BASE_URL = "https://lumitrades.io/data"
 DATA_TTL_SECONDS = "60"

@@ -328,7 +328,7 @@ export function embedSnippets(key: string, base: string) {
   const k = encodeURIComponent(key);
   const img = `${base}/v1/badge/${k}.svg`;
   const page = `${base}/trust/v/${k}`;
-  const alt = "Tested by Lumi (live score, earned only)";
+  const alt = "Lumi test-buy badge: live status";
   return {
     badge: img,
     page,
@@ -389,22 +389,23 @@ export function badgePage(s: BadgeSummary, base: string, rel: Record<string, unk
     : `<strong>Not yet tested.</strong> Lumi has no stored test result for <code>${esc(s.key)}</code>. That is not a negative finding; Lumi has simply not bought from it (or the key is not the host Lumi bought).`;
   const relHtml = rel.length ? `<div class="card disc"><strong>Commercial relationship:</strong> this seller pays Lumi for monitoring. That never changes a result.</div>` : "";
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}: Tested by Lumi</title><meta name="description" content="${esc(`Lumi's dated paid test-buy results for ${title}. Factual test evidence, not an endorsement.`)}">
+<title>${esc(title)}: Lumi test-buy results</title><meta name="description" content="${esc(`Lumi's dated paid test-buy results for ${title}. Factual test evidence, not an endorsement.`)}">
 <meta name="robots" content="${s.latest ? "index" : "noindex"},follow"><style>${PAGE_CSS}</style></head>
 <body><main>
 <p class="muted"><a href="https://lumitrades.io/">Lumi Trades</a> &middot; x402 test results</p>
 <h1>${esc(title)}</h1>
 <p class="muted">Key <code>${esc(s.key)}</code>${s.homepage ? ` &middot; <a href="${esc(s.homepage)}" rel="nofollow noopener">${esc(s.homepage)}</a>` : ""}</p>
-<p><img src="${esc(e.badge)}" alt="${esc("Tested by Lumi badge (shown only when earned)")}" height="20"></p>
+<p><img src="${esc(e.badge)}" alt="${esc("Lumi test-buy badge: live status")}" height="20"></p>
 <div class="card"><p style="margin:0">${status}</p></div>
 ${relHtml}
 ${s.tests.length ? `<h2>Latest dated tests</h2><table><thead><tr><th>Date (UTC)</th><th>Endpoint</th><th>Chain</th><th>Verdict</th><th>HTTP</th></tr></thead><tbody>${rows}</tbody></table>
 <p class="muted">Newest first, up to ${BADGE_TESTS}. Each row is a real paid x402 call from Lumi's own wallet, stored with a signed receipt. Tx hashes and receipts are in the paid <a href="${esc(base)}/v1/trust/check">trust check</a>${s.vendor_id ? ` and <a href="${esc(base)}/v1/trust/vendors/${esc(s.vendor_id)}/report">vendor report</a>` : ""}; receipts verify for free at <a href="${esc(base)}/v1/trust/receipts/verify">/v1/trust/receipts/verify</a>.</p>` : ""}
 <h2>How Lumi tests</h2>
-<p>Lumi makes small, capped, real paid x402 calls to sellers on the XRP Ledger and Base, records whether the paid response contained data, and stores each result with its date. Delivered = the paid response contained data. Not delivered = the seller answered without usable data. Inconclusive = Lumi never saw a response (Lumi-side; not counted against the seller). <a href="${HOW_IT_WORKS}">How it works</a> &middot; <a href="${esc(base)}/v1/trust/methodology">methodology (JSON)</a></p>
+<p>Lumi makes small, capped, real paid x402 calls to sellers on the XRP Ledger, Base and Stellar, records whether the paid response contained data, and stores each result with its date. Delivered = the paid response contained data. Not delivered = the seller answered without usable data. Inconclusive = Lumi never saw a response (Lumi-side; not counted against the seller). <a href="${HOW_IT_WORKS}">How it works</a> &middot; <a href="${esc(base)}/v1/trust/methodology">methodology (JSON)</a></p>
 <h2>Right to reply</h2>
 <p>Run this service? You can reply to or dispute any result: email <a href="mailto:${CONTACT_EMAIL}?subject=${encodeURIComponent(`Badge ${s.key}`)}">${CONTACT_EMAIL}</a>, or sign a reply with a listed pay-to key (<code>POST ${esc(base)}/v1/trust/replies</code>). Verified replies are shown with your entry and corrections are logged publicly.</p>
 <h2>Embed this badge</h2>
+<p class="muted">The image is live: it shows the 'Tested by Lumi' badge only while the rules hold, and 'no badge' otherwise. Embedding it does not earn it.</p>
 <p class="muted">Markdown / README.md</p><pre>${esc(e.markdown)}</pre>
 <p class="muted">HTML</p><pre>${esc(e.html)}</pre>
 <p class="muted">reStructuredText / README.rst</p><pre>${esc(e.rst)}</pre>

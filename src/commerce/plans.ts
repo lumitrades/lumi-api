@@ -135,7 +135,7 @@ export const PLATFORM_LICENCE = {
   term_days: TERM_DAYS,
   how_to_buy: "contact",
   contact: "hello@lumitrades.io",
-  summary: "For wallets, facilitators and directories: the right to redistribute Lumi's checks and evidence inside your product, bulk and delta access, an uptime SLA, and evidence packs your guarantee partner can use. Quoted per platform, from $499 per 30 days. Lumi supplies evidence, not insurance; any payment guarantee stays with the licensed partner.",
+  summary: "For wallets, facilitators and directories: the right to show Lumi's checks and evidence to your users inside your product, bulk and delta access, an uptime SLA, and exportable evidence packs. Quoted per platform, from $499 per 30 days. Lumi supplies evidence, not insurance or a payment guarantee.",
   free_tier_terms: "The free checks are free to use and to quote with credit to Lumi. Reselling, redistributing or bulk-mirroring the data needs a licence (Feed for your own use, the platform licence for redistribution).",
 } as const;
 

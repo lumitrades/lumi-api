@@ -23,12 +23,9 @@ export const TRUST_SERVICE_NAME = SERVICE_NAME;
 export const TRUST_ROUTES: PaidRoute[] = ["trust_check", "vendor_report", "verdict"];
 export const SERVICE_ICON = "https://lumitrades.io/assets/icon-512.png";
 export const ROUTE_TAGS: Record<PaidRoute, string[]> = {
-  institutional: ["regulation", "stablecoins", "tokenization", "policy", "crypto"],
   vendor_report: ["x402", "seller-reputation", "vendor-report", "api-monitoring", "due-diligence"],
   trust_check: ["x402", "check-before-paying", "pre-payment-check", "trust-check", "agent-payments"],
   verdict: ["x402", "check-before-paying", "pre-payment-check", "seller-reputation", "test-buys"],
-  funding: ["funding-rates", "perpetuals", "derivatives", "market-data", "crypto"],
-  fear_greed: ["fear-and-greed", "sentiment", "coinmarketcap", "bitcoin", "crypto"],
 };
 
 export function serviceMeta(route: PaidRoute): { serviceName: string; tags: string[]; iconUrl: string } {
@@ -59,9 +56,6 @@ interface RouteMeta {
 export const COIN_PATTERN = "^[A-Za-z0-9-]{1,40}$";
 /** Vendor id input, identical in the OpenAPI document and the 402 bazaar schema. */
 export const VENDOR_ID_PATTERN = "^[a-z0-9][a-z0-9-]{0,63}$";
-const FORMAT_QUERY = {
-  format: { type: "string", enum: ["json", "md"], description: "md returns the institutional brief as text/markdown; default JSON (with a markdown field)" },
-};
 
 /** Example `payment` block of a paid response, at the route's real (default) Base USDC price. */
 const pay = (route: PaidRoute, usd: string = DEFAULT_PRICES[route].usd): Record<string, Json> => ({
@@ -80,34 +74,9 @@ const FRESH = (asOf: string, staleAfter: string, ageSeconds = 600, nextUpdate?: 
 
 /** Shared promise appended to every listing. */
 export const FAIR_USE =
-  "Every response carries as_of, data_age_seconds, next_update and stale_after. Not charged on bad input or stale data.";
+  "Every response carries as_of. Not charged on bad input or when Lumi cannot answer.";
 
 export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
-  institutional: {
-    description:
-      "Use when an agent needs a dated, sourced daily brief on digital-asset and stablecoin activity by central banks, standard-setters, regulators, banks and tokenization firms, with confidence and the networks each item touches. JSON with a markdown field, or format=md. Not charged on invalid format or stale data. Neutral summary; not financial advice.",
-    query: FORMAT_QUERY,
-    example: {
-      kind: "institutional_brief",
-      date: "2026-10-22",
-      big_picture: ["Stablecoin rules move from consultation to implementation."],
-      items: [
-        {
-          entity: "Example regulator",
-          headline: "Regulator publishes final guidance for payment stablecoin issuers",
-          date: "2026-10-21",
-          source_url: "https://example.org/news/stablecoin-guidance",
-          coins: ["RLUSD", "USDC"],
-          link_type: "context",
-          confidence: "high",
-        },
-      ],
-      watch_next: [{ date: "2026-10-29", what: "BOJ policy meeting" }],
-      markdown: "# Institutional & Policy Brief, Oct 22 2026 ...",
-      ...FRESH("2026-10-22T11:20:32Z", "2026-10-24T11:20:32Z"),
-      payment: pay("institutional"),
-    },
-  },
   vendor_report: {
     description:
       "Use when an agent needs seller reputation evidence before paying an x402 vendor on Lumi Trades' curated list: the full observation history, with unpaid 402-quote checks (status, quoted price, latency), paid test purchases with transaction hashes and delivered yes/no (XRP Ledger, Base, Stellar), uptime over 24h/7d/30d/90d, quoted-price history and score components with sample sizes. Not charged on unknown vendors or without recent data. Automated observations, not a rating.",
@@ -174,33 +143,6 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
       payment: pay("verdict"),
     },
   },
-  funding: {
-    description:
-      "Use when an agent needs perpetual funding-rate data across many coins: funding rates for every tracked coin listed on OKX USDT swaps (rate, 8h-normalised rate, annualised rate, next funding time and a size band), plus the BTC rate, the median and the most positive and negative coins. A positive rate means the perpetual traded above its index. Refreshed every 15 minutes. Not charged on stale data. Market data only, not financial advice.",
-    example: {
-      kind: "funding",
-      venue: "OKX USDT perpetual swaps",
-      btc: { symbol: "BTC", rate_pct: 0.0061, interval_hours: 8, rate_8h_pct: 0.0061, annualized_pct: 6.68, read: "near zero" },
-      median_rate_8h_pct: 0.005,
-      most_positive: [{ symbol: "PUMP", rate_8h_pct: 0.042 }],
-      ...FRESH("2026-10-23T11:00:00Z", "2026-10-23T12:00:00Z"),
-      payment: pay("funding"),
-    },
-  },
-  fear_greed: {
-    description:
-      "Use when an agent needs a sentiment gauge with recent history rather than a single reading: the CoinMarketCap Crypto Fear and Greed index with current value and classification, change versus yesterday, last week and last month, yearly high and low, and a 30-day daily series. Refreshed every 30 minutes. Payable in USDC on Base or Stellar, or XRP, RLUSD or USDC on the XRP Ledger. Not charged on stale data. Market data only, not financial advice.",
-    example: {
-      kind: "fear_greed",
-      source: "CoinMarketCap",
-      value: 38,
-      classification: "Fear",
-      change: { vs_yesterday: -4, vs_last_week: 6, vs_last_month: -15 },
-      series_30d: [{ date: "2026-10-22", value: 42 }],
-      ...FRESH("2026-10-23T11:00:00Z", "2026-10-23T17:00:00Z"),
-      payment: pay("fear_greed"),
-    },
-  },
 };
 
 /** One documented error status of a paid route (listed in the 402 bazaar schema, OpenAPI and /.well-known/x402). */
@@ -221,8 +163,7 @@ const URL_ROUTES: PaidRoute[] = ["trust_check", "verdict"];
 export function errorDocs(route: PaidRoute): ErrorDoc[] {
   const out: ErrorDoc[] = [];
   if (URL_ROUTES.includes(route)) out.push({ status: 400, error: "invalid_input", when: "url missing or not an absolute http(s) URL, or payTo/amount malformed. Never charged." });
-  else if (COIN_ROUTES.includes(route) || route === "vendor_report") out.push({ status: 400, error: "invalid_input", when: "Path placeholder not filled in (e.g. :coin, {id}) on a paid request. Never charged." });
-  else if (route === "institutional") out.push({ status: 400, error: "invalid_input", when: "format is not json or md. Never charged." });
+  else if (COIN_ROUTES.includes(route) || route === "vendor_report") out.push({ status: 400, error: "invalid_input", when: "Path placeholder not filled in (e.g. {id}) on a paid request. Never charged." });
   out.push({ status: 402, error: "payment_required", when: "No payment, or the payment was invalid or failed to settle: x402 v2 PaymentRequired in the body and the PAYMENT-REQUIRED header." });
   if (COIN_ROUTES.includes(route)) out.push({ status: 404, error: "not_found", when: "Unknown coin. Never charged." });
   if (route === "vendor_report") out.push({ status: 404, error: "not_found", when: "Unknown vendor id (GET /v1/trust/vendors lists ids). Never charged." });
@@ -230,7 +171,7 @@ export function errorDocs(route: PaidRoute): ErrorDoc[] {
   out.push({ status: 429, error: "rate_limited", when: "Not returned on paid calls. The free lookups (/v1/check, /v1/trust/vendors, /v1/trust/catalog) return 429 with Retry-After over their limits; a facilitator 429 surfaces as a retryable 503." });
   out.push({ status: 500, error: "internal_error", when: "Unexpected server error; retry later." });
   out.push({ status: 502, error: "invalid_verify_response | settle_http_error", when: "The payment facilitator returned an unusable answer; not retryable as-is. Nothing is settled on invalid_verify_response." });
-  out.push({ status: 503, error: "stale_data | data_unavailable | facilitator_unavailable", when: "Data past stale_after, an upstream down, or the facilitator busy (incl. its 429/5xx). Retry-After header set. Never charged." });
+  out.push({ status: 503, error: "stale_data | data_unavailable | facilitator_unavailable", when: "Lumi cannot answer right now (no recent observations, an upstream down) or the facilitator is busy (incl. its 429/5xx). Retry-After header set. Never charged." });
   return out;
 }
 
@@ -306,12 +247,9 @@ export function bazaarExtension(route: PaidRoute, arg?: string, query?: Record<s
 /** resource.description for a quote: the full summary when it fits CDP's limit, otherwise the Bazaar listing text. */
 /** Buyer-keyword headline per route, so Bazaar search and listings show what it is and what it costs first. */
 const HEADLINES: Record<PaidRoute, (subject?: string) => string> = {
-  institutional: () => "Daily institutional & policy brief for digital assets (regulators, banks, tokenization)",
   vendor_report: (v) => `x402 seller reputation report${v ? ` for ${v}` : ""} (uptime, latency, test-buys)`,
   trust_check: () => "Check before paying an x402 URL (allow / warn / block with coded reasons)",
   verdict: () => "Check before paying: one-label x402 pre-payment check (checks_passed / check_first / checks_failed / no_data)",
-  funding: () => "Crypto perpetual funding rates (OKX perps)",
-  fear_greed: () => "Crypto Fear & Greed index (CoinMarketCap, 30-day history)",
 };
 
 /**

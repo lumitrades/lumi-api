@@ -21,27 +21,21 @@ export interface Env {
   INVOICE_SECRET?: string;
   /** XRPL SourceTag stamped on every payment to this API (on-ledger usage metrics). */
   SOURCE_TAG?: string;
-  /** Prices in XRP (decimal strings), e.g. PRICE_INSTITUTIONAL_XRP. */
-  PRICE_INSTITUTIONAL_XRP?: string;
-  /** Any PRICE_<ROUTE>_<XRP|RLUSD|USDC> override. */
+  /** Any PRICE_<ROUTE>_<XRP|RLUSD|USDC> override (decimal strings), e.g. PRICE_VERDICT_XRP. */
   [price: `PRICE_${string}`]: string | undefined;
   /** Accept RLUSD (Ripple USD, XRPL issued token) as a second asset. "false" disables. Default on. */
   ACCEPT_RLUSD?: string;
   /** RLUSD issuer override. Defaults to Ripple's official issuer for the network (docs.ripple.com). */
   RLUSD_ISSUER?: string;
-  /** Prices in RLUSD (decimal strings, USD-equivalent). */
-  PRICE_INSTITUTIONAL_RLUSD?: string;
   /** Accept Circle USDC (XRPL issued token) as a third asset. "false" disables. Default on. */
   ACCEPT_USDC?: string;
   /** USDC issuer override. Defaults to Circle's official issuer for the network (developers.circle.com). */
   USDC_ISSUER?: string;
-  /** Prices in USDC (decimal strings). */
-  PRICE_INSTITUTIONAL_USDC?: string;
   /** Where Lumi's published JSON lives. */
   DATA_BASE_URL?: string;
   /** Cache TTL for upstream data, seconds. */
   DATA_TTL_SECONDS?: string;
-  /** Max age (hours) of market data before paid calls are refused with 503 (analysis/events get 4x). Default 12. */
+  /** Max age (hours) of published data before it counts as stale. Default 12. */
   DATA_MAX_AGE_HOURS?: string;
   /** Seconds a 402 quote (invoice) stays payable. */
   INVOICE_TTL_SECONDS?: string;
@@ -181,29 +175,21 @@ export interface KVLike {
 }
 
 /**
- * Paid routes. The per-coin readings and watchlist routes (signal, levels, lite, scan, slate), the daily market brief
- * and the market-data feeds built on the retired site data (market, yen, sentiment, events, events_48h) were retired on
- * 2026-10-25: they answer 410 Gone (see src/retired.ts) and are never quoted.
+ * Paid routes: x402 seller checks only. Every non-trust data route was retired on 2026-10-25 (v1.2.0 retired the last
+ * three): they answer 410 Gone (see src/retired.ts) and are never quoted.
  */
-export type PaidRoute = "institutional" | "vendor_report" | "trust_check" | "funding" | "fear_greed" | "verdict";
+export type PaidRoute = "vendor_report" | "trust_check" | "verdict";
 
 /**
  * Default prices per route: XRP and USD-stablecoin (RLUSD/USDC). Override with PRICE_<ROUTE>_XRP / _RLUSD / _USDC
- * (e.g. PRICE_YEN_XRP). Benchmarks on the XRPL AI Hub (Oct 2026): single data feeds 0.001-0.012 RLUSD (AskSurf, Heurist,
- * printmoneylab), composite reads ~0.02-0.025 (Strale Fear & Greed, invinoveritas signals). XRP ~= $1.33.
+ * (e.g. PRICE_VERDICT_XRP). XRP ~= $1.33 (Oct 2026).
  */
 export const DEFAULT_PRICES: Record<PaidRoute, { xrp: string; usd: string }> = {
-  // Daily Institutional & Policy Brief: $0.10 (was $0.25 until Oct 23 2026). Stablecoins are exactly 0.10; the XRP
-  // default is set from XRP ~= $1.30 on Oct 23 2026 (0.10 / 1.30 = 0.077 XRP); XRP_PRICING=live reprices it from the
-  // live rate, otherwise update PRICE_INSTITUTIONAL_XRP in wrangler.toml if XRP moves a lot.
-  institutional: { xrp: "0.077", usd: "0.10" },
   // Paid detailed x402 vendor report (trust layer): $0.02. Stablecoins exactly 0.02; XRP fixed from XRP ~= $1.32 on
-  // Oct 22 2026 (0.02 / 1.32 = 0.0152 -> 0.015 XRP), same no-live-repricing rule as PRICE_INSTITUTIONAL_XRP.
+  // Oct 22 2026 (0.02 / 1.32 = 0.0152 -> 0.015 XRP), not live-repriced unless XRP_PRICING=live.
   vendor_report: { xrp: "0.015", usd: "0.02" },
   // Full pay-check: $0.02 (owner approved 2026-10-25: "Raise the full trust check to $0.02"; was $0.004).
   trust_check: { xrp: "0.015", usd: "0.02" },
-  funding: { xrp: "0.0023", usd: "0.003" },
-  fear_greed: { xrp: "0.0023", usd: "0.003" },
   // GET /v1/verdict: $0.01 per call (owner approved 2026-10-25: "Ship the verdict at $0.01 a call"; supersedes the legal review
   // M3 suggestion of <= $0.004). VERDICT_MAX_USD caps env overrides; test/verdict.test.ts checks it.
   verdict: { xrp: "0.0075", usd: "0.01" },

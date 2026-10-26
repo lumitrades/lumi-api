@@ -17,43 +17,9 @@ export interface PaidEndpoint {
 }
 
 /** Shared buyer guarantee on every paid endpoint. */
-export const NOT_CHARGED = "Not charged on bad input or stale data (every response carries as_of and stale_after).";
+export const NOT_CHARGED = "Not charged on bad input or when Lumi cannot answer (every response carries as_of).";
 
 export const PAID_ENDPOINTS: PaidEndpoint[] = [
-  {
-    route: "funding",
-    name: "Lumi Trades: perpetual funding rates (OKX perps)",
-    method: "GET",
-    path: "/v1/funding",
-    template: "/v1/funding",
-    summary:
-      "Use this when you need perpetual funding data: the current perpetual funding rate for every tracked coin listed on OKX (rate, 8h-normalised, annualised, next funding time, size band), the BTC rate, the median and the most positive/negative. Refreshed every 15 minutes; a positive rate means the perpetual price is above its index. " + NOT_CHARGED,
-    example: "/v1/funding",
-  },
-  {
-    route: "fear_greed",
-    name: "Lumi Trades: Fear & Greed (CoinMarketCap, with history)",
-    method: "GET",
-    path: "/v1/fear-greed",
-    template: "/v1/fear-greed",
-    summary:
-      "Use this when you need crypto sentiment: the CoinMarketCap Fear & Greed index now, yesterday, last week and last month, the change vs each, yearly high/low and a 30-day daily series. Refreshed every 30 minutes. " + NOT_CHARGED,
-    example: "/v1/fear-greed",
-  },
-  {
-    route: "institutional",
-    name: "Lumi Trades: Institutional & Policy Brief (daily)",
-    method: "GET",
-    path: "/v1/institutional",
-    template: "/v1/institutional",
-    summary:
-      "Use this when you need a sourced daily summary of what central banks, standard-setters, regulators, banks and tokenization firms are doing in " +
-      "digital assets and stablecoins, and which tracked networks each move touches. Every item has a source URL, date, why-it-matters and " +
-      "confidence, and a link_type that separates confirmed links from indirect-alignment analysis. Also: big picture, per-coin map, cross-item " +
-      "connections, no-news notes and dated what-to-watch. JSON with a `markdown` field; ?format=md returns text/markdown. Neutral and apolitical; " +
-      "not financial advice. " + NOT_CHARGED,
-    example: "/v1/institutional",
-  },
   {
     route: "trust_check",
     name: "Lumi Trades: check before paying an x402 URL (allow / warn / block)",

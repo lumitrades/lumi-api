@@ -11,7 +11,7 @@ import { neutralText, neutralWords } from "./bias";
 
 export const SOURCE = "lumitrades.io";
 export const DISCLAIMER =
-  "Market data and information only. Not financial advice and not a recommendation about any asset. Crypto is volatile. Do your own research.";
+  "Automated observations by Lumi, not a rating, endorsement or guarantee. Information only, not financial advice.";
 
 export interface CoinRef {
   id: string;

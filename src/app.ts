@@ -127,6 +127,11 @@ const DEFAULT_XRPL_RPC: Record<string, string[]> = {
 };
 
 /** TRUST_PRIORITY_DAILY_CAP: non-negative integer; unset or invalid = default (5). "0" turns check-driven priority off. */
+/** /.well-known/trustline-merchant.txt body: Lumi's XRPL receiving wallet(s), one `xrpl:<r-address>` per line. No signature. */
+export function trustlineMerchantTxt(cfg: { payTo: string }): string {
+  return `xrpl:${cfg.payTo}\n`;
+}
+
 export function priorityCap(v: string | undefined): number {
   const n = v == null || v.trim() === "" ? NaN : Number(v);
   return Number.isInteger(n) && n >= 0 && n <= 1000 ? n : PRIORITY_DAILY_CAP;
@@ -169,21 +174,14 @@ export interface App {
 export const XRP_MEMO_MS = 30 * 60_000;
 
 const NEEDS: Record<PaidRoute, DataFile[]> = {
-  institutional: ["institutional_brief"],
   vendor_report: [], // trust-layer data (D1), checked in prepare()
   trust_check: [], // trust catalog (D1)
   verdict: [], // trust catalog + seller_activity (D1), same lookup as /v1/check
-  funding: [], // live_feeds (D1)
-  fear_greed: [], // live_feeds (D1), context.json fallback in prepare()
 };
 /** Inputs that enrich a product but whose absence does not block it (the field is simply omitted). */
 const OPTIONAL: Partial<Record<PaidRoute, DataFile[]>> = {};
-/** Paid paths without a {coin} parameter. (/v1/market, /v1/macro/yen, /v1/sentiment, /v1/events and /v1/events/next48h
- *  were retired on 2026-10-25 with the site data they were built from: 410 Gone, see src/retired.ts.) */
+/** Paid paths without a path parameter. Every non-trust data route was retired on 2026-10-25: 410 Gone, see src/retired.ts. */
 const FIXED: Record<string, PaidRoute> = {
-  "/v1/institutional": "institutional",
-  "/v1/funding": "funding",
-  "/v1/fear-greed": "fear_greed",
   "/v1/trust/check": "trust_check",
   "/v1/verdict": "verdict",
 };
@@ -606,7 +604,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       threshold: { min_score: th.minScore, min_paid_test_buys: th.minPaidTests, window_days: BADGE_WINDOW_DAYS, latest_test_buy: "delivered" },
       rules: testedBadgeRules(th),
       live_report: live,
-      embed: d.earned ? `<a href="${live}"><img src="${base}/v1/badge/${encodeURIComponent(s?.vendor_id ?? key)}.svg" alt="Tested by Lumi (live score)"></a>` : null,
+      embed: d.earned ? `<a href="${live}"><img src="${base}/v1/badge/${encodeURIComponent(s?.vendor_id ?? key)}.svg" alt="Lumi test-buy badge: live status"></a>` : null,
       purchasable: false,
     };
     const signed = await signResponse("tested_badge", payload, await signKey(), now(), BADGE_SIGNED_TTL_SEC);
@@ -695,70 +693,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (route === "vendor_report") return prepareVendorReport(coinArg ?? "", base);
     if (route === "trust_check") return prepareTrustCheck(coinArg ?? "", base);
     if (route === "verdict") return prepareVerdict(coinArg ?? "", base);
-    if (route === "funding" || route === "fear_greed") return prepareFeed(route);
-    let coin: CoinRef | undefined;
-    if (coinArg !== undefined) {
-      coin = resolveCoin(await coins(), coinArg);
-      if (!coin) {
-        return {
-          ok: false,
-          status: 404,
-          error: { error: "unknown_coin", coin: coinArg, supported: (await coins()).map((c) => c.symbol), note: "Not charged." },
-        };
-      }
-    }
-    // Load (cached) data before asking for money, so a payment is never
-    // settled when the upstream data is unavailable.
-    let loaded: Record<string, unknown>;
-    try {
-      loaded = { ...(await data.getOptional(OPTIONAL[route] ?? [])), ...(await data.getMany(NEEDS[route])) };
-    } catch (err) {
-      return notForSale("data_unavailable", String((err as Error).message), 30, null);
-    }
-    const t = now();
-    const floorH = DAILY_ROUTE_MAX_AGE_HOURS[route] ?? 0;
-    const stale = staleInputs(loaded, NEEDS[route], t, config.dataMaxAgeHours, floorH);
-    if (stale.length) {
-      const asOfs = stale.map((x) => Date.parse(String(x.as_of ?? ""))).filter((v) => Number.isFinite(v));
-      return notForSale("stale_data", "Lumi's published data is missing or out of date, so this call is not for sale right now.", 300, asOfs.length ? ageSeconds(Math.min(...asOfs), t) : null, { inputs: stale });
-    }
-    // Optional inputs that are stale are dropped (their fields are omitted), never served as current.
-    for (const f of OPTIONAL[route] ?? []) if (staleInputs(loaded, [f], t, config.dataMaxAgeHours, floorH).length) delete loaded[f];
-    const list = await siteCoins();
-    const body = buildBody(route, coin, loaded, list, t);
-    if (body && !hasContent(route, body)) {
-      return notForSale("data_unavailable", `the ${route} data is empty right now`, 300, null);
-    }
-    if (!body) {
-      return coin
-        ? { ok: false, status: 404, error: { error: "no_data_for_coin", coin: coin.symbol, note: "Not charged." } }
-        : notForSale("data_unavailable", `no ${route} data published right now`, 300, null);
-    }
-    const meta = fileMeta(loaded, NEEDS[route], t, config.dataMaxAgeHours, floorH);
-    return { ok: true, route, coin, body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)) };
-  }
-
-  /** Funding / Fear & Greed from the cron-cached feeds (Fear & Greed falls back to the site's CMC snapshot). */
-  async function prepareFeed(route: "funding" | "fear_greed"): Promise<Prepared> {
-    const t = now();
-    const row = await feeds.get(route).catch(() => null);
-    if (feedFresh(row, t)) {
-      const body = route === "funding" ? fundingView(row.doc) : fearGreedView(row.doc);
-      if (body) {
-        const meta = metaFrom(row.fetched_at, row.fetched_at + FEEDS[route].stale_ms, Math.max(t + 60_000, row.fetched_at + FEEDS[route].every_ms), t);
-        return { ok: true, route, body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)) };
-      }
-    }
-    if (route === "fear_greed") {
-      try {
-        const loaded = await data.getMany(["context"]);
-        if (!staleInputs(loaded, ["context"], t, config.dataMaxAgeHours).length) {
-          const body = fearGreedFromContext(loaded.context);
-          if (body) return { ok: true, route, body: isoTimestamps(withMeta(body as Record<string, unknown>, fileMeta(loaded, ["context"], t, config.dataMaxAgeHours))) };
-        }
-      } catch { /* fall through */ }
-    }
-    return notForSale("stale_data", `the ${route === "funding" ? "funding-rate" : "Fear & Greed"} feed is not fresh right now`, 300, ageSeconds(row?.fetched_at, t));
+    // Every paid route is a seller check; all other data routes were retired on 2026-10-25 (src/retired.ts).
+    return { ok: false, status: 404, error: { error: "not_found", route, note: "Not charged." } };
   }
 
   /** What Lumi had on record for this seller before a live check (catalog listing, curated vendor, last free probe). */
@@ -1320,6 +1256,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         return new Response(skillMd(config, base, await coins()), {
           headers: { "Content-Type": "text/markdown; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" },
         });
+      case "/.well-known/trustline-merchant.txt":
+        // t54 Trustline merchant file: one CAIP-10-style line per receiving wallet. Plain text, no signature.
+        return new Response(trustlineMerchantTxt(config), {
+          headers: { "Content-Type": "text/plain; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" },
+        });
       case "/.well-known/agent-card.json":
       case "/.well-known/agent.json":
         return json(200, agentCard(config, base), { "Cache-Control": "public, max-age=300" });
@@ -1425,12 +1366,6 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       }
     }
     const vendorId = route === "vendor_report" ? String(body.id) : undefined;
-    const wantsMarkdown =
-      route === "institutional" && (/^(md|markdown|text)$/i.test(url.searchParams.get("format") ?? "") || /text\/markdown/i.test(request.headers.get("Accept") ?? ""));
-
-    if (route === "institutional" && url.searchParams.has("format") && !/^(json|md|markdown|text)$/i.test(url.searchParams.get("format") ?? "")) {
-      return json(400, { error: "invalid_format", detail: "format must be json or md. Not charged." });
-    }
     const endpoint = endpointFor(route);
     const quote: Quote = {
       routeKey: coin ? `${route}:${coin.symbol}` : vendorId ? `${route}:${vendorId}` : route,
@@ -1450,7 +1385,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       bazaar: bazaarExtension(
         route,
         coin?.symbol ?? vendorId,
-        route === "trust_check" || route === "verdict" ? Object.fromEntries(url.searchParams) : wantsMarkdown && url.searchParams.has("format") ? { format: "md" } : undefined,
+        route === "trust_check" || route === "verdict" ? Object.fromEntries(url.searchParams) : undefined,
         config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route],
       ),
       service: serviceMeta(route),
@@ -1486,13 +1421,6 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
             if (ctx) ctx.waitUntil(p); else await p;
           }
           const access = { mode: "trial", charged: false, wallet: r.wallet, trial_calls_used: r.used, trial_calls_remaining: Math.max(0, TRIAL_LIMITS.perWallet - r.used) };
-          if (wantsMarkdown) {
-            const md = String((body as { markdown?: string }).markdown ?? "");
-            return new Response(`${md}\n_Free trial call ${r.used} of ${TRIAL_LIMITS.perWallet}, not charged_\n`, {
-              status: 200,
-              headers: { "Content-Type": "text/markdown; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" },
-            });
-          }
           const extra = prep.enrich ? await prep.enrich().catch((e) => ({ live: null, live_error: String((e as Error)?.message ?? e) })) : {};
           return json(200, { ...body, ...extra, access }, { "Cache-Control": "no-store" });
         }
@@ -1539,13 +1467,6 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
             ...(paid.asset === "XRP" ? { amount_drops: paid.amount } : { issuer: paid.extra?.issuer }),
             explorer: s.transaction ? `${EXPLORERS[config.network]}${s.transaction}` : null,
           };
-      if (wantsMarkdown) {
-        const md = String((body as { markdown?: string }).markdown ?? "");
-        return new Response(`${md}\n_Paid: ${payment.amount} ${payment.asset}, tx ${payment.explorer ?? payment.transaction}_\n`, {
-          status: 200,
-          headers: { "Content-Type": "text/markdown; charset=utf-8", "Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "PAYMENT-RESPONSE" },
-        });
-      }
       return json(200, { ...body, ...extra, payment });
     });
   }
@@ -1597,18 +1518,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     live,
     feeds,
     async liveRefresh() {
-      // A run that refreshes a due feed does only that (CPU budget); otherwise the stalest coin slice.
-      const t = now();
-      const due = dueFeed(await feeds.ages().catch(() => ({})), t);
-      if (due) {
-        const r = await refreshFeed(feeds, doFetch, due, t).catch((e) => ({ feed: due, ok: false, error: String((e as Error).message).slice(0, 200) }));
-        // On failure keep the old data and its fetched_at; attempt_at backs the feed off for 5 minutes.
-        if (!r.ok) await feeds.get(due).then((old) => feeds.put({ id: due, fetched_at: old?.fetched_at ?? 0, doc: { ...(old?.doc ?? {}), attempt_at: t - FEEDS[due].every_ms + 5 * 60_000 } })).catch(() => {});
-        deps.log?.({ event: "feed_refresh", ...r });
-        return r;
-      }
-      // Per-coin readings were retired on 2026-10-25 (see src/retired.ts): no live signal recompute, feeds only.
-      const r = { skipped: "per_coin_readings_retired", retired_on: RETIRED_ON };
+      // Market feeds (funding, Fear & Greed) and per-coin readings were retired on 2026-10-25 (see src/retired.ts):
+      // the per-minute tick does no external fetch any more.
+      const r = { skipped: "market_feeds_retired", retired_on: RETIRED_ON };
       deps.log?.({ event: "live_refresh", ...r });
       return r;
     },
@@ -1662,15 +1574,6 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       }
     },
   };
-}
-
-function buildBody(route: PaidRoute, coin: CoinRef | undefined, d: Record<string, any>, coins: CoinRef[], now: number) {
-  switch (route) {
-    case "institutional":
-      return institutionalView(d.institutional_brief);
-    default:
-      return null; // vendor_report, trust_check, verdict, funding, fear_greed: built in prepare()
-  }
 }
 
 /** Seconds since a millisecond timestamp, or null when unknown. */

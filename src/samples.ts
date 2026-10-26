@@ -32,37 +32,7 @@ export function truncate(v: unknown, path = "", cut: Truncation = {}, depth = 0)
   return v;
 }
 
-/** Institutional Brief sample: headline + big picture + 2 items + the full list of sources. */
-export function institutionalSample(body: Record<string, any>) {
-  const items: any[] = Array.isArray(body.items) ? body.items : [];
-  const sources = [...new Set(items.flatMap((i) => [i.source_url, ...(Array.isArray(i.additional_sources) ? i.additional_sources : [])]).filter((u) => typeof u === "string"))];
-  return {
-    sample: {
-      kind: body.kind ?? "institutional",
-      timestamp: body.timestamp ?? null,
-      source: body.source ?? null,
-      as_of: body.as_of ?? null,
-      data_age_seconds: body.data_age_seconds ?? null,
-      next_update: body.next_update ?? null,
-      stale_after: body.stale_after ?? null,
-      title: body.title,
-      date: body.date ?? null,
-      coverage_window: body.coverage_window ?? null,
-      headline: items[0]?.headline ?? (Array.isArray(body.big_picture) ? body.big_picture[0] : null) ?? null,
-      big_picture: body.big_picture ?? [],
-      items: items.slice(0, MAX_ITEMS),
-      sources,
-      disclaimer: body.disclaimer ?? null,
-    },
-    truncated: {
-      items: items.length,
-      omitted: ["coin_map", "alignments", "theses_tracked", "connections", "no_notable_news", "watch_next", "markdown"].filter((k) => k in body),
-    },
-  };
-}
-
 export function productSample(route: PaidRoute, body: Record<string, unknown>) {
-  if (route === "institutional") return institutionalSample(body as Record<string, any>);
   const { markdown, payment: _p, access: _a, ...rest } = body as Record<string, unknown>;
   const cut: Truncation = {};
   const sample = truncate(rest, "", cut) as Record<string, unknown>;
@@ -73,7 +43,7 @@ export function productSample(route: PaidRoute, body: Record<string, unknown>) {
   return { sample, truncated: { arrays: cut, ...(omitted.length ? { omitted } : {}) } };
 }
 
-export const SAMPLE_ARGS: Partial<Record<PaidRoute, string>> = { vendor_report: "printmoneylab", trust_check: "url=https%3A%2F%2Fapi.lumitrades.io%2Fv1%2Ffunding" };
+export const SAMPLE_ARGS: Partial<Record<PaidRoute, string>> = { vendor_report: "printmoneylab", trust_check: "url=https%3A%2F%2Fapi.lumitrades.io%2Fv1%2Fverdict" };
 
 export function sampleEntry(cfg: Config, base: string, route: PaidRoute) {
   const e = PAID_ENDPOINTS.find((x) => x.route === route);

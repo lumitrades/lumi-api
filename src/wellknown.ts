@@ -17,7 +17,7 @@ export function mcpServerCard(base: string) {
     title: "Lumi Trades",
     version: VERSION,
     description:
-      "Lumi Trades seller checks (should I pay this x402 URL? allow / warn / block, with signed test-buy receipts) plus neutral crypto market data for agents. " +
+      "Lumi Trades seller checks (should I pay this x402 URL? allow / warn / block, with signed test-buy receipts). " +
       "Free tools answer directly; paid tools return the x402 price (USDC on Base, XRP / RLUSD / USDC on the XRP Ledger, or USDC on Stellar).",
     websiteUrl: `${base}/skill.md`,
     repository: { url: "https://github.com/cypher-osiris/lumi-api", source: "github", subfolder: "mcp" },
@@ -51,14 +51,14 @@ export function agentsJson(base: string) {
       title: "Lumi Trades API",
       version: VERSION,
       description:
-        "Check an x402 seller before paying it (Lumi Trades seller checks). Separately: neutral crypto market data." + " Paid operations use x402 v2 (HTTP 402 + PAYMENT-SIGNATURE), no API key; " +
-        `prices and payment options are in each 402 and in ${base}/.well-known/x402. Never charged when data is stale.`,
+        "Check an x402 seller before paying it (Lumi Trades seller checks). Paid operations use x402 v2 (HTTP 402 + PAYMENT-SIGNATURE), no API key; " +
+        `prices and payment options are in each 402 and in ${base}/.well-known/x402. Never charged when Lumi cannot answer.`,
     },
     sources: [{ id: "lumi", path: `${base}/openapi.json` }],
     flows: [
       flow("trust_check", "Should I pay this x402 URL?", "allow / warn / block with coded reasons for one x402 resource URL, optionally checking the quoted payTo and USD amount.", "trust_check"),
       flow("vendor_report", "x402 vendor report", "Full observation history for one curated vendor: quote checks, test-buys with tx hashes, uptime and latency.", "vendor_report"),
-      flow("institutional", "Institutional & policy brief", "Daily dated, sourced moves by regulators, central banks and banks mapped to XRP, XLM, XDC, QNT, AXL and HBAR.", "institutional"),
+      flow("verdict", "One-label pre-payment check", "checks_passed / check_first / checks_failed / no_data for one x402 resource URL, from the same data as the free GET /v1/check.", "verdict"),
     ],
   };
 }

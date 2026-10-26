@@ -51,17 +51,7 @@ const SKILLS: SkillDef[] = [
   { id: "seller_monitoring", name: "Seller monitoring plans for x402 sellers (info free; plans paid at the REST URL)", tags: ["monitoring", "x402", "sellers", "badge", "audit"], examples: ["seller monitoring plans", "{\"skill\":\"seller_monitoring\"}"], match: /\b(monitor(ing)?|badge|audit)\b/i },
   { id: "trust_feed", name: "Trust data feed for facilitators, wallets and frameworks (info free; keys and plans at the REST URL)", tags: ["data", "feed", "license", "trust", "x402"], examples: ["trust data feed", "{\"skill\":\"trust_feed\"}"], match: /\b(data feed|trust feed|feed|licen[cs]e|bulk lookup)\b/i },
   { id: "samples", name: "Free samples of every paid product", tags: ["samples", "preview", "free"], examples: ["samples", "show me a free sample"], match: /\b(samples?|preview|try|demo)\b/i },
-  { id: "quote", name: "Price quote for a paid call, without paying (free)", tags: ["quote", "x402", "free"], examples: ["quote /v1/funding"], match: /\bquote\b/i },
-  {
-    id: "institutional",
-    route: "institutional",
-    name: "Daily Institutional & Policy Brief",
-    tags: ["institutional", "policy", "regulation", "cbdc", "tokenization", "stablecoins", "xrp", "xlm", "xdc", "qnt", "axl", "hbar", "paid"],
-    examples: ["institutional brief", "what are BIS, IMF and the big banks doing that matters for XRP and QNT?"],
-    match: /\b(institution(al|s)?|policy|regulat(ion|ions|ory|ors?)|bis|imf|treasury|occ|sec|cftc|cbdcs?|jpmorgan|jpm|kinexys|sbi|cross river|securitize|corda|r3|banks?|tokeni[sz](ed|ation))\b/i,
-  },
-  { id: "funding", route: "funding", name: "Perpetual funding rates (OKX perps)", tags: ["crypto", "funding", "perpetuals", "derivatives", "paid"], examples: ["funding rates"], match: /\bfunding\b/i },
-  { id: "fear_greed", route: "fear_greed", name: "Fear & Greed (CoinMarketCap, with history)", tags: ["crypto", "sentiment", "fear-greed", "paid"], examples: ["fear and greed index"], match: /\bfear\b.*\bgreed\b|\bfear[-_ ]?greed\b/i },
+  { id: "quote", name: "Price quote for a paid call, without paying (free)", tags: ["quote", "x402", "free"], examples: ["quote /v1/verdict?url=https://api.example.com/v1/data"], match: /\bquote\b/i },
   {
     id: "vendor_report",
     route: "vendor_report",
@@ -83,7 +73,7 @@ const SKILLS: SkillDef[] = [
 ];
 
 const FREE_DESCRIPTIONS: Record<string, string> = {
-  catalog: "Lists every Lumi endpoint with live prices on every payment network (XRP Ledger, Base, Stellar), the MCP and A2A endpoints, and the no-charge-when-stale guarantee.",
+  catalog: "Lists every Lumi endpoint with live prices on every payment network (XRP Ledger, Base, Stellar), the MCP and A2A endpoints, and the not-charged-when-Lumi-cannot-answer guarantee.",
   vendor_trust:
     "Check an x402 seller before paying it: {\"url\":\"...\"}, {\"domain\":\"...\"} or {\"payTo\":\"...\"} (case-insensitive) looks it up in the full CDP x402 Bazaar catalog (free quote checks of listings on a rotating schedule: 'quote-checked, low confidence'; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys ('test-bought', counted per chain: Base USDC for Bazaar listings, XRPL for a small curated list). Answer-only; tx evidence is in the paid trust check. With no arguments: curated XRPL vendor observations; {\"vendor_id\":\"...\"} for one vendor's summary. Observations, not ratings; no match is not a negative finding.",
   samples: "Free, clearly labelled SAMPLE previews of every paid product (truncated, up to 10 minutes old), with the USD price of each. Use it to see the output shape before paying.",
@@ -91,7 +81,7 @@ const FREE_DESCRIPTIONS: Record<string, string> = {
     `${MONITOR_PRICE_TEXT.replace(/\.$/, "")}. Seller-funded, no auto-renew, payTo proven by signature; paying never changes a score. Answers with the plan table and enrolment steps; payment happens at GET /v1/monitor/subscribe/{plan}?enrollment=<id>&endpoints=<N>.`,
   trust_feed:
     "Licensed trust data feed: free key with 1,000 lookups/month (wallet signature), $1.50 per 1,000 extra lookups, Feed $99/30 days, Feed Pro $199/30 days (snapshot export, webhooks). Answers with plans, endpoints and licence terms; keys and payments at the REST URLs under /v1/feed.",
-  quote: "Live x402 v2 quote (all accepts options) for a paid skill or path, e.g. {\"skill\":\"trust_check\",\"url\":\"...\"} or \"quote /v1/funding\". A 503 means the data is not fresh right now and would not be sold.",
+  quote: "Live x402 v2 quote (all accepts options) for a paid skill or path, e.g. {\"skill\":\"trust_check\",\"url\":\"...\"} or \"quote /v1/verdict?url=...\". A 503 means Lumi cannot answer right now and would not sell the call.",
 };
 
 function priceLine(cfg: Config, route: PaidRoute): string {
@@ -112,7 +102,7 @@ export function agentCard(cfg: Config, base: string) {
       id: s.id,
       name: s.name,
       description: ep
-        ? `${ep.summary} Paid per call via x402 at ${base}${ep.template}: ${priceLine(cfg, s.route!)}. Over A2A this skill returns the live payment terms; it is never charged when data is stale.`
+        ? `${ep.summary} Paid per call via x402 at ${base}${ep.template}: ${priceLine(cfg, s.route!)}. Over A2A this skill returns the live payment terms; it is never charged when Lumi cannot answer.`
         : FREE_DESCRIPTIONS[s.id],
       tags: s.tags,
       examples: s.examples,
@@ -123,10 +113,8 @@ export function agentCard(cfg: Config, base: string) {
   return {
     name: "Lumi Trades",
     description:
-      "Should I pay this x402 URL? Lumi Trades seller checks checks a seller before you pay: allow / warn / block with coded reasons from daily CDP Bazaar index checks and Lumi's own on-chain test-buys, " +
+      "Should I pay this x402 URL? Lumi Trades checks a seller before you pay: allow / warn / block with coded reasons from daily CDP Bazaar index checks and Lumi's own on-chain test-buys, " +
       "(free lookup, paid check, vendor reports); signed delivery receipts come with paid vendor reports and Feed catalog lookups, verifiable free. " +
-      "Separately, neutral crypto market data for AI agents from Lumi Trades (lumitrades.io): funding rates, Fear & Greed " +
-      "and a daily policy brief (regulators, central banks, banks, tokenization). No trade calls. " +
       `Pay per call over x402 v2 with no API key or account, in ${settledIn(cfg)}. Also available as a remote MCP server. Information only, not financial advice.`,
     // A2A 1.0
     supportedInterfaces: A2A_VERSIONS.map((v) => ({ url: a2aUrl, protocolBinding: "JSONRPC", protocolVersion: v })),
@@ -335,9 +323,9 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     return {
       skill: "catalog",
       text:
-        `Lumi Trades checks x402 sellers before you pay and sells neutral market data per call over x402 (${settledIn(cfg)}). ` +
+        `Lumi Trades checks x402 sellers before you pay; paid checks settle per call over x402 (${settledIn(cfg)}). ` +
         "Free here: catalog, quote, vendor_trust, seller_monitoring, trust_feed. Paid skills: " + SKILLS.filter((s) => s.route).map((s) => s.id).join(", ") +
-        ". Ask e.g. 'should I pay https://example.com/api' or 'quote /v1/funding' to get the live payment terms." + (skill ? "" : " (No skill matched your message, so here is the catalog.)"),
+        ". Ask e.g. 'should I pay https://example.com/api' or 'quote /v1/verdict?url=https://api.example.com/v1/data' to get the live payment terms." + (skill ? "" : " (No skill matched your message, so here is the catalog.)"),
       data: {
         api: base,
         agent_card: `${base}/.well-known/agent-card.json`,
@@ -358,7 +346,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     };
   }
   if (skill.id === "vendor_trust") {
-    if (!deps.trust) return { skill: "vendor_trust", text: "The trust layer is unavailable right now.", data: { error: "unavailable" } };
+    if (!deps.trust) return { skill: "vendor_trust", text: "Lumi's seller observations are unavailable right now.", data: { error: "unavailable" } };
     const sv = (k: string) => (typeof data[k] === "string" && (data[k] as string).trim() ? (data[k] as string).trim().slice(0, 500) : undefined);
     const lq = {
       url: sv("url") ?? text.match(/https?:\/\/[^\s"'<>]+/)?.[0],
@@ -405,7 +393,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     }
   }
   if (!path) {
-    if (!target.route) return { skill: "quote", text: "Tell me which paid skill or path to quote, e.g. 'quote /v1/funding' or {\"skill\":\"quote\",\"path\":\"/v1/funding\"}.", data: { error: "missing_path" } };
+    if (!target.route) return { skill: "quote", text: "Tell me which paid skill or path to quote, e.g. 'quote /v1/verdict?url=https://api.example.com/v1/data' or {\"skill\":\"quote\",\"path\":\"/v1/verdict?url=https://api.example.com/v1/data\"}.", data: { error: "missing_path" } };
     const ep = PAID_ENDPOINTS.find((e) => e.route === target.route)!;
     if (target.needsVendor) {
       const vendorArg = (typeof data.vendor_id === "string" && data.vendor_id) || VENDOR_IDS.find((v) => new RegExp(`(^|[^a-z0-9-])${v}([^a-z0-9-]|$)`, "i").test(text));
@@ -421,7 +409,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     } else if (target.needsCoin && !coinArg) {
       return { skill: target.id, text: `Which coin? ${target.id} needs one of: ${coins.map((c) => c.symbol).join(", ")}.`, data: { error: "missing_coin", supported: coins.map((c) => c.symbol) } };
     }
-    if (!path) path = ep.template.replace("{coin}", encodeURIComponent(String(coinArg ?? ""))) + (target.route === "institutional" && data.format === "md" ? "?format=md" : "");
+    if (!path) path = ep.template.replace("{coin}", encodeURIComponent(String(coinArg ?? "")));
   }
   const q = await deps.quote(path);
   const url = `${base}${path}`;

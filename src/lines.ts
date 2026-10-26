@@ -1,37 +1,33 @@
 /**
- * Product lines. Everything is sold under one brand, Lumi Trades. The paid routes fall into two groups: seller checks
- * (pay-check, verdict, vendor reports, badges, monitoring, feed) and market data (Fear & Greed, funding, institutional
- * policy brief). The per-coin readings group (signal, lite, scan, levels, slate), the daily market brief and the market,
- * yen, sentiment, events and next-48h events feeds were retired on 2026-10-25 and answer 410 Gone (src/retired.ts).
+ * Product lines. Everything is sold under one brand, Lumi Trades, and every paid route is a seller check (pay-check,
+ * verdict, vendor reports, badges, monitoring, feed). All other data routes were retired on 2026-10-25 and answer
+ * 410 Gone (src/retired.ts).
  */
 import type { PaidRoute } from "./config";
 
 export const BRAND = "Lumi Trades";
 
-/** Seller-check paid routes. */
+/** Seller-check paid routes (all paid routes). */
 export const TRUST_LINE_ROUTES: PaidRoute[] = ["trust_check", "vendor_report", "verdict"];
 
-export type ProductLine = "market_data" | "trust";
+export type ProductLine = "trust";
 export const LINE_LABEL: Record<ProductLine, string> = {
-  market_data: "Lumi Trades market data",
   trust: "Lumi Trades seller checks",
 };
 
-export function productLine(route: PaidRoute): ProductLine {
-  return TRUST_LINE_ROUTES.includes(route) ? "trust" : "market_data";
+export function productLine(_route: PaidRoute): ProductLine {
+  return "trust";
 }
 
 /** OpenAPI tag names (one per product line, plus the free badge and plan groups). */
 export const OPENAPI_TAG: Record<ProductLine, string> = {
-  market_data: "market data",
   trust: "trust",
 };
 export const OPENAPI_TAGS = [
   { name: "trust", description: "Lumi Trades seller checks: should I pay this x402 URL?, vendor observations and reports, signed receipts. Observations, not ratings or advice." },
   { name: "badge", description: "Lumi Trades seller checks: free 'Tested by Lumi' badges and public result pages." },
-  { name: "market data", description: "Lumi Trades market data: Fear & Greed, funding and the daily policy brief. Neutral data, no trade calls." },
 ];
 
-/** Disclaimer on trust responses (no trading wording). */
+/** Disclaimer on trust responses. */
 export const TRUST_DISCLAIMER =
   "Automated observations by Lumi, not a rating, endorsement or guarantee. Not financial advice.";

@@ -102,7 +102,7 @@ export default {
     }
     return res;
   },
-  /** Cron triggers. LIVE_CRON (every minute): live signals for the stalest slice of the top-50 coins.
+  /** Cron triggers. LIVE_CRON (every minute): a no-op since the market feeds were retired (2026-10-25).
    * Every 30 min: free, unpaid 402-quote probes of the trust allowlist; schedules catalog jobs. */
   async scheduled(event: { cron?: string }, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<void> {
     if (event?.cron === LIVE_CRON) {
