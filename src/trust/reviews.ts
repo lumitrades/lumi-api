@@ -1,5 +1,5 @@
 /**
- * Human review and re-test requests for checks_failed (legal review 2026-10-25: M14 and §3.4).
+ * Human review and re-test requests for checks_failed.
  *
  * - Test-buy and stored-quote based checks_failed (REVIEW_GATED codes) is never auto-published: until a person at Lumi
  *   approves it, the shared check core shows check_first with `checks_failed_pending_review`. This applies to every seller

@@ -1,5 +1,5 @@
 /**
- * "Observed on-chain payments (unverified)" per seller (legal review 2026-10-25, M6/M7/M8): payments to a seller's listed
+ * "Observed on-chain payments (unverified)" per seller: payments to a seller's listed
  * payTo addresses seen on the public ledger in the last 30 days, excluding Lumi, known test and catalog-sweeping wallets and
  * wallets funded by the seller, grouped by funding source (all done upstream, before rows reach this module).
  * Information only: never an input to a label, score, tier, ranking or badge, and nothing a seller can buy.
@@ -42,11 +42,11 @@ export interface ActivityStore {
 
 export const ACTIVITY_MAX_ROWS_PER_INGEST = 2000;
 export const ACTIVITY_NAME = "Observed on-chain payments (unverified)";
-/** §6.4 definition text, verbatim from the legal review. */
+/** Definition text shown with the activity block. */
 export const ACTIVITY_DEFINITION =
   "Payments to this seller's listed pay-to address seen on the public ledger in the last 30 days, excluding Lumi, known test and catalog-sweeping wallets, and wallets funded by the seller. Grouped by funding source. Lumi can't confirm who the payers are or that they are separate customers. Shown in ranges. Not part of the score.";
 export const ACTIVITY_TOO_FEW = "too few payers to show";
-/** Ranges, never exact counts (M7). [min, max, label]. */
+/** Ranges, never exact counts. [min, max, label]. */
 export const ACTIVITY_BANDS: [number, number, string][] = [[0, 0, "0"], [1, 9, "1–9"], [10, 99, "10–99"], [100, 999, "100–999"], [1000, 9999, "1k–10k"], [10000, Infinity, "10k+"]];
 export const activityBand = (n: number | null) => (n == null ? null : ACTIVITY_BANDS.find(([lo, hi]) => n >= lo && n <= hi)?.[2] ?? null);
 /** Recency in weeks, never a timestamp. */
@@ -142,7 +142,7 @@ export function activityPublic(r: ActivityRow | null, now: number, th: VerdictTh
   // seller's own wallets and credits, not about outside payers.
   const flags = activityFlags(r, th);
   const fl = flags.length ? { flags, flag_note: SELF_FUNDED_NOTE } : {};
-  // M8: nothing (counts, concentration, recency) below the minimum number of independent payer groups.
+  // Nothing (counts, concentration, recency) below the minimum number of independent payer groups.
   if (r.payers_30d == null || r.payers_30d < Math.max(5, th.activityMinPayerGroups)) return { ...base, shown: false, note: ACTIVITY_TOO_FEW, as_of, ...fl };
   const stale = now - r.window_end > th.activityMaxAgeDays * 86_400_000;
   return {

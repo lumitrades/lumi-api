@@ -1,5 +1,5 @@
 /**
- * Relationship disclosure (legal review 2026-10-25, M13/M14). Shown in /v1/check and /v1/verdict and stored with a review
+ * Relationship disclosure. Shown in /v1/check and /v1/verdict and stored with a review
  * row for the human reviewer. NEVER an input to the label: labelFor() in ./verdict has no parameter for it, and
  * test/verdict_firewall.test.ts proves the outcome is identical with and without each flag.
  */

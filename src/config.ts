@@ -190,12 +190,12 @@ export const DEFAULT_PRICES: Record<PaidRoute, { xrp: string; usd: string }> = {
   vendor_report: { xrp: "0.015", usd: "0.02" },
   // Full pay-check: $0.02 (owner approved 2026-10-25: "Raise the full trust check to $0.02"; was $0.004).
   trust_check: { xrp: "0.015", usd: "0.02" },
-  // GET /v1/verdict: $0.01 per call (owner approved 2026-10-25: "Ship the verdict at $0.01 a call"; supersedes the legal review
-  // M3 suggestion of <= $0.004). VERDICT_MAX_USD caps env overrides; test/verdict.test.ts checks it.
+  // GET /v1/verdict: $0.01 per call (owner approved 2026-10-25: "Ship the verdict at $0.01 a call").
+  // VERDICT_MAX_USD caps env overrides; test/verdict.test.ts checks it.
   verdict: { xrp: "0.0075", usd: "0.01" },
 };
 /**
- * ONE-LINE SWITCH (legal review M3): "free" = GET /v1/verdict is a free, rate-limited alias of /v1/check (no 402, not listed
+ * ONE-LINE SWITCH: "free" = GET /v1/verdict is a free, rate-limited alias of /v1/check (no 402, not listed
  * as a paid resource); "paid" = sold over x402 at DEFAULT_PRICES.verdict. Env VERDICT_PRICING overrides per deployment.
  */
 export const VERDICT_PRICING: "free" | "paid" = "paid";
@@ -513,7 +513,7 @@ export function loadConfig(env: Env): Config {
     pricesDrops: Object.fromEntries(
       PAID_ROUTES.map((r) => {
         const x = (env as Record<string, string | undefined>)[`PRICE_${r.toUpperCase()}_XRP`] || DEFAULT_PRICES[r].xrp;
-        // M3 cap: a fixed XRP verdict price above the default (~$0.01) falls back to the default.
+        // A fixed XRP verdict price above the default (~$0.01) falls back to the default.
         return [r, xrpToDrops(r === "verdict" && !(Number(x) <= Number(DEFAULT_PRICES.verdict.xrp)) ? DEFAULT_PRICES.verdict.xrp : x)];
       }),
     ) as Record<PaidRoute, string>,
@@ -533,7 +533,7 @@ export function loadConfig(env: Env): Config {
         const R = r.toUpperCase();
         const e = env as Record<string, string | undefined>;
         const v = iouValue(e[`PRICE_${R}_BASE_USDC`] || e[`PRICE_${R}_USDC`] || e[`PRICE_${R}_RLUSD`] || DEFAULT_PRICES[r].usd);
-        // M3 cap: the verdict is never sold above VERDICT_MAX_USD, whatever the env says.
+        // The verdict is never sold above VERDICT_MAX_USD, whatever the env says.
         return [r, r === "verdict" && !(Number(v) <= VERDICT_MAX_USD) ? DEFAULT_PRICES.verdict.usd : v];
       }),
     ) as Record<PaidRoute, string>,

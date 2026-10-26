@@ -1323,7 +1323,7 @@ export function createTrust(deps: TrustDeps): Trust {
       } catch { return json(400, { error: "invalid_json" }); }
       if (r && typeof r === "object" && r.receipt && !r.type) r = r.receipt;
       const check = await verifyReceipt(r);
-      // Step 4b (security review M4): fail closed. This endpoint verifies Lumi receipts only, so whatever issuer.name says
+      // Step 4b: fail closed. This endpoint verifies Lumi receipts only, so whatever issuer.name says
       // (it is attacker-controlled: "Lumi Trades", "LUMI", "Lumi " ...), a receipt passes only when payment.payer is a
       // string on Lumi's published test-buy wallet list for payment.network.
       const payer = r?.payment?.payer;

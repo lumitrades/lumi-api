@@ -1,5 +1,5 @@
 /**
- * ONE label vocabulary for the free /v1/check, the paid /v1/trust/check and /v1/verdict (legal review 2026-10-25, M4):
+ * ONE label vocabulary for the free /v1/check, the paid /v1/trust/check and /v1/verdict:
  *
  *   checks_passed  "Delivered in recent checks"
  *   check_first    "Check first"
@@ -10,7 +10,7 @@
  * src/trust/reviews.ts) and Lumi's own dated test-buys. /v1/check and /v1/verdict call the same function on the same data,
  * so they cannot disagree. Nothing about the seller's relationship with Lumi (monitoring, reports, payments to Lumi, being a
  * competitor or a customer) is an input: labelFor() takes no such field. Customer-activity counts are not an input either
- * (review §6.3: never feed them into a negative verdict).
+ * (they never feed into a negative verdict).
  *
  * Every threshold and sentence lives here or in FAILED_RULE (below) so the review can change them in one place.
  */
@@ -33,7 +33,7 @@ export const DEFINITION =
   "This is a summary of Lumi's own dated observations of this endpoint, not a rating of the business or a statement about its honesty. checks_failed means that, in the window shown, at least two of Lumi's paid test-buys on different days paid and got no usable data, a confirming re-buy failed too, no later buy succeeded and a person at Lumi reviewed it (or the quote paid an unlisted address, an address that is not the seller's, a higher price than listed, or an address on the OFAC SDN list). no_data means Lumi has too little evidence and is not a negative finding. Sellers can reply or ask for a re-test at hello@lumitrades.io, https://lumitrades.io/contact/ or /v1/trust/replies; an open re-test request pauses checks_failed for up to 72 hours while Lumi re-buys. Paying Lumi never changes this result.";
 
 /**
- * The evidence bar for a test-buy based checks_failed (M1). Live quote mismatches and OFAC hits do not use it (immediate).
+ * The evidence bar for a test-buy based checks_failed. Live quote mismatches and OFAC hits do not use it (immediate).
  * minFailedDays: failed conclusive paid buys on at least this many different UTC days...
  * windowDays: ...within this many days, with no successful buy since...
  * requireConfirm: ...plus one more failed buy after that (the automatic confirm re-buy) before the label can flip.
@@ -41,17 +41,17 @@ export const DEFINITION =
 export const FAILED_RULE = { minFailedDays: 2, windowDays: 14, requireConfirm: true };
 /** Appeal / re-test request: checks_failed is paused (shown as check_first, retest_requested) for this long while Lumi re-buys. */
 export const APPEAL_PAUSE_HOURS = 72;
-/** /v1/check note (legal review M5 + N2 wording, verbatim). */
+/** /v1/check note. */
 export const CHECK_NOTE =
   "Free pre-pay check. Paying Lumi (checks, monitoring, reports) never changes a score, tier, ranking or 'Tested by Lumi' result. The paid 'Monitored by Lumi' badge is separate and labelled as paid. " +
   "Only origin + path of the URL is used. We don't store who checked what. A checked seller that shows a warning may be queued for a test-buy.";
-/** M1 recency caps: evidence older than checkFirstAfterDays supports at most check_first; older than noDataAfterDays, no_data. */
+/** Evidence older than checkFirstAfterDays supports at most check_first; older than noDataAfterDays, no_data. */
 export const EVIDENCE_AGE = { checkFirstAfterDays: 30, noDataAfterDays: 90 };
 
 export interface VerdictThresholds {
   /** checks_passed needs a delivered Lumi test-buy no older than this many days (else check_first: untested or stale). */
   payMaxAgeDays: number;
-  /** Customer activity (information only): fewest independent payer groups before anything is shown (M8). */
+  /** Customer activity (information only): fewest independent payer groups before anything is shown. */
   activityMinPayerGroups: number;
   /** Customer-activity rows older than this are not shown. */
   activityMaxAgeDays: number;
@@ -65,8 +65,8 @@ export const VERDICT_DEFAULTS: VerdictThresholds = { payMaxAgeDays: 30, activity
 export function verdictThresholds(env: Record<string, string | undefined> = {}): VerdictThresholds {
   const n = (k: string, lo: number, hi: number, d: number) => { const v = env[k]; const x = v == null || v.trim() === "" ? NaN : Number(v); return Number.isFinite(x) && x >= lo && x <= hi ? x : d; };
   return {
-    payMaxAgeDays: n("VERDICT_PAY_MAX_AGE_DAYS", 1, EVIDENCE_AGE.checkFirstAfterDays, VERDICT_DEFAULTS.payMaxAgeDays), // never above 30 (M1)
-    activityMinPayerGroups: n("VERDICT_ACTIVITY_MIN_GROUPS", 5, 1000, VERDICT_DEFAULTS.activityMinPayerGroups), // never below 5 (M8)
+    payMaxAgeDays: n("VERDICT_PAY_MAX_AGE_DAYS", 1, EVIDENCE_AGE.checkFirstAfterDays, VERDICT_DEFAULTS.payMaxAgeDays), // never above 30
+    activityMinPayerGroups: n("VERDICT_ACTIVITY_MIN_GROUPS", 5, 1000, VERDICT_DEFAULTS.activityMinPayerGroups), // never below 5
     activityMaxAgeDays: n("VERDICT_ACTIVITY_MAX_AGE_DAYS", 1, 90, VERDICT_DEFAULTS.activityMaxAgeDays),
     concentrationPct: n("VERDICT_CONCENTRATION_PCT", 1, 100, VERDICT_DEFAULTS.concentrationPct),
     selfFundedPct: n("VERDICT_SELF_FUNDED_PCT", 1, 100, VERDICT_DEFAULTS.selfFundedPct),
@@ -145,7 +145,7 @@ export const NO_DATA_PRIORITY = ["not_observed", "not_quote_checked", "lumi_itse
 export const conclusiveBuy = (p: any) => !!p && !p.inconclusive && p.delivery !== "inconclusive" && p.data_returned !== null && p.data_returned !== undefined && !(p.data_returned === false && (p.http_status == null || p.http_status === 0));
 
 /**
- * M1: does a run of failed buys meet FAILED_RULE? `buys` newest first (any order is sorted). Returns the streak facts either way.
+ * Does a run of failed buys meet FAILED_RULE? `buys` newest first (any order is sorted). Returns the streak facts either way.
  */
 export function failureStreak(buys: any[], now: number, rule = FAILED_RULE) {
   const c = buys.filter(conclusiveBuy).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));

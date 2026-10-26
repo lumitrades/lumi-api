@@ -1,5 +1,5 @@
 /**
- * Published list of Lumi's test-buy wallets (security review M4).
+ * Published list of Lumi's test-buy wallets.
  *
  * Why: a receipt is signed by the wallet that paid (verify steps 1-4). Without a published payer list, anyone can sign a
  * well-formed receipt with their own wallet and call it a Lumi receipt. Step 4b closes that: a receipt only verifies when

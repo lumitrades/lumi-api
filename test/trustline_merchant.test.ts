@@ -35,3 +35,13 @@ describe("trustline-merchant.txt hardening", () => {
     }
   });
 });
+
+describe("trustline-merchant.txt CORS preflight", () => {
+  it("OPTIONS allows GET, HEAD, OPTIONS", async () => {
+    const app = createApp(ENV, { fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW });
+    const r = await app.fetch(new Request("https://api.lumitrades.io/.well-known/trustline-merchant.txt", { method: "OPTIONS" }));
+    expect(r.status).toBe(204);
+    expect(r.headers.get("Access-Control-Allow-Methods")).toBe("GET, HEAD, OPTIONS");
+    expect(r.headers.get("Access-Control-Allow-Origin")).toBe("*");
+  });
+});

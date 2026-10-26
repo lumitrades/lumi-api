@@ -551,7 +551,7 @@ export function createCatalog(deps: CatalogDeps) {
   }
 
   /**
-   * Confirm re-buy (legal review M1 / §3.4): a failed test-buy that has not met the checks_failed bar, or a seller's re-test
+   * Confirm re-buy: a failed test-buy that has not met the checks_failed bar, or a seller's re-test
    * request, puts the resource back in the Base test-buy queue. Not limited by the never-test-bought rule or the 30-day
    * priority slot (it is a re-test of a failure), but at most once per seller per 24 h. Only Base is bought automatically.
    */

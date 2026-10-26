@@ -4,7 +4,7 @@
  * failure). An inconclusive buy is a dated fact about Lumi's own run, not about the seller: it is never shown as
  * "no data returned", never counted as a failed delivery, and never turns a trust/check verdict into warn or block.
  *
- * Guard (H-1, Oct 23 2026): a stored buy with no HTTP status (null or 0) and no data is always inconclusive, whatever
+ * Guard: a stored buy with no HTTP status (null or 0) and no data is always inconclusive, whatever
  * the uploader said. Only a real HTTP response from the seller can record "no data".
  */
 export type DeliveryState = "delivered" | "not_delivered" | "inconclusive";

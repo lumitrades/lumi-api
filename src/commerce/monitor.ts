@@ -616,7 +616,7 @@ export function createMonitor(deps: CommerceDeps) {
   }
 
   async function reply(request: Request) {
-    // No credentials at all -> 401 up front (audit 2026-10-23b L-12), so an unauthenticated caller never sees 404 unknown_enrollment
+    // No credentials at all -> 401 up front, so an unauthenticated caller never sees 404 unknown_enrollment
     if (!bearer(request)) return json(401, { error: "management_token_required", hint: "Authorization: Bearer <management token from enrolment>" }, { ...NO_STORE, "WWW-Authenticate": "Bearer" });
     const b = await readJson(request, 8000);
     if (!b) return bad("invalid_json");
@@ -1186,7 +1186,7 @@ export function createMonitor(deps: CommerceDeps) {
     const order = ["Not delivering", "Degraded", "No recent data", "Operational"];
     const overall = eps.length ? order.find((o) => eps.some((x) => x.status === o))! : "No recent data";
     const freeOnly = st.top?.plan === "watch_free";
-    // An ended trial is not monitored: never show a stale "Operational" (legal review 3-M1).
+    // An ended trial is not monitored: never show a stale "Operational".
     const frozenStatus = st.frozen ? `Trial ended ${iso(st.freezeAt!)!.slice(0, 10)}, not monitored` : "";
     const body = {
       kind: "lumi_monitor_status", enrollment_id: e.id, pay_to: e.pay_to, network: e.network, domain: e.domain, ...(e.is_test ? { test: true } : {}),

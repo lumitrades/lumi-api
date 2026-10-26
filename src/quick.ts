@@ -102,10 +102,10 @@ const conclusive = (p: Json) => p?.delivery !== "inconclusive" && p?.data_return
 const inconclusiveText = (p: Json, what: string) =>
   `Lumi's latest ${what} (${p.at}, tx ${p.tx_hash}) paid ${p.amount} ${p.asset}, but Lumi recorded no HTTP response (${p.inconclusive_reason ?? "no_http_response"}): delivery unknown. This was a Lumi-side failure and is not counted against the seller.`;
 
-/** Evidence older than this supports at most check_first, and older than NO_DATA_AFTER_DAYS at most no_data (legal review §3.3). */
+/** Evidence older than this supports at most check_first, and older than NO_DATA_AFTER_DAYS at most no_data. */
 export const EVIDENCE_CAUTION_AFTER_DAYS = EVIDENCE_AGE.checkFirstAfterDays;
 export const EVIDENCE_NO_DATA_AFTER_DAYS = EVIDENCE_AGE.noDataAfterDays;
-/** Reason codes that mean "Lumi has no evidence about this seller": alone they give decision "unknown" (label no_data), not warn (M2). */
+/** Reason codes that mean "Lumi has no evidence about this seller": alone they give decision "unknown" (label no_data), not warn. */
 export const NO_DATA_CODES = ["not_observed", "not_quote_checked"];
 
 export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: Json | null, base: string, sanctions?: Pick<SanctionsScreen, "check" | "checkAny">, now = Date.now()) {
@@ -139,7 +139,7 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
   const ref = e ?? domEntries[0];
   const entries: Json[] = e ? [e] : domEntries;
   const listedPayTo: string[] = [...new Set<string>(entries.flatMap((x) => (x.pay_to ?? []).map((p: Json) => String(p.pay_to).toLowerCase())))];
-  // M-3 (audit 2026-10-23b): the Bazaar only lists EVM/Solana payTos, so an XRPL payTo Lumi itself paid was a false block.
+  // The Bazaar only lists EVM/Solana payTos, so an XRPL payTo Lumi itself paid was a false block.
   // Also known: the payTos of Lumi's curated record for this seller (by id, or the same operator via a shared listed payTo)
   // and seller.pay_to of Lumi's own signed test-buy receipts for these entries.
   const knownRaw: string[] = [
@@ -177,7 +177,7 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
     if (ps[0] && !conclusive(ps[0])) add("purchase_inconclusive", "info", inconclusiveText(ps[0], "test-buy"));
     if (last) {
       if (last.data_returned === false) {
-        // M1 (legal review 2026-10-25): checks_failed from test-buys only after failed buys on >= 2 UTC days within 14 days, no
+        // checks_failed from test-buys only after failed buys on >= 2 UTC days within 14 days, no
         // success since, and a confirming re-buy. Otherwise check_first and a confirm re-buy is requested. Old evidence is capped.
         const st = failureStreak(ps, now);
         const ageDays = (now - Date.parse(last.at)) / 86_400_000;

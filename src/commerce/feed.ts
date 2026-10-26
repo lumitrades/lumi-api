@@ -95,7 +95,7 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
     if (!t || !t.startsWith("lumi_fk_")) return null;
     return store.keyByHash(await sha256(t));
   }
-  // L-9 (audit 2026-10-23b): a key that was sent but is malformed or unknown gets invalid_api_key, not api_key_required
+  // A key that was sent but is malformed or unknown gets invalid_api_key, not api_key_required
   const needKey = (base: string, request?: Request) => request && bearer(request)
     ? json(401, { error: "invalid_api_key", detail: "The API key is malformed, unknown or was rotated.", signup: `${base}/v1/feed`, note: "Not charged." }, { ...NO_STORE, "WWW-Authenticate": 'Bearer error="invalid_token"' })
     : json(401, { error: "api_key_required", hint: "Authorization: Bearer <api key>", signup: `${base}/v1/feed`, note: "Not charged." }, { ...NO_STORE, "WWW-Authenticate": "Bearer" });

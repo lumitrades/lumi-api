@@ -1,6 +1,5 @@
 /**
- * Signed test-buy receipts: `counterparty_delivery_receipt` v0.1 (proposed ARS evidence type,
- * notes/outreach/xrpl_drafts.md §2.1).
+ * Signed test-buy receipts: `counterparty_delivery_receipt` v0.1 (proposed ARS evidence type).
  *
  * One receipt per Lumi test-buy of a seller. The body is hashed as SHA-256 of its RFC 8785-style canonical JSON
  * (with `receipt_hash` and `signer` removed) and the PAYING wallet signs `lumi-receipt:<network>:<tx_hash>:<receipt_hash>`
@@ -58,7 +57,7 @@ export const receiptMessage = (network: string, tx: string, hash: string) => `lu
 
 /** delivery.outcome from a stored test-buy row. */
 export function outcomeOf(httpStatus: number | null | undefined, dataReturned: boolean, summary = "", inconclusive?: string | null): Receipt["delivery"]["outcome"] {
-  // Guard (H-1): no HTTP response recorded = inconclusive (Lumi-side), never no_data / timeout / other.
+  // Guard: no HTTP response recorded = inconclusive (Lumi-side), never no_data / timeout / other.
   if (deliveryState({ http_status: httpStatus, data_returned: dataReturned, inconclusive }) === "inconclusive") return "inconclusive";
   if (dataReturned) return "delivered";
   if (httpStatus == null || httpStatus === 0) return /timeout|timed out|abort/i.test(summary) ? "timeout" : "other";
@@ -88,6 +87,9 @@ export async function verifyReceipt(r: any, opts: { minimalPayment?: boolean } =
   if (r.version !== RECEIPT_VERSION) errors.push("version");
   for (const k of ["receipt_id", "issued_at", "issuer", "seller", "payment", "delivery", "receipt_hash", "signer"]) if (r[k] == null) errors.push("missing_" + k);
   if (errors.length) return out;
+  // issuer is informational (never trusted for who paid), but it must be well formed.
+  const iss = r.issuer;
+  if (!iss || typeof iss !== "object" || Array.isArray(iss) || typeof iss.name !== "string" || !iss.name.trim() || iss.name.length > 100) errors.push("issuer");
   const p = r.payment, s = r.signer;
   if (p.network !== "xrpl:0" && p.network !== "eip155:8453" && p.network !== "stellar:pubnet") errors.push("payment.network");
   if (p.network === "stellar:pubnet" && !STELLAR_TX_RE.test(String(p.tx_hash))) errors.push("payment.tx_hash");
@@ -115,14 +117,14 @@ export async function verifyReceipt(r: any, opts: { minimalPayment?: boolean } =
     if (p.network !== "eip155:8453") errors.push("key_type_network");
     const rec = recoverEvmSigner(msg, String(s.signature));
     out.signature_ok = !!rec && EVM_ADDR_RE.test(String(s.address)) && rec === String(s.address).toLowerCase();
-    out.signer_is_payer = String(s.address).toLowerCase() === String(p.payer).toLowerCase();
+    out.signer_is_payer = typeof p.payer === "string" && typeof s.address === "string" && s.address.toLowerCase() === p.payer.toLowerCase();
   } else if (s.key_type === "stellar-ed25519") {
     if (p.network !== "stellar:pubnet") errors.push("key_type_network");
     if (!STELLAR_ADDR_RE.test(String(s.address))) errors.push("signer.address");
     out.signature_ok = STELLAR_ADDR_RE.test(String(s.address)) && verifyStellarSignature(msg, String(s.signature), String(s.address));
     out.signer_is_payer = s.address === p.payer;
   } else errors.push("signer.key_type");
-  // I-2: a valid signature over a stated hash that does not match the body proves nothing about this body.
+  // A valid signature over a stated hash that does not match the body proves nothing about this body.
   if (out.signature_ok && !out.hash_ok) { out.signature_ok = false; errors.push("signature_not_over_body"); }
   else if (!out.signature_ok) errors.push("signature_invalid");
   if (!out.signer_is_payer && !opts.minimalPayment) errors.push("signer_not_payer");

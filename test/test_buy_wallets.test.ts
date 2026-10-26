@@ -93,12 +93,13 @@ const PAYER: Record<Net, string> = { xrpl: XADDR, base: evm.address.toLowerCase(
 const LIST_ENV: Record<Net, string> = { xrpl: "TRUST_BUYER_ADDRESSES", base: "TRUST_BUYER_EVM", stellar: "TRUST_BUYER_STELLAR" };
 
 /** Build and sign a receipt end to end on `net`, as an attacker with their own wallet could, with any issuer.name. */
-async function receiptOn(net: Net, issuerName?: unknown): Promise<any> {
+async function receiptOn(net: Net, issuerName?: unknown, payerOverride?: unknown): Promise<any> {
   const b: PendingBuy = net === "xrpl" ? buy
     : net === "base" ? { ...buy, network: "eip155:8453", tx_hash: "0x" + "cd".repeat(32), amount: "0.01", asset: "USDC", pay_to: "0x" + "11".repeat(20) }
     : { ...buy, network: "stellar:pubnet", tx_hash: "ab".repeat(32), amount: "0.001", asset: "USDC", pay_to: ST_SELLER };
   const sellerPayTo = net === "xrpl" ? "rPT1Sjq2YGrBMTttX4GZHjKu9dyfzbpAYe" : b.pay_to!;
   const body: any = buildReceiptBody(b, { payer: PAYER[net], pay_to: sellerPayTo, ledger_result: net === "xrpl" ? "tesSUCCESS" : net === "base" ? "success" : "successful", ...(net === "xrpl" ? { ledger_index: 1 } : net === "base" ? { block_number: 5 } : {}) } as any, { issuedAt: new Date(NOW).toISOString() });
+  if (payerOverride !== undefined) body.payment = { ...body.payment, payer: payerOverride };
   if (issuerName === undefined) { /* keep "Lumi" */ } else if (issuerName === null) delete body.issuer; else body.issuer = { ...body.issuer, name: issuerName };
   const h = await receiptHash(body);
   const message = receiptMessage(b.network, b.tx_hash, h);
@@ -117,7 +118,7 @@ describe("step 4b fails closed (M4 bypass regression)", () => {
         const res = await verify(app(), await receiptOn(net, v));
         expect(res.error, `${net} ${JSON.stringify(v)}`).toBeUndefined();
         expect(res.ok, `${net} ${JSON.stringify(v)}`).toBe(false);
-        if (typeof v !== "string") continue; // malformed issuer: rejected earlier, also fine
+        if (typeof v !== "string" || !v.trim()) continue; // malformed issuer: rejected by the issuer schema check, also fine
         // A well-formed, correctly signed receipt: only step 4b stops it.
         expect(res.hash_ok, `${net} ${JSON.stringify(v)}`).toBe(true);
         expect(res.signature_ok, `${net} ${JSON.stringify(v)}`).toBe(true);
@@ -141,15 +142,32 @@ describe("step 4b fails closed (M4 bypass regression)", () => {
     const res = await verify(app({ TRUST_BUYER_STELLAR: XADDR }), await receiptOn("xrpl"));
     expect(res.ok).toBe(false);
   });
-  it("non-string payer or network is never on the list (no String() coercion)", async () => {
+  it("non-string payer is rejected even when the receipt is re-hashed and re-signed (no String() coercion)", async () => {
     const w = normaliseWallets({ xrpl: [XADDR], evm: [], stellar: [] });
-    expect(isLumiTestBuyWallet(w, "xrpl:0", [XADDR] as any)).toBe(true); // helper alone coerces; the route guards it
-    const r = await receiptOn("xrpl");
-    for (const bad of [[XADDR], { toString: () => XADDR }, 1]) {
-      const res = await verify(app({ TRUST_BUYER_ADDRESSES: XADDR }), { ...r, payment: { ...r.payment, payer: bad } });
-      expect(res.ok).toBe(false);
-      expect(res.payer_on_lumi_wallet_list).toBe(false);
+    expect(isLumiTestBuyWallet(w, "xrpl:0", [XADDR] as any)).toBe(true); // helper alone coerces; verify and the route guard it
+    for (const net of ["xrpl", "base", "stellar"] as Net[]) {
+      for (const bad of [[PAYER[net]], [evm.address], 1, { a: PAYER[net] }]) {
+        const r = await receiptOn(net, undefined, bad);
+        const res = await verify(app({ [LIST_ENV[net]]: PAYER[net] }), r);
+        const tag = `${net} ${JSON.stringify(bad)}`;
+        expect(res.error, tag).toBeUndefined();
+        expect(res.hash_ok, tag).toBe(true); // re-hashed: this exercises the payer guard, not a hash mismatch
+        expect(res.signature_ok, tag).toBe(true);
+        expect(res.signer_is_payer, tag).toBe(false);
+        expect(res.errors, tag).toContain("signer_not_payer");
+        expect(res.ok, tag).toBe(false);
+        expect(res.payer_on_lumi_wallet_list, tag).toBe(false);
+      }
     }
+  });
+  it("issuer must be a well-formed object with a non-empty string name", async () => {
+    for (const v of [42, "", "   ", "x".repeat(101)]) {
+      const res = await verify(app(), await receiptOn("xrpl", v));
+      expect(res.errors, JSON.stringify(v)).toContain("issuer");
+      expect(res.ok).toBe(false);
+    }
+    const arr = await verify(app(), { ...(await receiptOn("xrpl")), issuer: ["Lumi"] });
+    expect(arr.errors).toContain("issuer");
   });
   it("the how-to no longer keys step 4b on issuer.name", async () => {
     const doc = await (await app().fetch(new Request("https://x.test/v1/trust/receipts/verify"))).json() as any;

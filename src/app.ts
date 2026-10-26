@@ -131,7 +131,7 @@ export function trustlineMerchantTxt(cfg: { payTo: string }): string {
   return `xrpl:${cfg.payTo}\n`;
 }
 
-/** /.well-known/security.txt (RFC 9116) for the API host (security review L1). Same contact as the site; Expires within a year. */
+/** /.well-known/security.txt (RFC 9116) for the API host. Same contact as the site; Expires within a year. */
 export const API_SECURITY_TXT = [
   "Contact: mailto:hello@lumitrades.io",
   "Expires: 2027-10-24T00:00:00.000Z",
@@ -915,7 +915,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
    * slot per seller per PRIORITY_SELLER_DAYS = 30 days, TRUST_PRIORITY_DAILY_CAP sellers per day). `source` is only logged; it never changes the outcome.
    */
   async function prioritySignal(body: Record<string, unknown>, exact: unknown, source: string) {
-    // M1: a failed test-buy below the checks_failed bar asks for a confirming re-buy (at most once per seller per 24 h).
+    // A failed test-buy below the checks_failed bar asks for a confirming re-buy (at most once per seller per 24 h).
     if ((body as any)?.confirm_rebuy) await confirmRebuy(exact, "confirm_rebuy", source);
     const cand = buyCandidate(body as any, exact, now());
     if (!cand) return null;
@@ -999,6 +999,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           ? MCP_CORS
           : path === "/a2a"
           ? A2A_CORS
+          : path === "/.well-known/trustline-merchant.txt"
+          ? { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS", "Access-Control-Max-Age": "86400" }
           : TRUST_POST_PATHS.includes(path) || commerce.postPaths.includes(path)
           ? {
               "Access-Control-Allow-Origin": "*",
@@ -1164,7 +1166,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         return ok ? json(200, { ok: true, host, evidence: x.evidence, state: x.action === "approve" ? "approved" : "rejected" }, noStore) : json(404, { error: "review_not_found" }, noStore);
       }
       if (x.action === "appeal") {
-        // §3.4: pause checks_failed for 72 h, show "re-test requested" and the seller's reply, and re-buy.
+        // Re-test request: pause checks_failed for 72 h, show "re-test requested" and the seller's reply, and re-buy.
         const reply = typeof x.reply === "string" && x.reply.trim() ? x.reply.trim().slice(0, 1000) : null;
         const source = typeof x.source === "string" ? x.source.slice(0, 40) : "email";
         await reviewStore.openAppeal({ host, opened_at: t, until_at: appealUntil(t), source, reply, rebuy: null });

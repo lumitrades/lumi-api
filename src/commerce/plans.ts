@@ -141,11 +141,11 @@ export const PLATFORM_LICENCE = {
 
 export const WATCH_FREE = { endpoints: 1, termDays: TERM_DAYS, label: "free tier, no test-buys" };
 export const WATCH_TRIAL = { days: 14, capUsd: 0.25, endpoints: WATCH_TIERS.watch_plus_trial.maxEndpoints, label: "Watch free trial" };
-/** Watch Pro test-buy wording, used the same way on every surface (legal review 3-H1). */
+/** Watch Pro test-buy wording, used the same way on every surface. */
 export const WATCH_PRO_BUYS = "daily buys on up to 3 chains, limited by the test-buy budget";
-/** What happens when the free trial ends (legal review 3-M1). Keep in sync with tierState/badgeStatus/statusPage. */
+/** What happens when the free trial ends. Keep in sync with tierState/badgeStatus/statusPage. */
 export const WATCH_TRIAL_END = "On day 14 the trial ends: nothing is charged, checks and test-buys stop, the Monitored badge comes off, and history freezes read-only.";
-/** Badge labels: a paid plan says so on the embeddable SVG itself (legal review 3-H2); the trial is labelled free. */
+/** Badge labels: a paid plan says so on the embeddable SVG itself; the trial is labelled free. */
 export const PAID_BADGE_LABEL = "Monitored by Lumi · paid plan";
 export const TRIAL_BADGE_LABEL = "Monitored by Lumi · free trial";
 /** A seller with an unexpired test-buy pack (and no monitoring tier): says paid on the SVG too. */

@@ -112,7 +112,7 @@ export function checkPayload(o: {
   const reasons = (Array.isArray(v.reasons) ? v.reasons : []).map((r: any) => ({ code: String(r.code), severity: String(r.severity) }));
   return {
     decision: String(v.verdict) as "allow" | "warn" | "block" | "unknown",
-    // Shared label set (legal review M4). The legacy decision stays for existing clients; the mapping is in /v1/verdict/rules.
+    // Shared label set. The legacy decision stays for existing clients; the mapping is in /v1/verdict/rules.
     label: (v.label ?? DECISION_TO_LABEL[String(v.verdict) as keyof typeof DECISION_TO_LABEL] ?? "no_data") as Label,
     label_text: LABELS[(v.label ?? DECISION_TO_LABEL[String(v.verdict) as keyof typeof DECISION_TO_LABEL] ?? "no_data") as Label],
     confidence: v.confidence ?? null,
@@ -122,7 +122,7 @@ export function checkPayload(o: {
     score: o.score,
     link: o.link,
     reply_url: DISPUTE_URL,
-    // Disclosure only (M13/M14): never an input to the decision or label.
+    // Disclosure only: never an input to the decision or label.
     relationship: v.relationship ?? null,
     commercial_relationship: v.commercial_relationship ?? [],
     // Free probe-checked tier: always labelled "Checked, not test-bought" unless Lumi has a delivered test-buy; verified is always false.

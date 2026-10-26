@@ -47,7 +47,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
 ];
 
 /**
- * GET /v1/verdict, listed as a paid resource only when the owner switches VERDICT_PRICING to "paid" (legal review M3).
+ * GET /v1/verdict, listed as a paid resource only when the owner switches VERDICT_PRICING to "paid".
  * In the default free mode it is a free, rate-limited alias of /v1/check and appears under free endpoints instead.
  */
 export const VERDICT_ENDPOINT: PaidEndpoint = {
