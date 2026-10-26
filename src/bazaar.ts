@@ -147,7 +147,7 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
   },
   receipts: {
     description:
-      "Use when an agent wants the proof behind a seller check: the signed test-buy receipts Lumi Trades holds for one x402 seller (domain, resource URL or payTo), newest first, with date, endpoint, network (Base, XRP Ledger, Stellar), amount, transaction hash, explorer link and delivered yes/no. Anyone can verify a receipt for free at /v1/trust/receipts/verify. Not charged on bad input or when Lumi holds no receipt for the seller. Observations, not a guarantee.",
+      "Use when an agent wants the record behind a seller check: the signed test-buy receipts Lumi Trades holds for one x402 seller (domain, resource URL or payTo), newest first, with date, endpoint, network (Base, XRP Ledger, Stellar), amount, transaction hash, explorer link and outcome (delivered, not delivered or inconclusive). Anyone can verify a receipt for free at /v1/trust/receipts/verify. Not charged on bad input or when Lumi has no test-buy of the seller. Observations, not a guarantee.",
     query: {
       seller: { type: "string", description: "The seller: a domain (api.example.com), an x402 resource URL or a payTo address (required)" },
     },
@@ -211,7 +211,7 @@ export function errorDocs(route: PaidRoute): ErrorDoc[] {
   else if (COIN_ROUTES.includes(route) || route === "vendor_report") out.push({ status: 400, error: "invalid_input", when: "Path placeholder not filled in (e.g. {id}) on a paid request. Never charged." });
   out.push({ status: 402, error: "payment_required", when: "No payment, or the payment was invalid or failed to settle: x402 v2 PaymentRequired in the body and the PAYMENT-REQUIRED header." });
   if (COIN_ROUTES.includes(route)) out.push({ status: 404, error: "not_found", when: "Unknown coin. Never charged." });
-  if (route === "receipts") out.push({ status: 404, error: "not_found", when: "Lumi holds no test-buy receipt for this seller (the free GET /v1/check still answers). Never charged." });
+  if (route === "receipts") out.push({ status: 404, error: "not_found", when: "Lumi has no test-buy of this seller (the free GET /v1/check still answers). Never charged." });
   if (route === "vendor_report") out.push({ status: 404, error: "not_found", when: "Unknown vendor id (GET /v1/trust/vendors lists ids). Never charged." });
   out.push({ status: 409, error: "idempotency_conflict | settlement_status_unknown", when: "Idempotency-Key reused with a different payment (never charged), or the facilitator did not confirm settlement; check the transaction before paying again." });
   out.push({ status: 429, error: "rate_limited", when: "Not returned on paid calls. The free lookups (/v1/check, /v1/trust/vendors, /v1/trust/catalog) return 429 with Retry-After over their limits; a facilitator 429 surfaces as a retryable 503." });
@@ -296,7 +296,7 @@ const HEADLINES: Record<PaidRoute, (subject?: string) => string> = {
   vendor_report: (v) => `x402 seller reputation report${v ? ` for ${v}` : ""} (uptime, latency, test-buys)`,
   trust_check: () => "Check before paying an x402 URL (allow / warn / block with coded reasons)",
   verdict: () => "Check before paying: one-label x402 pre-payment check (checks_passed / check_first / checks_failed / no_data)",
-  receipts: () => "Signed x402 test-buy receipts for one seller (tx hash, explorer link, delivered yes/no)",
+  receipts: () => "Signed x402 test-buy receipts for one seller (tx hash, explorer link, outcome)",
   batch_check: () => "Check up to 10 x402 sellers before paying, one signed answer",
 };
 

@@ -129,7 +129,21 @@ describe("GET /v1/trust/receipts", () => {
     expect((await a.json() as any).note).toBe("Not charged.");
     const b = await s.req("/v1/trust/receipts?seller=nobody-here.example");
     expect(b.status).toBe(404);
-    expect((await b.json() as any).note).toBe("Not charged.");
+    const bj = await b.json() as any;
+    expect(bj.note).toBe("Not charged.");
+    expect(bj.detail).toBe("Lumi has no test-buy of this seller yet. No test-buy is not a negative finding.");
+    expect(bj.free_check).toBe(`${BASE}/v1/check?url=${enc("https://nobody-here.example/")}`);
+  });
+  it("404 for a payTo with no test-buy points free_check at the free payTo lookup, not an empty /v1/check?url=", async () => {
+    const s = await setup();
+    for (const p of [payTo(99), "rMnHeutYALco8RYFVcmuU4BCgSzBpPEh32"]) {
+      const r = await s.req("/v1/trust/receipts?seller=" + enc(p));
+      expect(r.status, p).toBe(404);
+      const j = await r.json() as any;
+      expect(j.note).toBe("Not charged.");
+      expect(j.free_check, p).toBe(`${BASE}/v1/trust/vendors?payTo=${enc(p)}`);
+      expect(j.free_check).not.toMatch(/\/v1\/check\?url=$/);
+    }
   });
   it("returns Lumi's test-buys for the seller, newest first, signed", async () => {
     const s = await setup();

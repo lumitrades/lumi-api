@@ -42,7 +42,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
       "(min/p50/p90/p95/max) and the 7-day trend; uptime % over 24h/7d/30d/90d and a daily series; per-endpoint quoted-price history; " +
       "agent reports; vendor replies; score components, sample sizes and confidence labels. Automated observations, not a rating. " +
       "Not sold (503, not charged) when the vendor has no observation in the last 48 h. The free summary is GET /v1/trust/vendors/{id}.",
-    example: "/v1/trust/vendors/printmoneylab/report",
+    example: "/v1/trust/vendors/example-vendor/report",
   },
   {
     route: "receipts",
@@ -51,7 +51,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     path: "/v1/trust/receipts",
     template: "/v1/trust/receipts",
     summary:
-      "Use this when you want the proof behind a seller check: the signed test-buy receipts Lumi holds for one x402 seller, newest first (up to 50). Query: seller (required): a domain, an x402 resource URL or a payTo address. Each receipt has date, endpoint, network (Base, XRP Ledger, Stellar), amount, transaction hash, explorer link and delivered yes/no, plus the signed counterparty_delivery_receipt that anyone can verify for free at /v1/trust/receipts/verify. Only Lumi's own test-buys from its published wallets (/v1/check/wallets). Not charged on bad input or when Lumi holds no receipt for the seller (404). Paying never changes a score or label. Observations, not a guarantee.",
+      "Use this when you want the record behind a seller check: the signed test-buy receipts Lumi holds for one x402 seller, newest first (up to 50). Query: seller (required): a domain, an x402 resource URL or a payTo address. Each receipt has date, endpoint, network (Base, XRP Ledger, Stellar), amount, transaction hash, explorer link and outcome (delivered, not delivered or inconclusive), plus the signed counterparty_delivery_receipt that anyone can verify for free at /v1/trust/receipts/verify. Only Lumi's own test-buys from its published wallets (/v1/check/wallets). Not charged on bad input or when Lumi has no test-buy of the seller (404). Paying never changes a score or label. Observations, not a guarantee.",
     example: "/v1/trust/receipts?seller=api.example.com",
   },
   {

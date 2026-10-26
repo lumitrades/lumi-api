@@ -5,7 +5,7 @@
  * (with `receipt_hash` and `signer` removed) and the PAYING wallet signs `lumi-receipt:<network>:<tx_hash>:<receipt_hash>`
  * (XRPL: ripple-keypairs over the UTF-8 hex of the message; Base: EIP-191 personal_sign; Stellar: ed25519 over the UTF-8 message, base64).
  * Signing happens only on the operator box (tools/sign_receipts.ts); the Worker never holds a wallet key. It only verifies
- * and stores receipts, serves them in the paid vendor report and paid Feed catalog lookups (not in trust/check), and verifies any receipt for free.
+ * and stores receipts, serves them in paid receipt lookups (/v1/trust/receipts), the paid vendor report and paid Feed catalog lookups (not in trust/check), and verifies any receipt for free.
  */
 import { recoverEvmSigner, sha256Hex, verifyXrplSignature, verifyStellarSignature, xrplAddressOf, XRPL_ADDR_RE, EVM_ADDR_RE, XRPL_TX_RE, EVM_TX_RE, STELLAR_ADDR_RE, STELLAR_TX_RE } from "./verify";
 import type { D1Like } from "../config";
@@ -260,7 +260,7 @@ export function receiptVerifyDoc(base: string) {
     type: RECEIPT_TYPE,
     version: RECEIPT_VERSION,
     status: "PROPOSED evidence format (v0.1); Lumi issues one per test-buy of a seller.",
-    where_receipts_are: `Paid only: ${base}/v1/trust/vendors/{id}/report ($0.02; paid_test_buys.history[].receipt) and paid catalog lookups, POST ${base}/v1/feed/lookup on the Feed and Feed Pro plans (results[].entries[].purchases[].receipt). ${base}/v1/trust/check returns a verdict, not receipts. Free lookups stay answer-only.`,
+    where_receipts_are: `Paid only: ${base}/v1/trust/receipts?seller= (receipts[].receipt, Lumi's test-buys of one seller), ${base}/v1/trust/vendors/{id}/report ($0.02; paid_test_buys.history[].receipt) and paid catalog lookups, POST ${base}/v1/feed/lookup on the Feed and Feed Pro plans (results[].entries[].purchases[].receipt). ${base}/v1/trust/check returns a verdict, not receipts. Free lookups stay answer-only.`,
     verify_online: `POST ${base}/v1/trust/receipts/verify with the receipt JSON as the body (free). Returns hash/signature checks and, with ?ledger=1, an on-chain check of the payment.`,
     verify_yourself: [
       "1. receipt_hash: remove receipt_hash and signer, serialise the rest as RFC 8785-style canonical JSON (keys sorted, no whitespace), SHA-256, lowercase hex. It must equal receipt_hash.",

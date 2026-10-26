@@ -940,7 +940,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const receipts = rows.filter((r) => (seen.has(r.tx_hash) ? false : (seen.add(r.tx_hash), true)))
         .sort((a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0)).slice(0, RECEIPTS_MAX);
       if (!receipts.length) {
-        return { ok: false, status: 404, error: { error: "not_found", detail: "Lumi holds no test-buy receipt for this seller yet. No receipt is not a negative finding.", free_check: `${base}/v1/check?url=${encodeURIComponent(q.domain ? `https://${q.domain}/` : "")}`, note: "Not charged." } };
+        return { ok: false, status: 404, error: { error: "not_found", detail: "Lumi has no test-buy of this seller yet. No test-buy is not a negative finding.", free_check: q.domain ? `${base}/v1/check?url=${encodeURIComponent(`https://${q.domain}/`)}` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(raw)}`, note: "Not charged." } };
       }
       const t = now();
       const count = (d: string) => receipts.filter((r) => r.delivery === d).length;
@@ -1456,7 +1456,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     if (rawArg !== undefined && PATH_TEMPLATE_RE.test(rawArg)) {
       const isReport = route === "vendor_report";
-      const example = isReport ? `${base}/v1/trust/vendors/printmoneylab/report` : `${base}/v1/${route}/xrp`;
+      const example = isReport ? `${base}/v1/trust/vendors/<vendor-id>/report` : `${base}/v1/${route}/xrp`;
       const hasPayment = !!(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT));
       if (!hasPayment && rawArg === (isReport ? "{id}" : "{coin}")) {
         const endpoint = endpointFor(route);
@@ -1471,9 +1471,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           amountStellar: config.stellar?.amounts[route],
           description: resourceDescription(route, `Lumi API ${endpoint.template}: ${endpoint.summary}`, { usd: config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route] }),
           resourceUrl: `${base}${path}`,
-          bazaar: bazaarExtension(route, isReport ? "printmoneylab" : "xrp", undefined, config.evm?.prices[route]),
+          bazaar: bazaarExtension(route, isReport ? "example-vendor" : "xrp", undefined, config.evm?.prices[route]),
           service: serviceMeta(route),
-          note: `Replace ${rawArg} with ${isReport ? "a vendor id, e.g. printmoneylab (GET /v1/trust/vendors, free)" : "a real value"} and request that URL for a fresh quote before paying: ${example}. A payment sent to this placeholder URL is refused and not charged.`,
+          note: `Replace ${rawArg} with ${isReport ? "a vendor id from GET /v1/trust/vendors (free)" : "a real value"} and request that URL for a fresh quote before paying: ${example}. A payment sent to this placeholder URL is refused and not charged.`,
         }, "PAYMENT-SIGNATURE header is required");
       }
       return json(400, {

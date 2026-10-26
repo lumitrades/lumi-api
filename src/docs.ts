@@ -214,8 +214,9 @@ export function wellKnownX402(cfg: Config, base: string) {
     description: `Pay-per-call reads from Lumi Trades (lumitrades.io), settled in ${settledIn(cfg)}, : checks before paying an x402 seller (a pre-payment check, a one-label verdict and seller reputation reports from Lumi's trust observations). Each resource carries product_line. Also: seller monitoring plans (Watch $5, Watch Pro $20 per endpoint per 30d; Audit $99; Re-test pack $6.50 for 30 seller-funded test-buys; Founder pack $5 for 24 seller-funded test-buys, first 10 sellers; free tier and 14-day trial; seller-funded buys never change a public score) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
     resources: paidEndpoints(cfg).map((e) => ({
       name: e.name,
-      // receipts: the doc example seller has no receipts (a 404, never charged), so crawlers get the bare path, which answers 402.
-      url: `${base}${e.route === "receipts" ? e.path : e.example}`,
+      // receipts and vendor_report: the doc examples (api.example.com, example-vendor) are not real sellers (a 404, never charged),
+      // so crawlers get the bare path or the literal {id} template, both of which answer 402.
+      url: `${base}${e.route === "receipts" || e.route === "vendor_report" ? e.path : e.example}`,
       template: `${base}${e.template}`,
       mimeType: "application/json",
       method: e.method,
@@ -275,7 +276,7 @@ export function wellKnownX402(cfg: Config, base: string) {
     docs: `${base}/skill.md`,
     mcp: { url: `${base}/mcp`, transport: "streamable-http" },
     ...(freeTrialInfo(cfg) ? { free_trial: freeTrialInfo(cfg) } : {}),
-    attestation: { type: "signed-receipts", receipts: "counterparty_delivery_receipt v0.1 (SHA-256 receipt_hash, signed by the paying wallet) on Lumi Trades seller checks test-buys, served with paid vendor reports (/v1/trust/vendors/{id}/report) and paid catalog lookups (POST /v1/feed/lookup, Feed and Feed Pro plans; not in /v1/trust/check); verify free with POST /v1/trust/receipts/verify", verify: `${base}/v1/trust/receipts/verify`, monitor_reports: "Audit reports carry an Ed25519 signature over report_hash; only the hash and signature are public" },
+    attestation: { type: "signed-receipts", receipts: "counterparty_delivery_receipt v0.1 (SHA-256 receipt_hash, signed by the paying wallet) on Lumi Trades seller checks test-buys, served with paid per-seller receipt lookups (GET /v1/trust/receipts?seller=), paid vendor reports (/v1/trust/vendors/{id}/report) and paid catalog lookups (POST /v1/feed/lookup, Feed and Feed Pro plans; not in /v1/trust/check); verify free with POST /v1/trust/receipts/verify", verify: `${base}/v1/trust/receipts/verify`, monitor_reports: "Audit reports carry an Ed25519 signature over report_hash; only the hash and signature are public" },
     contact: "https://lumitrades.io",
     updated: new Date().toISOString(),
   };
@@ -348,7 +349,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
         "x-product-line": LINE_LABEL[productLine(e.route)],
         "x-service-name": serviceNameFor(e.route),
         parameters: [...(e.template.includes("{id}")
-          ? [{ name: "id", in: "path", required: true, description: "Vendor id from GET /v1/trust/vendors (free)", schema: { type: "string", pattern: VENDOR_ID_PATTERN }, example: "printmoneylab", examples: { printmoneylab: { value: "printmoneylab" } } }]
+          ? [{ name: "id", in: "path", required: true, description: "Vendor id from GET /v1/trust/vendors (free)", schema: { type: "string", pattern: VENDOR_ID_PATTERN }, example: "example-vendor", examples: { "example-vendor": { value: "example-vendor" } } }]
           : e.route === "verdict"
           ? verdictParams
           : e.route === "trust_check"
@@ -363,7 +364,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
           ? [{ name: "urls", in: "query", required: true, description: "1 to 10 comma-separated x402 resource URLs or seller domains", schema: { type: "string", maxLength: 5000 }, example: "https://api.example.com/v1/data,data.example.org" }]
           : []), IDEMPOTENCY_PARAM],
         ...(e.template.includes("{id}")
-          ? { "x-example-url": `${base}${e.template.replace("{id}", "printmoneylab")}` }
+          ? { "x-example-url": `${base}${e.template.replace("{id}", "example-vendor")}` }
           : e.route === "trust_check" || e.route === "verdict"
           ? { "x-example-url": `${base}${e.template}?url=${encodeURIComponent("https://api.example.com/v1/data")}` }
           : e.route === "receipts" || e.route === "batch_check"
@@ -408,7 +409,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
             : e.route === "receipts" || e.route === "batch_check"
             ? { "400": { description: e.route === "receipts" ? "seller missing, or not a domain, an absolute http(s) URL or a payTo address (never charged). A request with no query string at all returns the normal 402 quote." : "urls missing, more than 10 entries, or an entry that is not an absolute http(s) URL or a domain (never charged). A request with no query string at all returns the normal 402 quote." } }
             : {}),
-          ...(e.route === "receipts" ? { "404": { description: "Lumi holds no test-buy receipt for this seller (never charged). The free GET /v1/check still answers." } } : {}),
+          ...(e.route === "receipts" ? { "404": { description: "Lumi has no test-buy of this seller (never charged). The free GET /v1/check still answers." } } : {}),
           ...(e.template.includes("{id}")
             ? { "404": { description: "Unknown vendor id (never charged). Vendor ids: GET /v1/trust/vendors (free)." } }
             : {}),
@@ -507,7 +508,7 @@ function trustPaths(): Record<string, unknown> {
         tags: tag,
         security: [],
         summary: "Verify a signed test-buy receipt (free)",
-        description: "Body: a counterparty_delivery_receipt v0.1 (as served in paid vendor reports and paid Feed catalog lookups). Checks the canonical SHA-256 receipt_hash, that the paying wallet signed `lumi-receipt:<network>:<tx_hash>:<receipt_hash>` (XRPL ripple-keypairs / Base EIP-191), and, with ?ledger=1, the payment on-chain. 10/min and 100/day per IP.",
+        description: "Body: a counterparty_delivery_receipt v0.1 (as served in paid receipt lookups (GET /v1/trust/receipts), paid vendor reports and paid Feed catalog lookups). Checks the canonical SHA-256 receipt_hash, that the paying wallet signed `lumi-receipt:<network>:<tx_hash>:<receipt_hash>` (XRPL ripple-keypairs / Base EIP-191), and, with ?ledger=1, the payment on-chain. 10/min and 100/day per IP.",
         parameters: [{ name: "ledger", in: "query", required: false, schema: { type: "string", enum: ["1"] } }],
         requestBody: json({ type: { type: "string" }, version: { type: "string" }, receipt_hash: { type: "string" }, signer: { type: "object" }, payment: { type: "object" }, seller: { type: "object" }, delivery: RECEIPT_DELIVERY_SCHEMA, supersedes: { type: "object", description: "Present when this receipt replaces an earlier one for the same tx (correction); the old receipt then verifies with status superseded.", properties: { receipt_hash: { type: "string" }, reason: { type: "string" }, corrections_url: { type: "string" } } } }, ["type", "version", "receipt_hash", "signer", "payment"]),
         responses: r({ "200": "Verification result (ok true/false with errors)", "400": "Invalid JSON", "413": "Body too large", "429": "Rate limited" }),

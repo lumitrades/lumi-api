@@ -9,6 +9,7 @@
  * 1h/4h read is at most ~13 min old and its 1d read at most a few hours old. Mechanical readings, not predictions.
  */
 import type { D1Like } from "./config";
+import { BIAS_RULE, biasFromScore } from "./bias";
 
 export type Candle = [t: number, o: number, h: number, l: number, c: number, v: number | null];
 export interface LiveCoin { id: string; symbol: string; name: string; source: "coinbase" | "kraken"; product: string }
@@ -46,18 +47,17 @@ export const LIVE_CYCLE_MS = 13 * 60_000;
 const MAX_BARS = 300;
 
 export const TF_WEIGHTS: Record<string, number> = { "1h": 0.25, "4h": 0.35, "1d": 0.4 };
-const LABELS: [number, string][] = [[0.5, "Strong Buy"], [0.15, "Buy"], [-0.15, "Neutral"], [-0.5, "Sell"]];
 export const METHOD = {
   timeframe_weights: TF_WEIGHTS,
-  labels: "score >= 0.5 Strong Buy; >= 0.15 Buy; > -0.15 Neutral; > -0.5 Sell; else Strong Sell",
+  labels: BIAS_RULE,
   points:
     "RSI +-1/+-0.5, MACD hist +-1 (+-0.5 fresh cross), EMA stack +-1 (+-0.5 mixed), EMA200 +-1 (1d), " +
     "Bollinger %B outside bands +-0.5, StochRSI turn +-0.5, volume >=1.5x avg +-0.5; score = points / max",
 };
 
+/** Retired market reading (feeds retired 2026-10-25): neutral bias wording only, no buy/sell labels. */
 export function label(score: number): string {
-  for (const [thr, name] of LABELS) if (score >= thr) return name;
-  return "Strong Sell";
+  return biasFromScore(score) ?? "n/a";
 }
 
 // ------------------------------------------------------------------ indicators (port of signals.py)

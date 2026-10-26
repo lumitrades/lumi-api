@@ -114,7 +114,7 @@ export function agentCard(cfg: Config, base: string) {
     name: "Lumi Trades",
     description:
       "Should I pay this x402 URL? Lumi Trades checks a seller before you pay: allow / warn / block with coded reasons from daily CDP Bazaar index checks and Lumi's own on-chain test-buys, " +
-      "(free lookup, paid check, vendor reports); signed delivery receipts come with paid vendor reports and Feed catalog lookups, verifiable free. " +
+      "(free lookup, paid check, vendor reports); signed delivery receipts come with paid receipt lookups (/v1/trust/receipts), vendor reports and Feed catalog lookups, verifiable free. " +
       `Pay per call over x402 v2 with no API key or account, in ${settledIn(cfg)}. Also available as a remote MCP server. Information only, not financial advice.`,
     // A2A 1.0
     supportedInterfaces: A2A_VERSIONS.map((v) => ({ url: a2aUrl, protocolBinding: "JSONRPC", protocolVersion: v })),
