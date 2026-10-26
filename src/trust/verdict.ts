@@ -44,7 +44,7 @@ export const APPEAL_PAUSE_HOURS = 72;
 /** /v1/check note (legal review M5 + N2 wording, verbatim). */
 export const CHECK_NOTE =
   "Free pre-pay check. Paying Lumi (checks, monitoring, reports) never changes a score, tier, ranking or 'Tested by Lumi' result. The paid 'Monitored by Lumi' badge is separate and labelled as paid. " +
-  "Only origin + path of the URL is used. We don't store who checked what. A checked seller that shows a warning signal may be queued for a test-buy.";
+  "Only origin + path of the URL is used. We don't store who checked what. A checked seller that shows a warning may be queued for a test-buy.";
 /** M1 recency caps: evidence older than checkFirstAfterDays supports at most check_first; older than noDataAfterDays, no_data. */
 export const EVIDENCE_AGE = { checkFirstAfterDays: 30, noDataAfterDays: 90 };
 
@@ -214,7 +214,7 @@ export function thresholdsDoc(th: VerdictThresholds) {
     legacy_decision_mapping: DECISION_TO_LABEL,
     definition: DEFINITION,
     checks_failed: `Immediate only for facts about the quote itself: the payTo you were quoted is not the seller's, the amount is over 1.5x the listing, the seller's live quote paid an unlisted address (reviewed by a person first), or an OFAC SDN hit. From test-buys only after failed paid buys on at least ${FAILED_RULE.minFailedDays} different UTC days within ${FAILED_RULE.windowDays} days, no success since, a further failed confirming re-buy, and review by a person at Lumi.`,
-    check_first: `Not enough positive evidence yet: a warning signal from the check, a failed test-buy that has not met the bar above, a pending review or re-test (paused up to ${APPEAL_PAUSE_HOURS} h), or no Lumi test-buy delivered within ${th.payMaxAgeDays} days.`,
+    check_first: `Not enough positive evidence yet: a warning from the check, a failed test-buy that has not met the bar above, a pending review or re-test (paused up to ${APPEAL_PAUSE_HOURS} h), or no Lumi test-buy delivered within ${th.payMaxAgeDays} days.`,
     checks_passed: `The check found no warning, a Lumi paid test-buy delivered within ${th.payMaxAgeDays} days, and no newer free probe of that same bought endpoint failed.`,
     no_data: `Lumi has no observations (or has not checked this listing yet), its newest test-buy evidence is more than ${EVIDENCE_AGE.noDataAfterDays} days old, or it is Lumi itself. Not a negative finding.`,
     not_scored: "A vendor score (0-100) exists only after at least one conclusive Lumi paid test-buy. Until then the score is null with status not_scored and a plain reason, and the label is check_first (untested, or probe_checked_only when the free probe passed). Free probes never produce a score on their own; with a test-buy they count for at most 0.25 of one.",

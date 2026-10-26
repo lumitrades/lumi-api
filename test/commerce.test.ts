@@ -269,7 +269,8 @@ describe("commerce discovery", () => {
     const urls = wk.resources.map((r: any) => r.url);
     expect(new Set(urls).size).toBe(urls.length);
     const skill = await (await s.req("/skill.md")).text();
-    expect(skill).toContain("Watch Plus");
+    expect(skill).not.toMatch(/Watch Plus|Monitor Plus/);
+    expect(skill).toContain("Older monitoring plans are no longer sold");
     expect(skill).not.toMatch(/Monitor Plus \$|\$29/);
     expect(skill).toContain("$1.5 per 1,000");
   });
