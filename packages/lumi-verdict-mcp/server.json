@@ -35,7 +35,7 @@
         },
         {
           "name": "LUMI_PAY_ASSET",
-          "description": "BASE_USDC, XRP, RLUSD or USDC (XRPL). Default: XRP if XRPL_SEED set, else BASE_USDC",
+          "description": "BASE_USDC, XRP, RLUSD or USDC (XRPL). Default: BASE_USDC if only EVM_PRIVATE_KEY is set, else XRP",
           "isRequired": false,
           "format": "string"
         },

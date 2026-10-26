@@ -24,7 +24,7 @@ export const VERDICT_DESCRIPTION =
 
 export const FREE_DESCRIPTION =
   "Free. The same label as lumi_verdict from Lumi's record (cached, no live contact with the seller), signed by Lumi: checks_passed, check_first, checks_failed or no_data, with reason codes and an evidence link. " +
-  "Only the origin and path of the URL are sent. Use lumi_verdict when you want the live check at call time.";
+  "Of the URL, only the origin and path are sent; payTo and amount are sent if you pass them. Use lumi_verdict when you want the live check at call time.";
 
 const text = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] });
 const input = {
