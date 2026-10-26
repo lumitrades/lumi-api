@@ -19,8 +19,40 @@ export const LUMI_WALLETS = {
   xrpl: ["rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM", "rpvsTYDZmX1j1ndmEFG6YjjZZwp6VRtQRz"],
   evm: ["0x5e617bac19912e6d212cb303ae84655e9e203532", "0x7722dfae6bbed2fd02dc07455c2f5bf14be25e4a", "0xbaaf2635c9a7697601600749ca90456274667999"],
 };
-/** Known test/scanner wallets (owner can extend via meta `known_testers`). */
-export const KNOWN_TESTERS = { xrpl: ["r4w68TArDZjivtcFMNL7PvKf7uPg14Vev8"], evm: [] as string[] };
+/**
+ * Seller-declared proof/test wallets: wallets a seller itself says, on its own public pages, that it uses to pay its own
+ * endpoints (proof settlements, self-tests). Labeling only: payments from them (or from wallets they funded) are never
+ * counted as organic, for any seller; for the declaring seller's own payTos they are counted as `seller_declared`.
+ * Never an input to a score, tier, ranking or label. Each entry records the onchain settlements that tie the wallet to
+ * the seller's public statement, so the link is checkable without trusting Lumi.
+ */
+export interface DeclaredTester {
+  network: "evm" | "xrpl";
+  wallet: string;
+  /** The declaring seller's receiving wallets (payTo). */
+  seller_pay_to: string[];
+  /** What the seller declared, paraphrased (no seller name here). */
+  declared: string;
+  /** Settlement tx hashes the seller published as its proof settlements; each was paid from `wallet` to `seller_pay_to`. */
+  evidence_tx: string[];
+  added: string;
+}
+export const SELLER_DECLARED_TESTERS: DeclaredTester[] = [
+  {
+    network: "evm",
+    wallet: "0x2dffadab1a1b6b0fdefbd78abe56ebfa118db56d",
+    seller_pay_to: ["0xc29185fa176357612f3194735753e520e91adc46"],
+    declared: "The seller's own public pages describe these settlements as proof settlements run on its own endpoint from its own proof wallet, not customer purchases.",
+    evidence_tx: [
+      "0xfa3ec31ff345167a474c682cec4e2eac505cfdd570e158961a233187be5f6f1c",
+      "0x5bce2363ae8818fbb0ea5c6229ba8325c6c70792880d4939f324f96d35f7a1b7",
+    ],
+    added: "2026-10-26",
+  },
+];
+const declaredOf = (net: "evm" | "xrpl") => SELLER_DECLARED_TESTERS.filter((d) => d.network === net).map((d) => (net === "evm" ? d.wallet.toLowerCase() : d.wallet));
+/** Known test/scanner wallets, seller-declared proof wallets first (owner can extend via meta `known_testers`). */
+export const KNOWN_TESTERS = { xrpl: [...declaredOf("xrpl"), "r4w68TArDZjivtcFMNL7PvKf7uPg14Vev8"], evm: [...declaredOf("evm")] as string[] };
 /** A funder that funded at least this many indexed payers is treated as a hub (exchange, bridge, faucet) and not used for clustering. */
 export const HUB_MIN = 20;
 export const CENSUS_FRESH_MS = 24 * 3_600_000;
@@ -282,14 +314,16 @@ export class D1EvidenceStore implements EvidenceStore {
 // ---------------------------------------------------------------- classification (shared by XRPL and Base)
 
 export interface PayerAgg { payer: string; funder?: string | null; funder_known: boolean; n: number; last_ts: number; last_tx: string | null; usd?: number; amounts?: Record<string, number> }
-export interface ClassCtx { payTo: string; sellerPayTos: string[]; lumi: string[]; testers: string[]; hubs: Set<string> }
+export interface ClassCtx { payTo: string; sellerPayTos: string[]; lumi: string[]; testers: string[]; hubs: Set<string>; declared?: DeclaredTester[] }
 
 export function classifyPayers(payers: PayerAgg[], ctx: ClassCtx) {
   const lc = (x: string) => x.toLowerCase();
   const lumi = new Set(ctx.lumi.map(lc));
   const testers = new Set(ctx.testers.map(lc));
   const seller = new Set([ctx.payTo, ...ctx.sellerPayTos].map(lc));
-  const ex = { lumi: 0, known_testers: 0, self_funded: 0 };
+  // Proof/test wallets this seller declared for its own payTos (labeling only).
+  const own = new Set((ctx.declared ?? SELLER_DECLARED_TESTERS).filter((d) => d.seller_pay_to.some((p) => seller.has(lc(p)))).map((d) => lc(d.wallet)));
+  const ex = { lumi: 0, known_testers: 0, seller_declared: 0, self_funded: 0 };
   const clusters = new Map<string, { key: string; funder: string | null; payers: string[]; n: number; last_ts: number; last_tx: string | null; usd: number }>();
   let organicPayments = 0;
   let lastOrganic = 0;
@@ -299,6 +333,7 @@ export function classifyPayers(payers: PayerAgg[], ctx: ClassCtx) {
     const a = lc(p.payer);
     const f = p.funder ? lc(p.funder) : null;
     if (lumi.has(a) || (f && lumi.has(f))) { ex.lumi++; continue; }
+    if (own.has(a) || (f && own.has(f))) { ex.seller_declared++; continue; }
     if (testers.has(a) || (f && testers.has(f))) { ex.known_testers++; continue; }
     if (seller.has(a) || (f && seller.has(f))) { ex.self_funded++; continue; }
     if (!p.funder_known) unresolved++;

@@ -3,7 +3,7 @@ import { createApp } from "../src/app";
 import { MemoryCatalogStore } from "../src/trust/catalog";
 import { buyCandidate } from "../src/trust/catalog_service";
 import { MemoryActivityStore, createActivity } from "../src/trust/activity";
-import { MemoryEvidenceStore, classifyPayers, LUMI_WALLETS, KNOWN_TESTERS, xrplCensus, baseLogs, vet402View, parseVet402, X402_SOURCE_TAG, VET402 } from "../src/trust/evidence";
+import { MemoryEvidenceStore, classifyPayers, LUMI_WALLETS, KNOWN_TESTERS, SELLER_DECLARED_TESTERS, xrplCensus, baseLogs, vet402View, parseVet402, X402_SOURCE_TAG, VET402 } from "../src/trust/evidence";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor } from "./helpers";
 
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -46,10 +46,45 @@ describe("evidence: payer classification", () => {
     const P = (payer: string, funder: string | null, n = 1) => ({ payer, funder, funder_known: true, n, last_ts: NOW - n, last_tx: "t" + payer });
     const c = classifyPayers([P("a", "f"), P("b", "f", 2), P("c", "lumi"), P("tester", null), P("d", "seller"), P("e", "hub"), P("g", "hub")],
       { payTo: "seller", sellerPayTos: [], lumi: ["lumi"], testers: ["tester"], hubs: new Set(["hub"]) });
-    expect(c.excluded).toEqual({ lumi: 1, known_testers: 1, self_funded: 1 });
+    expect(c.excluded).toEqual({ lumi: 1, known_testers: 1, seller_declared: 0, self_funded: 1 });
     expect(c.organic_payers).toBe(3); // {a,b} via f, e, g (hub not used for clustering)
     expect(c.organic_wallets).toBe(4);
     expect(c.organic_payments).toBe(5);
+  });
+});
+
+describe("evidence: seller-declared proof/test wallets", () => {
+  const PROOF = "0x2dffadab1a1b6b0fdefbd78abe56ebfa118db56d";
+  const PAYTO = "0xc29185fa176357612f3194735753e520e91adc46";
+  const P = (payer: string, funder: string | null, n = 1) => ({ payer, funder, funder_known: true, n, last_ts: NOW - n, last_tx: "t" + payer, usd: n * 0.01 });
+  it("the first declared entry is the proof wallet, with full addresses and proof settlements", () => {
+    expect(SELLER_DECLARED_TESTERS[0]).toMatchObject({ network: "evm", wallet: PROOF, seller_pay_to: [PAYTO] });
+    expect(SELLER_DECLARED_TESTERS[0].evidence_tx.every((t) => /^0x[0-9a-f]{64}$/.test(t))).toBe(true);
+    expect(KNOWN_TESTERS.evm[0]).toBe(PROOF);
+    for (const d of SELLER_DECLARED_TESTERS) expect(d.declared).not.toMatch(/scam|fraud/i);
+  });
+  it("is excluded as seller_declared on the declaring seller's payTo, even with no USDC flow from that payTo", () => {
+    const c = classifyPayers([P(PROOF, "0x5bbd32000000000000000000000000000000beef", 34), P("0xcrawler", "0xfunderx", 19)],
+      { payTo: PAYTO, sellerPayTos: [], lumi: [], testers: [], hubs: new Set() });
+    expect(c.excluded).toEqual({ lumi: 0, known_testers: 0, seller_declared: 1, self_funded: 0 });
+    expect(c.organic_payers).toBe(1);
+    expect(c.organic_payments).toBe(19);
+  });
+  it("matches case-insensitively and also excludes wallets the proof wallet funded", () => {
+    const c = classifyPayers([P(PROOF.toUpperCase().replace("0X", "0x"), null), P("0xchild", PROOF)],
+      { payTo: PAYTO.toUpperCase().replace("0X", "0x"), sellerPayTos: [], lumi: [], testers: [], hubs: new Set() });
+    expect(c.excluded.seller_declared).toBe(2);
+    expect(c.organic_payers).toBe(0);
+  });
+  it("on another seller's payTo it counts as a known tester (never organic)", () => {
+    const c = classifyPayers([P(PROOF, null)], { payTo: "0xother", sellerPayTos: [], lumi: [], testers: [...KNOWN_TESTERS.evm], hubs: new Set() });
+    expect(c.excluded).toMatchObject({ known_testers: 1, seller_declared: 0 });
+    expect(c.organic_payers).toBe(0);
+  });
+  it("labels only: an empty declared list leaves classification unchanged", () => {
+    const c = classifyPayers([P(PROOF, null)], { payTo: PAYTO, sellerPayTos: [], lumi: [], testers: [], hubs: new Set(), declared: [] });
+    expect(c.excluded.seller_declared).toBe(0);
+    expect(c.organic_payers).toBe(1);
   });
 });
 

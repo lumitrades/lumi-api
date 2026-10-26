@@ -471,7 +471,7 @@ export function createCatalog(deps: CatalogDeps) {
       network, pay_to: payTo, status: "ok", ...meta,
       organic_payers: c.organic_payers, organic_wallets: c.organic_wallets, organic_payments: c.organic_payments, last_organic_at: c.last_organic_at,
       payers_seen: c.payers_seen, excluded_payers: c.excluded, funder_unresolved: c.funder_unresolved,
-      method: "organic_payers = distinct funding clusters: payers funded by the same account count once; Lumi's own wallets, known test wallets, the seller's payTos and wallets they funded are excluded. Funders that funded " + HUB_MIN + "+ indexed payers (exchanges, bridges) are not used for clustering.",
+      method: "organic_payers = distinct funding clusters: payers funded by the same account count once; Lumi's own wallets, known test wallets, proof/test wallets the seller itself declared (seller_declared), the seller's payTos and wallets they funded are excluded. Funders that funded " + HUB_MIN + "+ indexed payers (exchanges, bridges) are not used for clustering.",
       ...(free ? {} : {
         ...(network === BASE_NET ? { organic_usd: c.organic_usd } : {}),
         top_clusters: c.clusters.slice(0, 5).map((k) => ({ wallets: k.payers.length, sample_payer: k.payers[0], funder: k.funder, payments: k.n, last_at: new Date(k.last_ts).toISOString(), last_tx: k.last_tx, explorer: exp(k.last_tx) })),
