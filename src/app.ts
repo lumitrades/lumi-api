@@ -132,6 +132,18 @@ export function trustlineMerchantTxt(cfg: { payTo: string }): string {
   return `xrpl:${cfg.payTo}\n`;
 }
 
+/** /.well-known/security.txt (RFC 9116) for the API host (security review L1). Same contact as the site; Expires within a year. */
+export const API_SECURITY_TXT = [
+  "Contact: mailto:hello@lumitrades.io",
+  "Expires: 2027-10-24T00:00:00.000Z",
+  "Preferred-Languages: en",
+  "Canonical: https://api.lumitrades.io/.well-known/security.txt",
+  "Policy: https://lumitrades.io/privacy/",
+  "# Lumi Trades is an x402 seller trust service. It is not a broker, never asks for deposits and never holds user funds.",
+  "# Official Lumi email comes from @lumitrades.io addresses. Contacts: https://lumitrades.io/contact/",
+  "",
+].join("\n");
+
 export function priorityCap(v: string | undefined): number {
   const n = v == null || v.trim() === "" ? NaN : Number(v);
   return Number.isInteger(n) && n >= 0 && n <= 1000 ? n : PRIORITY_DAILY_CAP;
@@ -1257,6 +1269,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         return new Response(skillMd(config, base, await coins()), {
           headers: { "Content-Type": "text/markdown; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" },
         });
+      case "/.well-known/security.txt":
+        return new Response(API_SECURITY_TXT, { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=86400" } });
       case "/.well-known/trustline-merchant.txt":
         // t54 Trustline merchant file: one CAIP-10-style line per receiving wallet. Plain text, no signature.
         return new Response(trustlineMerchantTxt(config), {

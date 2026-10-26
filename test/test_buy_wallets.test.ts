@@ -69,3 +69,16 @@ describe("Lumi test-buy wallet list (M4, proposed)", () => {
     expect(s).toContain("/.well-known/lumi-test-buy-wallets.json");
   });
 });
+
+describe("API security.txt (L1)", () => {
+  it("serves RFC 9116 security.txt with the API canonical URL and no trading words", async () => {
+    const r = await app().fetch(new Request("https://x.test/.well-known/security.txt"));
+    expect(r.status).toBe(200);
+    expect(r.headers.get("content-type")).toMatch(/text\/plain/);
+    const t = await r.text();
+    expect(t).toMatch(/^Contact: mailto:hello@lumitrades\.io$/m);
+    expect(t).toMatch(/^Expires: 20\d\d-/m);
+    expect(t).toContain("Canonical: https://api.lumitrades.io/.well-known/security.txt");
+    expect(t).not.toMatch(/paper[- ]trading|dashboard|signal|trading/i);
+  });
+});
