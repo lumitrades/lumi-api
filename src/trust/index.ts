@@ -1323,10 +1323,14 @@ export function createTrust(deps: TrustDeps): Trust {
       } catch { return json(400, { error: "invalid_json" }); }
       if (r && typeof r === "object" && r.receipt && !r.type) r = r.receipt;
       const check = await verifyReceipt(r);
-      // Step 4b (security review M4, PROPOSED): a receipt that says Lumi issued it must be paid by a published Lumi test-buy wallet.
-      const lumiIssued = r?.issuer?.name === "Lumi";
-      const onList = isLumiTestBuyWallet(normaliseWallets({ xrpl: deps.buyers, evm: deps.evmBuyers ?? [], stellar: deps.stellarBuyers ?? [] }), String(r?.payment?.network ?? ""), r?.payment?.payer);
-      if (lumiIssued && check.ok && !onList) { check.ok = false; check.errors.push("payer_not_lumi_test_buy_wallet"); }
+      // Step 4b (security review M4): fail closed. This endpoint verifies Lumi receipts only, so whatever issuer.name says
+      // (it is attacker-controlled: "Lumi Trades", "LUMI", "Lumi " ...), a receipt passes only when payment.payer is a
+      // string on Lumi's published test-buy wallet list for payment.network.
+      const payer = r?.payment?.payer;
+      const network = r?.payment?.network;
+      const onList = typeof payer === "string" && typeof network === "string"
+        && isLumiTestBuyWallet(normaliseWallets({ xrpl: deps.buyers, evm: deps.evmBuyers ?? [], stellar: deps.stellarBuyers ?? [] }), network, payer);
+      if (check.ok && !onList) { check.ok = false; check.errors.push("payer_not_lumi_test_buy_wallet"); }
       const out: Record<string, unknown> = { kind: "receipt_verification_result", ...check, payer_on_lumi_wallet_list: onList, wallet_list: `${base}/.well-known/lumi-test-buy-wallets.json` };
       if (check.hash_ok && deps.receipts) {
         const known = (await deps.receipts.byTx([String(r.payment.tx_hash)]).catch(() => new Map())).get(String(r.payment.tx_hash));

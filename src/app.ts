@@ -126,7 +126,6 @@ const DEFAULT_XRPL_RPC: Record<string, string[]> = {
   "xrpl:2": ["https://s.devnet.rippletest.net:51234/"],
 };
 
-/** TRUST_PRIORITY_DAILY_CAP: non-negative integer; unset or invalid = default (5). "0" turns check-driven priority off. */
 /** /.well-known/trustline-merchant.txt body: Lumi's XRPL receiving wallet(s), one `xrpl:<r-address>` per line. No signature. */
 export function trustlineMerchantTxt(cfg: { payTo: string }): string {
   return `xrpl:${cfg.payTo}\n`;
@@ -1181,7 +1180,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       return json(400, { error: "invalid_action", allowed: ["approve", "reject", "appeal"] }, noStore);
     }
     if (request.method !== "GET" && request.method !== "HEAD") {
-      return json(405, { error: "method_not_allowed" }, { Allow: "GET, OPTIONS" });
+      return json(405, { error: "method_not_allowed" }, { Allow: "GET, HEAD, OPTIONS" });
     }
     // Owner-only private traffic summary (Authorization: Bearer <OWNER_MCP_KEY>): hashed IPs only.
     if (path === "/v1/owner/traffic") {
@@ -1272,9 +1271,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       case "/.well-known/security.txt":
         return new Response(API_SECURITY_TXT, { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=86400" } });
       case "/.well-known/trustline-merchant.txt":
-        // t54 Trustline merchant file: one CAIP-10-style line per receiving wallet. Plain text, no signature.
+        // t54 Trustline merchant file (t54 / XRPL AI Hub convention): one `xrpl:<r-address>` line per receiving wallet.
+        // Plain text, no signature. Mainnet only: a testnet deployment has no Hub listing to bind.
+        if (config.network !== "xrpl:0") return json(404, { error: "not_found" });
         return new Response(trustlineMerchantTxt(config), {
-          headers: { "Content-Type": "text/plain; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" },
+          headers: { "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" },
         });
       case "/.well-known/agent-card.json":
       case "/.well-known/agent.json":

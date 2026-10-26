@@ -1,9 +1,9 @@
 /**
- * Published list of Lumi's test-buy wallets (security review M4, PROPOSED, needs Security review before go-live).
+ * Published list of Lumi's test-buy wallets (security review M4).
  *
  * Why: a receipt is signed by the wallet that paid (verify steps 1-4). Without a published payer list, anyone can sign a
- * well-formed receipt with their own wallet and call it a Lumi receipt. Step 4b closes that: a receipt whose issuer is Lumi
- * only verifies when payment.payer is on this list. The list is the same set the server already enforces when it stores
+ * well-formed receipt with their own wallet and call it a Lumi receipt. Step 4b closes that: a receipt only verifies when
+ * payment.payer is on this list, whatever issuer.name says. The list is the same set the server already enforces when it stores
  * receipts (payer_not_lumi_wallet), so the public check and the private one cannot drift apart.
  *
  * Served free at GET /v1/check/wallets and /.well-known/lumi-test-buy-wallets.json (next to /v1/check/keys).
@@ -33,8 +33,7 @@ export function testBuyWalletsDoc(base: string, w: TestBuyWallets) {
   return {
     kind: "lumi_test_buy_wallets",
     version: TEST_BUY_WALLETS_VERSION,
-    status: "PROPOSED (security review M4): pending Security review",
-    purpose: "The only wallets that pay for Lumi's test-buys. A receipt whose issuer.name is \"Lumi\" is a Lumi receipt only if payment.payer is listed here for payment.network (verify step 4b).",
+    purpose: "The only wallets that pay for Lumi's test-buys. A receipt is a Lumi receipt only if payment.payer is listed here for payment.network (verify step 4b), whatever its issuer.name says.",
     wallets: {
       "xrpl:0": n.xrpl,
       "eip155:8453": n.evm,

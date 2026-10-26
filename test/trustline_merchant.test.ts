@@ -23,3 +23,15 @@ describe("/.well-known/trustline-merchant.txt (t54 Trustline, unsigned)", () => 
     expect(trustlineMerchantTxt({ payTo: "rTEST" })).toBe("xrpl:rTEST\n");
   });
 });
+
+describe("trustline-merchant.txt hardening", () => {
+  it("sends nosniff on mainnet and 404s on testnet deployments", async () => {
+    const main = createApp(ENV, { fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW });
+    const r = await main.fetch(new Request("https://api.lumitrades.io/.well-known/trustline-merchant.txt"));
+    expect(r.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    for (const net of ["xrpl:1", "xrpl:2"]) {
+      const t = createApp({ ...ENV, XRPL_NETWORK: net }, { fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW });
+      expect((await t.fetch(new Request("https://x.test/.well-known/trustline-merchant.txt"))).status).toBe(404);
+    }
+  });
+});
