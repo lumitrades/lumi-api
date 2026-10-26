@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
-import { toListing, normalizeUrl, normalizeDomain, registrableDomain, MemoryCatalogStore, probeRow, LABELS, INGEST_PAGE } from "../src/trust/catalog";
+import { toListing, normalizeUrl, normalizeDomain, registrableDomain, MemoryCatalogStore, probeRow, LABELS, INGEST_PAGE, INGEST_PASS_RUNS } from "../src/trust/catalog";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch } from "./helpers";
 
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", OWNER_MCP_KEY: "k".repeat(52) };
@@ -199,14 +199,53 @@ describe("lookup via MCP and A2A", () => {
 });
 
 describe("ingest paging", () => {
-  it("INGEST_PAGE is aligned to CDP's forced 30-item, 30-aligned pages so a full pass reads every entry", () => {
-    const total = 32776, seen = new Set<number>();
+  it("INGEST_PAGE-aligned offsets read every entry when CDP snaps offsets down to a multiple of the limit", () => {
+    const total = 75799, seen = new Set<number>();
     for (let o = 0; o < total + INGEST_PAGE; o += INGEST_PAGE) {
-      const snapped = Math.floor(o / 30) * 30;
-      for (let i = snapped; i < Math.min(total, snapped + 30); i++) seen.add(i);
+      const snapped = Math.floor(o / INGEST_PAGE) * INGEST_PAGE;
+      for (let i = snapped; i < Math.min(total, snapped + INGEST_PAGE); i++) seen.add(i);
     }
     expect(seen.size).toBe(total);
-    expect(INGEST_PAGE % 30).toBe(0);
+    expect(INGEST_PAGE).toBeLessThanOrEqual(1000);
+    // a full pass fits in INGEST_PASS_RUNS cron runs (every 30 min)
+    expect(Math.ceil(total / INGEST_PAGE / INGEST_PASS_RUNS) * INGEST_PASS_RUNS * INGEST_PAGE).toBeGreaterThanOrEqual(total);
+  });
+});
+
+describe("external free directories (ext:* sources)", () => {
+  const ext = (resource: string, payTo?: string, amount = "10000") => ({
+    resource, description: "ext item", accepts: [{ scheme: "exact", network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount, ...(payTo ? { payTo } : {}) }],
+  });
+  it("an ext source adds new rows but never overwrites a CDP row; CDP takes over an ext row", async () => {
+    const store = new MemoryCatalogStore();
+    await store.upsert([toListing(ext("https://cdp.example.org/a", "0x" + "1".repeat(40)))!], NOW);
+    expect(await store.upsert([toListing(ext("https://cdp.example.org/a", "0x" + "2".repeat(40), "20000"))!], NOW + 1000, "ext:payai")).toBe(0);
+    expect(store.rows[0].pay_tos).toBe("0x" + "1".repeat(40));
+    expect(store.rows[0].source).toBe("cdp_bazaar");
+    expect(await store.upsert([toListing(ext("https://new.example.org/b", "0x" + "3".repeat(40)))!], NOW, "ext:thirdweb")).toBe(1);
+    expect(store.rows[1].source).toBe("ext:thirdweb");
+    expect(await store.upsert([toListing(ext("https://new.example.org/b", "0x" + "3".repeat(40)))!], NOW + 1000)).toBe(1);
+    expect(store.rows[1].source).toBe("cdp_bazaar");
+  });
+  it("POST /v1/trust/catalog/external is owner-only, checks the source, drops lumitrades.io", async () => {
+    const store = new MemoryCatalogStore();
+    const app = createApp(ENV as any, { fetch: catalogFetch(makeFetch(happyFacilitator())), now: () => NOW, catalogStore: store, queue: { sendBatch: async () => {} } });
+    const body = { source: "ext:402index", items: [ext("https://svc.example.net/x"), ext("https://api.lumitrades.io/v1/x")] };
+    const call = (b: unknown, h: Record<string, string> = owner) => app.fetch(new Request(BASE + "/v1/trust/catalog/external", { method: "POST", headers: { ...h, "Content-Type": "application/json" }, body: JSON.stringify(b) }));
+    expect((await call(body, {})).status).toBe(401);
+    expect((await call({ ...body, source: "x402scan" })).status).toBe(400);
+    const r = await call(body);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ ok: true, received: 2, valid: 1, written: 1 });
+    expect(store.rows.map((x) => [x.domain, x.source])).toEqual([["svc.example.net", "ext:402index"]]);
+  });
+  it("a listing without a payTo gets no pay-to signal from a quote check", async () => {
+    const row: any = { id: 1, resource: "https://svc.example.net/x", domain: "svc.example.net", method: "GET", body: null, pay_tos: "", price_usd: "0.01" };
+    const f = async () => new Response(JSON.stringify({ x402Version: 2, accepts: [{ scheme: "exact", network: "eip155:8453", asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", amount: "10000", payTo: "0x" + "4".repeat(40) }] }), { status: 402, headers: { "Content-Type": "application/json" } });
+    const p = await probeRow(f as any, row, NOW);
+    expect(p.valid).toBe(true);
+    expect(p.pay_to_match).toBeNull();
+    expect(p.error).toBeNull();
   });
 });
 

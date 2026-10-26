@@ -8,7 +8,22 @@ import type { D1Like } from "../config";
 import { dataReturnedView, deliveryCounts, deliveryState, inconclusiveReason } from "./delivery";
 
 export const DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
-export const INGEST_PAGE = 30; // CDP discovery forces limit=30 and snaps offset down to a multiple of 30, so pages must be 30-aligned (a 50-item stride skipped 40% of the catalog)
+/**
+ * CDP discovery page size. CDP accepts limit up to 1000 (checked 2026-10-26: a full limit=1000 pass returned 75,766 items,
+ * 75,729 unique, of 75,799) and snaps the offset down to a multiple of the limit, so pages must stay limit-aligned
+ * (a 50-item stride over 30-item pages once skipped 40% of the catalog). 200 keeps one D1 batch (listing upserts plus
+ * payTo index rows) well under the per-invocation query limit.
+ */
+export const INGEST_PAGE = 200;
+/**
+ * A full CDP pass is spread over this many 30-minute cron runs (12 = one pass every 6 h). The old one-pass-a-day pace,
+ * with the total frozen at the start of the pass, fell ~20k listings behind a fast-growing catalog (55.4k vs 75.5k).
+ */
+export const INGEST_PASS_RUNS = 12;
+/** Catalog row source for listings that come from the CDP Bazaar ingest. Other free directories use "ext:<name>". */
+export const CDP_SOURCE = "cdp_bazaar";
+/** Free public x402 directories (owner-approved 2026-10-26) fed by the operator box job catalog_sources.py. */
+export const EXTERNAL_SOURCES = ["ext:saylor", "ext:payai", "ext:thirdweb", "ext:402index", "ext:x402list", "ext:dexter"] as const;
 export const PROBE_BATCH = 36;
 export const RDAP_PER_BATCH = 3;
 export const RUNS_PER_DAY = 46; // */30 cron = 48 runs; 46 leaves slack so every entry is checked within 24 h
@@ -280,7 +295,11 @@ export interface LookupQuery {
 
 export interface CatalogStore {
   /** Returns D1 rows written (index entries included), for the daily write budget. */
-  upsert(rows: Listing[], now: number): Promise<number>;
+  /**
+   * `source` defaults to the CDP Bazaar. A non-CDP source never overwrites a CDP row and never changes an existing
+   * row's source; a CDP upsert takes over a row first seen in another directory.
+   */
+  upsert(rows: Listing[], now: number, source?: string): Promise<number>;
   maxId(): Promise<number>;
   range(afterId: number, limit: number): Promise<CatalogRow[]>;
   saveProbes(rows: ProbeResult[]): Promise<number>;
@@ -309,11 +328,11 @@ export interface CatalogStore {
   setMeta(k: string, v: string): Promise<void>;
 }
 
-function rowFromListing(l: Listing, id: number, now: number): CatalogRow {
+function rowFromListing(l: Listing, id: number, now: number, source = CDP_SOURCE): CatalogRow {
   return {
     id, resource: l.resource, domain: l.domain, reg_domain: l.reg_domain, pay_tos: l.pay_tos.join(","), method: l.method, body: l.body,
     networks: l.networks.join(","), price_usd: l.price_usd, accepts: l.accepts, service_name: l.service_name, description: l.description,
-    calls_30d: l.calls_30d, payers_30d: l.payers_30d, last_called_at: l.last_called_at, quality_at: now, source: "cdp_bazaar", first_seen: now, last_seen: now,
+    calls_30d: l.calls_30d, payers_30d: l.payers_30d, last_called_at: l.last_called_at, quality_at: now, source, first_seen: now, last_seen: now,
     probe_ts: null, probe_status: null, probe_valid: null, probe_pay_to_match: null, probe_price_usd: null, probe_price_match: null,
     probe_latency_ms: null, probe_error: null, probe_hist: null, probe_lat_hist: null,
   };
@@ -325,15 +344,17 @@ export class MemoryCatalogStore implements CatalogStore {
   domains = new Map<string, DomainRow>();
   meta = new Map<string, string>();
   writes = 0;
-  async upsert(ls: Listing[], now: number) {
+  async upsert(ls: Listing[], now: number, source = CDP_SOURCE) {
     const before = this.writes;
+    const cdp = source === CDP_SOURCE;
     for (const l of ls) {
       const ex = this.rows.find((r) => r.resource === l.resource);
-      if (!ex) { this.rows.push({ ...rowFromListing(l, this.rows.length + 1, now), sig: l.sig }); this.writes++; continue; }
-      if (ex.sig !== l.sig || ex.last_seen < now - REFRESH_SEEN_MS || ((ex.quality_at ?? 0) < now - QUALITY_REFRESH_MS && qualityChanged(ex, l))) {
+      if (!ex) { this.rows.push({ ...rowFromListing(l, this.rows.length + 1, now, source), sig: l.sig }); this.writes++; continue; }
+      if (!cdp && ex.source === CDP_SOURCE) continue;
+      if ((cdp && ex.source !== CDP_SOURCE) || ex.sig !== l.sig || ex.last_seen < now - REFRESH_SEEN_MS || ((ex.quality_at ?? 0) < now - QUALITY_REFRESH_MS && qualityChanged(ex, l))) {
         const keep = { id: ex.id, first_seen: ex.first_seen };
         const probe = Object.fromEntries(Object.entries(ex).filter(([k]) => k.startsWith("probe_")));
-        Object.assign(ex, rowFromListing(l, keep.id, now), probe, keep, { sig: l.sig });
+        Object.assign(ex, rowFromListing(l, keep.id, now, cdp ? CDP_SOURCE : ex.source), probe, keep, { sig: l.sig });
         this.writes++;
       }
     }
@@ -443,25 +464,32 @@ const CAT_COLS =
 
 export class D1CatalogStore implements CatalogStore {
   constructor(private db: D1Like) {}
-  async upsert(ls: Listing[], now: number) {
+  async upsert(ls: Listing[], now: number, source = CDP_SOURCE) {
     if (!ls.length) return 0;
+    const cdp = source === CDP_SOURCE;
     const stmts = [];
     for (const l of ls) {
       stmts.push(
         this.db
           .prepare(
             `INSERT INTO catalog (resource, domain, reg_domain, pay_tos, method, body, networks, price_usd, accepts, service_name, description, calls_30d, payers_30d, source, sig, first_seen, last_seen, last_called_at, quality_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'cdp_bazaar', ?14, ?15, ?15, ?18, ?15)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?19, ?14, ?15, ?15, ?18, ?15)
              ON CONFLICT(resource) DO UPDATE SET pay_tos = excluded.pay_tos, method = excluded.method,
                body = excluded.body, networks = excluded.networks, price_usd = excluded.price_usd, accepts = excluded.accepts, service_name = excluded.service_name,
                description = excluded.description, calls_30d = excluded.calls_30d, payers_30d = excluded.payers_30d, sig = excluded.sig, last_seen = excluded.last_seen,
-               last_called_at = excluded.last_called_at, quality_at = excluded.quality_at
-             WHERE catalog.sig IS NOT excluded.sig OR catalog.last_seen < ?16
-               OR ((catalog.quality_at IS NULL OR catalog.quality_at < ?17) AND ${QUALITY_CHANGED_SQL})`,
+               last_called_at = excluded.last_called_at, quality_at = excluded.quality_at${cdp ? ", source = excluded.source" : ""}
+             WHERE ${cdp ? "catalog.source IS NOT excluded.source OR " : "catalog.source <> '" + CDP_SOURCE + "' AND ("}catalog.sig IS NOT excluded.sig OR catalog.last_seen < ?16
+               OR ((catalog.quality_at IS NULL OR catalog.quality_at < ?17) AND ${QUALITY_CHANGED_SQL})${cdp ? "" : ")"}`,
           )
-          .bind(l.resource, l.domain, l.reg_domain, l.pay_tos.join(","), l.method, l.body, l.networks.join(","), l.price_usd, l.accepts, l.service_name, l.description, l.calls_30d, l.payers_30d, l.sig, now, now - REFRESH_SEEN_MS, now - QUALITY_REFRESH_MS, l.last_called_at),
+          .bind(l.resource, l.domain, l.reg_domain, l.pay_tos.join(","), l.method, l.body, l.networks.join(","), l.price_usd, l.accepts, l.service_name, l.description, l.calls_30d, l.payers_30d, l.sig, now, now - REFRESH_SEEN_MS, now - QUALITY_REFRESH_MS, l.last_called_at, source),
       );
-      for (const p of l.pay_tos) stmts.push(this.db.prepare("INSERT OR IGNORE INTO catalog_payto (pay_to_lc, resource) VALUES (?1, ?2)").bind(p, l.resource));
+      for (const p of l.pay_tos)
+        stmts.push(
+          cdp
+            ? this.db.prepare("INSERT OR IGNORE INTO catalog_payto (pay_to_lc, resource) VALUES (?1, ?2)").bind(p, l.resource)
+            // another directory's payTo is never indexed against a CDP listing
+            : this.db.prepare(`INSERT OR IGNORE INTO catalog_payto (pay_to_lc, resource) SELECT ?1, ?2 WHERE NOT EXISTS (SELECT 1 FROM catalog WHERE resource = ?2 AND source = '${CDP_SOURCE}')`).bind(p, l.resource),
+        );
     }
     return rowsWritten(await this.db.batch(stmts), stmts.length);
   }
@@ -666,13 +694,14 @@ export async function probeRow(f: typeof fetch, row: CatalogRow, now: number): P
     else {
       res.valid = true;
       const listed = (row.pay_tos ?? "").split(",").filter(Boolean);
-      res.pay_to_match = pr.accepts.some((a: any) => listed.includes(String(a?.payTo ?? "").toLowerCase()));
+      // Some directories (402 Index, x402-list) list a URL without a payTo: nothing to compare, so no signal either way.
+      res.pay_to_match = listed.length ? pr.accepts.some((a: any) => listed.includes(String(a?.payTo ?? "").toLowerCase())) : null;
       const usd = pr.accepts.map(optUsd).find((x: number | null) => x != null);
       if (usd != null) {
         res.price_usd = fmtUsd(usd);
         res.price_match = row.price_usd != null ? Math.abs(Number(row.price_usd) - usd) < 1e-9 : null;
       }
-      if (!res.pay_to_match) res.error = "quote pays an address not in the listing";
+      if (res.pay_to_match === false) res.error = "quote pays an address not in the listing";
     }
   } catch (e) {
     res.latency_ms = Date.now() - t0;

@@ -4,7 +4,7 @@ import { dataReturnedView, deliveryCounts, deliveryState, guardBuy, inconclusive
 import type { D1Like } from "../config";
 import { VENDORS } from "../vendors";
 import {
-  DISCOVERY_URL, INGEST_PAGE, PROBE_BATCH, RDAP_PER_BATCH, RUNS_PER_DAY, DELISTED_AFTER_MS, LABELS, LABEL_NOTES,
+  DISCOVERY_URL, INGEST_PAGE, INGEST_PASS_RUNS, EXTERNAL_SOURCES, PROBE_BATCH, RDAP_PER_BATCH, RUNS_PER_DAY, DELISTED_AFTER_MS, LABELS, LABEL_NOTES,
   toListing, probeRow, rdapRegistered, catalogView, catalogFreeView, normalizeDomain, normalizeUrl, isPlatformHost, explorerFor,
   type CatalogStore, type CatalogStats, type LookupQuery, type BuyRow,
 } from "./catalog";
@@ -188,6 +188,7 @@ const PER_HOST = 3;
 /** CDP discovery rate-limits bursts (HTTP 429 seen from Workers): one page per 10 s. */
 const INGEST_SPACING_S = 10;
 const PROBE_SPACING_S = 30;
+const EXT_MAX_ITEMS = 200;
 const dayKey = (t: number) => "writes:" + new Date(t).toISOString().slice(0, 10);
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body, null, 2), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", ...headers } });
@@ -256,13 +257,15 @@ export function createCatalog(deps: CatalogDeps) {
     const out: Record<string, unknown> = {};
     try {
       let total = Number((await store.getMeta("ingest_total")) ?? "0");
-      let cursor = Number((await store.getMeta("ingest_cursor")) ?? "0");
+      // keep offsets aligned to the page size (CDP snaps an unaligned offset down, which re-reads a partial page)
+      let cursor = Math.floor(Number((await store.getMeta("ingest_cursor")) ?? "0") / INGEST_PAGE) * INGEST_PAGE;
       if (!total || cursor >= total) {
+        cursor = Math.floor(cursor / INGEST_PAGE) * INGEST_PAGE;
         if (total) await store.setMeta("ingest_last", JSON.stringify({ at: t, total, pages: Math.ceil(total / INGEST_PAGE) }));
         total = await catalogTotal();
         cursor = 0;
       }
-      const pages = Math.max(1, Math.ceil(total / INGEST_PAGE / RUNS_PER_DAY));
+      const pages = Math.max(1, Math.ceil(total / INGEST_PAGE / INGEST_PASS_RUNS));
       const jobs: CatalogJob[] = [];
       for (let i = 0; i < pages && cursor < total; i++, cursor += INGEST_PAGE) jobs.push({ kind: "ingest", offset: cursor });
       await store.setMeta("ingest_cursor", String(cursor));
@@ -892,6 +895,7 @@ export function createCatalog(deps: CatalogDeps) {
       if (url.searchParams.get("now") === "1") return json(200, { started: true, total: await startIngest() });
       return json(202, { requested: false, detail: "Not needed: the 30-minute cron runs a rolling ingest that covers the full catalog daily. Use ?now=1 to queue every page immediately." });
     }
+    if (request.method === "POST" && path === "/v1/trust/catalog/external") return postExternal(request);
     if (request.method === "POST" && path === "/v1/trust/catalog/stats") {
       if (!(await deps.isOwner(request))) return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
       const s = await store.computeStats(now());
@@ -899,6 +903,29 @@ export function createCatalog(deps: CatalogDeps) {
       return json(200, s);
     }
     return null;
+  }
+
+  /**
+   * Owner-only: listings from another free public x402 directory (EXTERNAL_SOURCES), in CDP Bazaar item format, sent by
+   * the operator box job (scheduler job catalog_sources). Never overwrites a CDP Bazaar row; counted against the same daily
+   * D1 write budget as the CDP ingest. Body: {source, items: [...] (<= EXT_MAX_ITEMS)}.
+   */
+  async function postExternal(request: Request) {
+    if (!(await deps.isOwner(request))) return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
+    const noStore = { "Cache-Control": "no-store" };
+    const text = await request.text().catch(() => "");
+    if (text.length > 3_000_000) return json(413, { error: "body_too_large", max_bytes: 3_000_000 }, noStore);
+    let body: any = null; try { body = JSON.parse(text); } catch { /* invalid */ }
+    const source = String(body?.source ?? "");
+    if (!(EXTERNAL_SOURCES as readonly string[]).includes(source)) return json(400, { error: "unknown_source", allowed: EXTERNAL_SOURCES }, noStore);
+    const items = Array.isArray(body?.items) ? body.items : null;
+    if (!items) return json(400, { error: "items_required" }, noStore);
+    if (items.length > EXT_MAX_ITEMS) return json(400, { error: "too_many_items", max: EXT_MAX_ITEMS }, noStore);
+    const ls = items.map(toListing).filter((x: ReturnType<typeof toListing>): x is NonNullable<ReturnType<typeof toListing>> => !!x && !x.domain.endsWith("lumitrades.io") && /^https:/.test(x.resource));
+    if (!(await underBudget("ingest"))) return json(429, { skipped: "daily write budget" }, noStore);
+    const w = await store.upsert(ls, now(), source);
+    await store.addCounter(dayKey(now()), w + 1);
+    return json(200, { ok: true, source, received: items.length, valid: ls.length, written: w }, noStore);
   }
 
   /** Owner correction: reclassify a stored catalog buy as inconclusive (Lumi-side). The prior summary is kept. */
