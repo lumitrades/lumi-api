@@ -32,15 +32,14 @@ const call = async (name, args = {}) => {
 };
 const cat = JSON.parse((await call("lumi_catalog")).text);
 console.log("catalog:", cat.wallet, cat.caps, cat.endpoints.length, "endpoints");
-console.log("quote /v1/brief (retired):", (await call("lumi_quote", { path: "/v1/brief" })).text.replace(/\s+/g, " ").slice(0, 300));
+console.log("quote /v1/verdict:", (await call("lumi_quote", { path: "/v1/verdict?url=https%3A%2F%2Fapi.example.com%2Fv1%2Fdata" })).text.replace(/\s+/g, " ").slice(0, 300));
 const out = {};
-for (const [name, args] of [["lumi_sentiment"], ["lumi_macro_yen"], ["lumi_events"], ["lumi_market"], ["lumi_institutional_brief", { format: "md" }]]) {
+for (const [name, args] of [["lumi_trust_check", { url: "https://api.example.com/v1/data" }], ["lumi_vendor_report", { vendor_id: "printmoneylab" }]]) {
   const r = await call(name, args ?? {});
   let tx = null;
   try { tx = JSON.parse(r.text).mcp_receipt?.tx; } catch { tx = (r.text.match(/"tx":"([0-9A-F]{64})"/) || [])[1]; }
   out[name] = { isError: r.isError, tx, chars: r.text.length };
   console.log(name, r.isError ? "ERROR" : "ok", tx ?? "", r.isError ? r.text.slice(0, 400) : "");
-  if (name === "lumi_institutional_brief") console.log(r.text.slice(0, 600));
 }
 await client.close();
 console.log(JSON.stringify(out));

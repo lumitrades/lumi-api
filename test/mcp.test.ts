@@ -88,7 +88,7 @@ describe("remote MCP: protocol", () => {
     expect(r.headers.get("Content-Type")).toBe("text/event-stream");
     const t = await r.text();
     expect(t).toMatch(/^event: message\ndata: /);
-    expect(JSON.parse(t.split("data: ")[1]).result.tools.length).toBe(12);
+    expect(JSON.parse(t.split("data: ")[1]).result.tools.length).toBe(9);
   });
 });
 
@@ -99,7 +99,8 @@ describe("remote MCP: tools", () => {
     const src = readFileSync(join(__dirname, "..", "mcp", "src", "index.js"), "utf8");
     const wrapper = [...src.matchAll(/name: "(lumi_[a-z0-9_]+)"/g), ...src.matchAll(/registerTool\(\s*"(lumi_[a-z0-9_]+)"/g)].map((m) => m[1]);
     expect(new Set(names)).toEqual(new Set(wrapper));
-    expect(names).toHaveLength(12);
+    expect(names).toHaveLength(9);
+    for (const gone of ["lumi_funding", "lumi_fear_greed", "lumi_institutional_brief"]) expect(names).not.toContain(gone);
   });
 
   it("lumi_verdict answers with a label when the verdict is free (VERDICT_PRICING=free)", async () => {
@@ -125,51 +126,50 @@ describe("remote MCP: tools", () => {
   it("free tools work without a key", async () => {
     const { call } = setup();
     const cat = JSON.parse(textOf((await call("lumi_catalog")).body));
-    expect(cat.endpoints).toHaveLength(6);
+    expect(cat.endpoints).toHaveLength(3);
+    expect(JSON.stringify(cat)).not.toMatch(/\/v1\/(funding|fear-greed|institutional)/);
     expect(cat.access).toMatch(/^public/);
-    const q = JSON.parse(textOf((await call("lumi_quote", { path: "/v1/fear-greed" })).body));
+    const q = JSON.parse(textOf((await call("lumi_quote", { path: "/v1/verdict?url=https%3A%2F%2Fa.example%2Fx" })).body));
     expect(q.status).toBe(402);
-    expect(q.options[0]).toMatchObject({ asset: "XRP", amount: "0.0023" });
-    for (const p of ["/v1/market", "/v1/macro/yen", "/v1/sentiment", "/v1/events", "/v1/events/next48h"]) expect(JSON.parse(textOf((await call("lumi_quote", { path: p })).body)).status, p).toBe(410);
+    expect(q.options[0]).toMatchObject({ asset: "XRP", amount: "0.0075" });
+    for (const p of ["/v1/market", "/v1/macro/yen", "/v1/sentiment", "/v1/events", "/v1/events/next48h", "/v1/funding", "/v1/fear-greed", "/v1/institutional"]) expect(JSON.parse(textOf((await call("lumi_quote", { path: p })).body)).status, p).toBe(410);
     const gone = JSON.parse(textOf((await call("lumi_quote", { path: "/v1/brief" })).body));
     expect(gone.status).toBe(410);
   });
 
   it("paid tool without a key: payment explanation, no charge, no facilitator call", async () => {
     const { call, fac } = setup();
-    const r = await call("lumi_fear_greed");
+    const r = await call("lumi_trust_check", { url: "https://a.example/x" });
     expect(r.status).toBe(200);
     expect(r.body.result.isError).toBe(true);
     const t = textOf(r.body);
-    expect(t).toMatch(/0\.0023 XRP/);
+    expect(t).toMatch(/0\.015 XRP/);
     expect(t).toMatch(/x402/);
     expect(t).toMatch(/lumi-trades-mcp/);
-    expect(t).toContain(`${BASE}/v1/fear-greed`);
-    expect(t).not.toMatch(/"classification"/);
+    expect(t).toContain(`${BASE}/v1/trust/check?url=`);
     expect(fac.calls).toHaveLength(0);
     // a wrong bearer is just public access
-    const w = await call("lumi_institutional_brief", {}, { headers: { Authorization: "Bearer wrong" } });
+    const w = await call("lumi_trust_check", { url: "https://a.example/x" }, { headers: { Authorization: "Bearer wrong" } });
     expect(textOf(w.body)).toMatch(/payment_required/);
   });
 
   it("paid tool with the owner key (header and path) returns data, free", async () => {
     const { call, fac, logs } = setup();
-    const viaHeader = await call("lumi_institutional_brief", {}, { headers: { Authorization: `Bearer ${KEY}` } });
+    const viaHeader = await call("lumi_trust_check", { url: "https://a.example/x" }, { headers: { Authorization: `Bearer ${KEY}` } });
     expect(viaHeader.body.result.isError).toBeUndefined();
-    const brief = JSON.parse(textOf(viaHeader.body));
-    expect(brief).toMatchObject({ kind: "institutional", access: { mode: "owner", charged: false } });
-    const viaPath = await call("lumi_fear_greed", {}, { path: `/mcp/${KEY}` });
-    const fg = JSON.parse(textOf(viaPath.body));
-    expect(fg.kind).toBe("fear_greed");
-    const md = await call("lumi_institutional_brief", { format: "md" }, { path: `/mcp/${KEY}` });
-    expect(textOf(md.body)).toMatch(/^#|\*\*/m);
+    const tc = JSON.parse(textOf(viaHeader.body));
+    expect(tc).toMatchObject({ kind: "trust_check", access: { mode: "owner", charged: false } });
+    const viaPath = await call("lumi_vendor_report", { vendor_id: "printmoneylab" }, { path: `/mcp/${KEY}` });
+    // no observation of this vendor in the test env: an honest not-charged 503, never a sale without evidence
+    expect(viaPath.body.result.isError).toBe(true);
+    expect(JSON.parse(textOf(viaPath.body))).toMatchObject({ status: 503, error: "stale_data", note: "Not charged." });
     expect(fac.calls).toHaveLength(0);
     expect(JSON.stringify(logs)).not.toContain(KEY);
   });
 
   it("wrong path key is 404; retired tools and bad args are tool errors", async () => {
     const { call, rpc } = setup();
-    expect((await call("lumi_fear_greed", {}, { path: "/mcp/" + "x".repeat(52) })).status).toBe(404);
+    expect((await call("lumi_trust_check", { url: "https://a.example/x" }, { path: "/mcp/" + "x".repeat(52) })).status).toBe(404);
     const gone = await call("lumi_signal", { coin: "XRP" }, { headers: { Authorization: `Bearer ${KEY}` } });
     expect(gone.body.result.isError).toBe(true);
     expect(textOf(gone.body)).toMatch(/"gone"/);
@@ -177,13 +177,16 @@ describe("remote MCP: tools", () => {
     expect((await rpc("tools/call", { name: "nope" })).body.error.code).toBe(-32602);
   });
 
-  it("stale data is an error (not charged) for owner and public", async () => {
-    const { call } = setup(NOW + 3 * 86_400_000);
-    for (const headers of [{}, { Authorization: `Bearer ${KEY}` }]) {
-      const r = await call("lumi_institutional_brief", {}, { headers });
-      expect(r.body.result.isError).toBe(true);
-      expect(JSON.parse(textOf(r.body))).toMatchObject({ status: 503, error: "stale_data", note: "Not charged." });
+  it("retired market tools are a gone error (not charged) for owner and public", async () => {
+    const { call, fac } = setup();
+    for (const name of ["lumi_funding", "lumi_fear_greed", "lumi_institutional_brief"]) {
+      for (const headers of [{}, { Authorization: `Bearer ${KEY}` }]) {
+        const r = await call(name, {}, { headers });
+        expect(r.body.result.isError, name).toBe(true);
+        expect(JSON.parse(textOf(r.body))).toMatchObject({ error: "gone", status: 410 });
+      }
     }
+    expect(fac.calls).toHaveLength(0);
   });
 
   it("owner access is disabled when the secret is missing or short", async () => {

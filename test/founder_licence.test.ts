@@ -37,7 +37,7 @@ function setup(extra: Record<string, string> = {}, commerceStore?: MemoryCommerc
 }
 type S = ReturnType<typeof setup>;
 
-async function enroll(s: S, endpoints: unknown[] = [{ url: `${BASE}/v1/fear-greed` }]) {
+async function enroll(s: S, endpoints: unknown[] = [{ url: `${BASE}/v1/verdict?url=https://a.example/x` }]) {
   const { message } = await (await s.req(`/v1/monitor/challenge?pay_to=${SELLER}`)).json();
   const r = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints });
   expect(r.status).toBe(201);
@@ -147,7 +147,7 @@ describe("test-buy packs: purchase, balance, queue, fulfilment", () => {
     const r = await pay(s, `/v1/monitor/subscribe/retest_pack?enrollment=${e.enrollment_id}`);
     expect(r.status).toBe(201);
     expect(r.body).toMatchObject({ paid: true, price_usd: "6.50", test_buys: 30, balance_left: 29, auto_renew: false, max_usd_per_test_buy: 0.1, terms: PACK_TERMS });
-    expect(r.body.first_retest).toMatchObject({ status: "queued", endpoint: `${BASE}/v1/fear-greed` });
+    expect(r.body.first_retest).toMatchObject({ status: "queued", endpoint: `${BASE}/v1/verdict?url=https://a.example/x` });
     expect(Date.parse(r.body.expires_at) - NOW).toBe(365 * DAY);
     const row = (await store.plansFor(e.enrollment_id)).find((p) => p.plan === "retest_pack")!;
     expect(row).toMatchObject({ credits: 30, usd: 6.5, budget_usd: 3 });
@@ -178,7 +178,7 @@ describe("test-buy packs: purchase, balance, queue, fulfilment", () => {
     const job = due.pack_jobs[0];
     expect(job).toMatchObject({ pack_job_id: r.body.first_retest.job_id, plan_id: r.body.pack_id, mode: "buy", funding: "seller-funded (pack)" });
     expect(job.max_usd).toBeLessThanOrEqual(0.1);
-    const base = { enrollment_id: e.enrollment_id, plan_id: job.plan_id, endpoint: `${BASE}/v1/fear-greed`, ts: s.now(), network: "xrpl:1", tx_hash: "A".repeat(64), http_status: 200, data_returned: true, cost_usd: 0.003, outcome: "ok" };
+    const base = { enrollment_id: e.enrollment_id, plan_id: job.plan_id, endpoint: `${BASE}/v1/verdict?url=https://a.example/x`, ts: s.now(), network: "xrpl:1", tx_hash: "A".repeat(64), http_status: 200, data_returned: true, cost_usd: 0.003, outcome: "ok" };
     const no = await (await s.post("/v1/owner/monitor/results", { results: [base] }, auth)).json();
     expect(no.recorded[0].error).toBe("pack_job_required");
     const ok = await (await s.post("/v1/owner/monitor/results", { results: [{ ...base, pack_job_id: job.pack_job_id }] }, auth)).json();
@@ -204,7 +204,7 @@ describe("test-buy packs: purchase, balance, queue, fulfilment", () => {
     const e = await enroll(s);
     const r = await pay(s, `/v1/monitor/subscribe/retest_pack?enrollment=${e.enrollment_id}`);
     const H = { Authorization: `Bearer ${e.management_token}` };
-    const post = async (job: any, outcome: string, tx: string) => (await (await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: r.body.pack_id, endpoint: `${BASE}/v1/fear-greed`, ts: s.now(), network: "xrpl:1", tx_hash: tx.repeat(64), http_status: outcome === "delivered" ? 200 : 502, data_returned: outcome === "delivered", cost_usd: 0.003, outcome, pack_job_id: job }] }, auth)).json()).recorded[0];
+    const post = async (job: any, outcome: string, tx: string) => (await (await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: r.body.pack_id, endpoint: `${BASE}/v1/verdict?url=https://a.example/x`, ts: s.now(), network: "xrpl:1", tx_hash: tx.repeat(64), http_status: outcome === "delivered" ? 200 : 502, data_returned: outcome === "delivered", cost_usd: 0.003, outcome, pack_job_id: job }] }, auth)).json()).recorded[0];
     const badge = async () => (await s.req(`/v1/monitor/badge/${e.enrollment_id}.json`)).json();
     expect((await badge()).reason).toBe("no_test_yet");
     expect(await post(r.body.first_retest.job_id, "delivered", "A")).toMatchObject({ pack_job: "done" });
@@ -236,7 +236,7 @@ describe("test-buy packs: purchase, balance, queue, fulfilment", () => {
       const r = await quote(s, `/v1/monitor/subscribe/${p}?enrollment=${e.enrollment_id}`);
       expect(r.status).toBe(409);
       expect(r.body.error).toBe("no_endpoint_within_cap");
-      const named = await quote(s, `/v1/monitor/subscribe/${p}?enrollment=${e.enrollment_id}&endpoint=${encodeURIComponent(`${BASE}/v1/fear-greed`)}`);
+      const named = await quote(s, `/v1/monitor/subscribe/${p}?enrollment=${e.enrollment_id}&endpoint=${encodeURIComponent(`${BASE}/v1/verdict?url=https://a.example/x`)}`);
       expect(named.body.error).toBe("endpoint_above_cap");
     }
     expect((await quote(s, `/v1/monitor/subscribe/retest_pack?enrollment=${e.enrollment_id}&endpoint=${encodeURIComponent("https://elsewhere.example/x")}`)).body.error).toBe("endpoint_not_enrolled");
@@ -312,7 +312,7 @@ describe("Founder pack: first 10 sellers, one place per company, 12 purchases", 
   it("a different payTo on a shared domain is the same company (one place)", async () => {
     const store = new MemoryCommerceStore();
     await fill(store, 9);
-    const sd = en("sameDomain", "rSomeOtherWalletxxxxxxxxxxxxxxx", null, `${BASE}/v1/institutional`);
+    const sd = en("sameDomain", "rSomeOtherWalletxxxxxxxxxxxxxxx", null, `${BASE}/v1/trust/check?url=https://a.example/x`);
     await store.addEnrollment(sd);
     await seedBuy(store, 0, sd);
     const s = setup({}, store);

@@ -43,7 +43,7 @@ type S = ReturnType<typeof setup>;
 
 async function enroll(s: S) {
   const { message } = await (await s.req(`/v1/monitor/challenge?pay_to=${SELLER}`)).json();
-  const r = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints: [{ url: `${BASE}/v1/fear-greed` }] });
+  const r = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints: [{ url: `${BASE}/v1/verdict?url=https://a.example/x` }] });
   expect(r.status).toBe(201);
   return r.json();
 }
@@ -144,8 +144,8 @@ describe("tidy: pack prices, 429 headers, version, trial naming", () => {
 
   it("health reports the bumped version", async () => {
     const s = setup();
-    expect(VERSION).toBe("1.1.9");
-    expect((await (await s.req("/health")).json()).version).toBe("1.1.9");
+    expect(VERSION).toBe("1.2.0");
+    expect((await (await s.req("/health")).json()).version).toBe("1.2.0");
   });
 
   it("no user-facing 'Watch Plus trial' naming is left", () => {

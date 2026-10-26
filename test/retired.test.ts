@@ -20,6 +20,9 @@ const RETIRED = [
   "/v1/scan", "/v1/slate", "/v1/slate/", "/v1/brief", "/v1/brief?format=md", "/v1/coins", "/v1/trades", "/V1/SIGNAL/XRP",
   "/v1/market", "/v1/market/", "/V1/MARKET", "/v1/macro/yen", "/v1/macro/yen/", "/v1/sentiment", "/v1/events", "/v1/events/",
   "/v1/events/next48h", "/v1/events/next48h/", "/v1/Events/Next48h",
+  // v1.2.0 (trust-only): market data and the policy brief, with their aliases
+  "/v1/funding", "/v1/funding/", "/v1/funding/BTC", "/V1/FUNDING", "/v1/fear-greed", "/v1/fear-greed/", "/v1/fear_greed", "/v1/feargreed",
+  "/v1/fear-greed?format=md", "/v1/Fear-Greed", "/v1/institutional", "/v1/institutional/", "/v1/institutional?format=md", "/v1/institutional/brief", "/V1/INSTITUTIONAL",
 ];
 // An oversized but syntactically plausible header must not turn a 410 into a 431/402 either.
 const PAY_HEADERS = [
@@ -57,13 +60,13 @@ describe("retired trading routes (2026-10-25)", () => {
   });
 
   it("live routes are not caught by the retired matcher", () => {
-    for (const p of ["/v1/check", "/v1/trust/check", "/v1/trust/vendors/x/report", "/v1/fear-greed", "/v1/funding", "/v1/institutional", "/v1/verdict", "/v1/marketplace", "/v1/macro", "/v1/events/other", "/v1/monitor/packs"])
+    for (const p of ["/v1/check", "/v1/trust/check", "/v1/trust/vendors/x/report", "/v1/verdict", "/v1/trust/vendors", "/v1/samples", "/v1/check/keys", "/v1/fundingx", "/v1/institutionalize", "/v1/marketplace", "/v1/macro", "/v1/events/other", "/v1/monitor/packs"])
       expect(isRetiredPath(p), p).toBe(false);
   });
 
   it("are gone from well-known, OpenAPI, the root list, llms.txt, skill.md, the agent card, MCP, samples, bazaar and sitemap", async () => {
     const { get } = setup();
-    const re = /\/v1\/(signal|lite|levels|scan|slate|brief|coins|market|macro\/yen|sentiment|events)\b/;
+    const re = /\/v1\/(signal|lite|levels|scan|slate|brief|coins|market|macro\/yen|sentiment|events|funding|fear[-_]?greed|institutional)\b/;
     const wk: any = await (await get("/.well-known/x402")).json();
     for (const r of wk.resources ?? []) expect(String(r), "well-known").not.toMatch(re);
     const oa: any = await (await get("/openapi.json")).json();
@@ -117,11 +120,29 @@ describe("retired trading routes (2026-10-25)", () => {
     expect(r.skipped ?? r.feed).toBeTruthy();
   });
 
-  it("a still-paid market-data route still quotes and sells", async () => {
-    const { get } = setup();
-    const q = await get("/v1/fear-greed");
-    expect(q.status).toBe(402);
+  it("v1.2.0: a valid-looking payment built from an old market-data quote never settles", async () => {
+    const { get, fac } = setup();
+    // the last sold quote shape for /v1/fear-greed (an XRPL payment); the route is gone, so nothing is verified or settled
+    const q = await get("/v1/verdict?url=https%3A%2F%2Fa.example%2Fx");
     const req = (await q.json()).accepts[0];
-    expect((await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) })).status).toBe(200);
+    for (const p of ["/v1/funding", "/v1/fear-greed", "/v1/institutional"]) {
+      const r = await get(p, { "PAYMENT-SIGNATURE": paymentHeaderFor({ ...req, resource: BASE + p }) });
+      expect(r.status, p).toBe(410);
+    }
+    expect(fac.calls.length).toBe(0);
+  });
+
+  it("v1.2.0: retired routes are absent from every manifest, also as Bazaar routes and MCP/A2A names", async () => {
+    const { get } = setup();
+    const re = /\/v1\/(funding|fear[-_]?greed|institutional)\b|lumi_(funding|fear_greed|institutional_brief)|fear (and|&) greed|funding rates|institutional (&|and) policy/i;
+    for (const p of ["/", "/.well-known/x402", "/openapi.json", "/.well-known/agent-card.json", "/.well-known/mcp.json", "/.well-known/mcp/server-card.json", "/.well-known/agents.json", "/v1/samples", "/skill.md", "/llms.txt", "/catalog", "/sitemap.xml"]) {
+      const res = await get(p);
+      if (res.status === 404) continue;
+      expect(res.status, p).toBe(200);
+      const text = await res.text();
+      for (const line of text.split(/\n|(?<=[,}])/)) if (re.test(line)) expect(line, p).toMatch(/retired|410|gone/i);
+    }
+    for (const r of Object.keys(BAZAAR_ROUTES)) expect(r).not.toMatch(/funding|fear|institutional/);
+    for (const t of PAID_TOOLS) expect(t.name).not.toMatch(/funding|fear|institutional/);
   });
 });

@@ -3,7 +3,7 @@
  * lumi-trades-mcp: stdio MCP server for the Lumi API (https://api.lumitrades.io).
  * Paid tools pay per call via x402 with YOUR wallet: XRP/RLUSD/USDC on the XRP Ledger (XRPL_SEED) or USDC on Base (EVM_PRIVATE_KEY),
  * within per-call caps and a session budget.
- * Analytics and education only, not financial advice.
+ * x402 seller trust you can verify: automated observations, not a rating, endorsement or guarantee.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -16,24 +16,10 @@ import { registerContribTools, checkLumiReceipt } from "./contrib.js";
 const VENDOR_LOOKUP_DESCRIPTION =
   "Free. Check an x402 seller before you pay it: pass url (the resource you are about to buy), domain, or payTo (the address in its 402 quote, case-insensitive). Lumi ingests the full CDP x402 Bazaar catalog daily and runs free, unpaid 402-quote checks of listings on a rotating schedule (valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response), labelled 'quote-checked, low confidence', plus Lumi's own test-buys confirmed on-chain, labelled 'test-bought' and counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated list, separately). Answer-only: tx evidence is in the paid trust check. Observations, not ratings; no match is not a negative finding. With no arguments: the curated XRPL vendor scores and catalog counts; vendor_id gives one curated vendor's summary (tx evidence is in the paid vendor report).";
 
-export const VERSION = "0.10.0";
+export const VERSION = "0.9.9";
 
 /** Paid tools: name -> API path builder + description (prices are read live from the API's 402 quote). */
 export const PAID_TOOLS = [
-  { name: "lumi_funding", path: () => "/v1/funding", input: {}, description: "Perpetual funding rates for every tracked coin listed on OKX (rate, 8h-normalised, annualised, next funding time, size band), the BTC rate, median, most positive/negative. Refreshed every 15 minutes. Paid: $0.003 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
-  { name: "lumi_fear_greed", path: () => "/v1/fear-greed", input: {}, description: "CoinMarketCap Fear & Greed now, yesterday, last week and last month, change vs each, yearly high/low and a 30-day series. Refreshed every 30 minutes. Paid: $0.003 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger)." },
-  {
-    name: "lumi_institutional_brief",
-    path: (a) => `/v1/institutional${a.format === "md" ? "?format=md" : ""}`,
-    input: { format: z.enum(["json", "md"]).optional().describe("json (default) or md for ready-to-read markdown") },
-    description:
-      "Daily policy brief: what BIS, IMF, US Treasury/OCC, Fed, SEC, CFTC, JPMorgan (Kinexys), SBI, Cross River, Securitize, R3 " +
-      "and other banks, central banks and tokenization firms did in the last days, and how each move maps to XRP, XLM, XDC, QNT, AXL and HBAR (plus RLUSD/USDC). " +
-      "Every item is dated and sourced, with why it matters, impact and confidence, and a link_type that separates confirmed links from Lumi's " +
-      "indirect-alignment analysis (institution goals vs token mission, both sides quoted). Includes a per-token map, connections, no-news notes and " +
-      "what to watch next. Refreshed daily; never sold stale. Paid: $0.10 per call (USDC on Base; or RLUSD, USDC or XRP at the live rate on the XRP Ledger); " +
-      "allowed by the default caps (LUMI_MAX_USD_PER_CALL 0.30, LUMI_MAX_XRP_PER_CALL 0.25). Not financial advice.",
-  },
   {
     name: "lumi_trust_check",
     path: (a) => {
@@ -64,7 +50,6 @@ export const PAID_TOOLS = [
   },
 ];
 
-const DISCLAIMER = "Lumi Trades data: analytics and education only, not financial advice and not a recommendation to buy, sell or hold.";
 const TRUST_DISCLAIMER = "Automated observations by Lumi, not a rating, endorsement or guarantee. Not financial advice.";
 const text = (obj) => ({ content: [{ type: "text", text: typeof obj === "string" ? obj : JSON.stringify(obj, null, 2) }] });
 
@@ -100,8 +85,8 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: free samples of every paid product",
       description:
-        "Free. A truncated, clearly labelled SAMPLE of each paid product (funding, fear_greed, institutional brief, trust_check, vendor report, verdict) with its USD price and full URL, so you can judge it before paying. Lists are cut to 2 entries; up to 10 minutes old. Pass route to get one product.",
-      inputSchema: { route: z.string().regex(/^[a-z_]{1,32}$/).optional().describe("Optional product route, e.g. institutional or funding") },
+        "Free. A truncated, clearly labelled SAMPLE of each paid product (trust_check, vendor report, verdict) with its USD price and full URL, so you can judge it before paying. Lists are cut to 2 entries; up to 10 minutes old. Pass route to get one product.",
+      inputSchema: { route: z.string().regex(/^[a-z_]{1,32}$/).optional().describe("Optional product route, e.g. trust_check or verdict") },
     },
     async ({ route }) => {
       const r = await client.free("/v1/samples");
@@ -115,8 +100,8 @@ export function buildServer(client, opts = {}) {
     "lumi_quote",
     {
       title: "Lumi: price check without paying (free)",
-      description: "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base) for any Lumi paid path, e.g. /v1/funding, without paying. A 503 means the data is not fresh right now and the call would not be sold.",
-      inputSchema: { path: z.string().regex(/^\/v1\//).describe("Paid API path, e.g. /v1/funding or /v1/trust/check?url=...") },
+      description: "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base) for any Lumi paid path, e.g. /v1/verdict?url=..., without paying. A 503 means Lumi cannot answer right now and the call would not be sold.",
+      inputSchema: { path: z.string().regex(/^\/v1\//).describe("Paid API path, e.g. /v1/verdict?url=... or /v1/trust/check?url=...") },
     },
     async ({ path }) => text(await client.quote(path)),
   );
@@ -205,14 +190,13 @@ export function buildServer(client, opts = {}) {
       t.name,
       { title: `Lumi: ${t.name.replace(/^lumi_/, "").replace(/_/g, " ")} (paid)`, description: `${t.description} Pays with your own wallet via x402 (XRPL_SEED or EVM_PRIVATE_KEY) within the configured caps.`, inputSchema: t.input },
       async (args) => {
-        const fmtMd = t.name === "lumi_institutional_brief" && args?.format === "md";
-        const r = await client.paid(t.path(args ?? {}), fmtMd ? "text/markdown" : "application/json");
+        const r = await client.paid(t.path(args ?? {}), "application/json");
         if (!r.paid) return { ...text(r), isError: r.status !== 402 || !!r.error };
         const receipt = { tx: r.receipt?.transaction, network: r.receipt?.network, spent_this_session: r.spent_this_session };
         if (typeof r.body === "string") return text(`${r.body}\n\n[x402 receipt: ${JSON.stringify(receipt)}]`);
         // Paid trust/check: its lumi_receipt is kept only when signed by a pinned Lumi key.
         const body = t.name === "lumi_trust_check" ? await checkLumiReceipt(r.body, opts.contrib ?? {}) : r.body;
-        return text({ ...body, mcp_receipt: receipt, ...(t.name === "lumi_vendor_report" ? {} : t.name === "lumi_trust_check" ? { note: TRUST_DISCLAIMER } : { note: DISCLAIMER }) });
+        return text({ ...body, mcp_receipt: receipt, ...(t.name === "lumi_trust_check" ? { note: TRUST_DISCLAIMER } : {}) });
       },
     );
   }

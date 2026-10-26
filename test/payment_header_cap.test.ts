@@ -81,9 +81,9 @@ describe("payment header size cap", () => {
   it("requirePayment returns 431 before decoding, never calls serve or a facilitator", async () => {
     let served = false;
     const r = await requirePayment(
-      new Request(BASE + "/v1/fear-greed", { headers: { "PAYMENT-SIGNATURE": bomb() } }),
+      new Request(BASE + "/v1/verdict?url=https://a.example/x", { headers: { "PAYMENT-SIGNATURE": bomb() } }),
       {} as any, { replay: { isUsed: async () => false, claim: async () => true } } as any,
-      { routeKey: "slate", amountDrops: "1", description: "d", resourceUrl: BASE + "/v1/fear-greed" },
+      { routeKey: "slate", amountDrops: "1", description: "d", resourceUrl: BASE + "/v1/verdict?url=https://a.example/x" },
       () => { served = true; return new Response("x"); },
     );
     expect(r.status).toBe(431);
@@ -95,7 +95,7 @@ describe("payment header size cap", () => {
     const h = bomb();
     expect(h.length).toBeGreaterThan(100_000);
     for (const name of PAYMENT_HEADERS) {
-      for (const path of ["/v1/fear-greed", "/v1/trust/check?url=https://seller.test/x", "/mcp", "/v1/fear-greed"]) {
+      for (const path of ["/v1/verdict?url=https://a.example/x", "/v1/trust/check?url=https://seller.test/x", "/mcp", "/v1/verdict?url=https://a.example/x"]) {
         const r = await get(path, { [name]: h, "X-Lumi-Trial": "1" });
         expect(r.status).toBe(431);
         expect(await r.json()).toMatchObject({ error: "payment_header_too_large", header: name, note: "Not charged." });
@@ -107,14 +107,14 @@ describe("payment header size cap", () => {
 
   it("app: a normal unpaid request still gets the 402", async () => {
     const { get } = setup();
-    const r = await get("/v1/fear-greed");
+    const r = await get("/v1/verdict?url=https://a.example/x");
     expect(r.status).toBe(402);
     expect(r.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
   });
 
   it("normal payments still pass on XRPL, Base and Stellar (realistic header sizes)", async () => {
     const { get, xrpl, evm, st } = setup();
-    const quote = async () => (await get("/v1/fear-greed")).json();
+    const quote = async () => (await get("/v1/verdict?url=https://a.example/x")).json();
     const sizes: Record<string, number> = {};
 
     // XRPL: a signed Payment blob with memos is ~1 KB of hex.
@@ -122,7 +122,7 @@ describe("payment header size cap", () => {
     const xr = q1.accepts.find((a: any) => a.network === "xrpl:1" && a.asset === "XRP");
     const xh = b64({ x402Version: 2, accepted: xr, payload: { signedTxBlob: "12000022" + "A".repeat(1000), invoiceId: xr.extra.invoiceId } });
     sizes.xrpl = xh.length;
-    expect((await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": xh })).status).toBe(200);
+    expect((await get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": xh })).status).toBe(200);
     expect(xrpl.calls.map((c) => c.path)).toEqual(["/verify", "/settle"]);
 
     // Base: the official @x402 client, sent as X-PAYMENT (the alias header).
@@ -132,7 +132,7 @@ describe("payment header size cap", () => {
     const evmOnly = { ...q2, accepts: q2.accepts.filter((a: any) => a.network.startsWith("eip155:")) };
     const bh = b64(await client.createPaymentPayload(evmOnly));
     sizes.base = bh.length;
-    expect((await get("/v1/fear-greed", { "X-PAYMENT": bh })).status).toBe(200);
+    expect((await get("/v1/verdict?url=https://a.example/x", { "X-PAYMENT": bh })).status).toBe(200);
     expect(evm.calls.map((c) => c.path)).toEqual(["/verify", "/settle"]);
 
     // Stellar: a Soroban transaction XDR with auth entries and footprint, ~3 KB base64.
@@ -140,7 +140,7 @@ describe("payment header size cap", () => {
     const sa = q3.accepts.find((a: any) => a.network === "stellar:pubnet");
     const sh = b64({ x402Version: 2, accepted: sa, payload: { transaction: "AAAAAgAAAAB" + "A".repeat(3000) } });
     sizes.stellar = sh.length;
-    expect((await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": sh })).status).toBe(200);
+    expect((await get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": sh })).status).toBe(200);
     expect(st.calls.map((c) => c.path)).toEqual(["/verify", "/settle"]);
 
     for (const n of Object.values(sizes)) expect(n).toBeLessThan(MAX_PAYMENT_HEADER_BYTES / 2);

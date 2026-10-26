@@ -34,7 +34,7 @@ function setup(extra: Record<string, string> = {}) {
 }
 type S = ReturnType<typeof setup>;
 
-async function enroll(s: S, endpoints: unknown[] = [{ url: `${BASE}/v1/fear-greed` }]) {
+async function enroll(s: S, endpoints: unknown[] = [{ url: `${BASE}/v1/verdict?url=https://a.example/x` }]) {
   const { message } = await (await s.req(`/v1/monitor/challenge?pay_to=${SELLER}`)).json();
   const r = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints });
   expect(r.status).toBe(201);

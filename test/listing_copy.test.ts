@@ -48,7 +48,6 @@ describe("Bazaar listing copy (owner-approved cleanup 2026-10-25)", () => {
       const out = (bazaarExtension(r, r === "vendor_report" ? "x" : "XRP").schema as any).properties.output;
       expect(out.description, r).toMatch(/^Errors: /);
     }
-    expect(errorDocs("institutional").map((e) => e.status)).toContain(400);
     expect(errorDocs("vendor_report").map((e) => e.status)).toEqual(expect.arrayContaining([400, 404]));
     expect(errorDocs("trust_check").map((e) => e.status)).toContain(400);
     expect(errorDocs("verdict").map((e) => e.status)).toContain(400);

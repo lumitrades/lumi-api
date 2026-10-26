@@ -19,7 +19,6 @@ import {
   coinList, resolveCoin, DISCLAIMER, SOURCE, type CoinRef,
 } from "./views";
 import { staleInputs, hasContent, DAILY_ROUTE_MAX_AGE_HOURS, fileMeta, withMeta, isoTimestamps, metaFrom, nextHalfHour } from "./freshness";
-import { institutionalView } from "./institutional";
 import { handleMcp, isOwnerKey, MCP_CORS, type McpDeps } from "./mcp";
 import { createSanctionsScreen, type KVLike, type SanctionsDoc } from "./sanctions";
 import { createTrust, TRUST_POST_PATHS, REPORT_FRESH_MS, type Trust } from "./trust";

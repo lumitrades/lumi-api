@@ -71,22 +71,22 @@ describe("Stellar config", () => {
 describe("Stellar x402 option", () => {
   it("adds a stellar:pubnet USDC entry after the XRPL options, schema-valid", async () => {
     const { get } = setup();
-    const r = await get("/v1/fear-greed");
+    const r = await get("/v1/verdict?url=https://a.example/x");
     expect(r.status).toBe(402);
     const body = await r.json();
     expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(body);
     expect(PaymentRequiredV2Schema.safeParse(body).success).toBe(true);
     const s = body.accepts[body.accepts.length - 1];
     expect(s).toEqual({
-      scheme: "exact", network: "stellar:pubnet", amount: "30000", asset: PUBNET_USDC, payTo: ST_PAY_TO, maxTimeoutSeconds: 300,
+      scheme: "exact", network: "stellar:pubnet", amount: "100000", asset: PUBNET_USDC, payTo: ST_PAY_TO, maxTimeoutSeconds: 300,
       extra: { areFeesSponsored: true, invoiceId: body.accepts[0].extra.invoiceId, symbol: "USDC", decimals: 7 },
     });
   });
 
   it("verifies + settles through the facilitator with the Bearer key, serves data with a Stellar receipt", async () => {
     const { get, st, xrpl, logs, auth } = setup();
-    const body = await (await get("/v1/fear-greed")).json();
-    const r = await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": header(stellarOf(body)) });
+    const body = await (await get("/v1/verdict?url=https://a.example/x")).json();
+    const r = await get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": header(stellarOf(body)) });
     expect(r.status).toBe(200);
     expect(xrpl.calls).toHaveLength(0);
     expect(st.calls.map((c) => c.path)).toEqual(["/verify", "/settle"]);
@@ -95,7 +95,7 @@ describe("Stellar x402 option", () => {
     expect(st.calls[0].body.paymentPayload.accepted).toEqual(stellarOf(body));
     const out = await r.json();
     expect(out.payment).toEqual({
-      transaction: TX, network: "stellar:pubnet", payer: PAYER_G, asset: "USDC", amount: "0.003", amount_atomic: "30000",
+      transaction: TX, network: "stellar:pubnet", payer: PAYER_G, asset: "USDC", amount: "0.01", amount_atomic: "100000",
       token: PUBNET_USDC, explorer: `https://stellar.expert/explorer/public/tx/${TX}`,
     });
     expect(r.headers.get("PAYMENT-RESPONSE")).toBeTruthy();
@@ -104,14 +104,14 @@ describe("Stellar x402 option", () => {
 
   it("refuses a replayed header and the same signed transaction against a fresh invoice", async () => {
     const { get, st } = setup();
-    const first = await (await get("/v1/fear-greed")).json();
+    const first = await (await get("/v1/verdict?url=https://a.example/x")).json();
     const h = header(stellarOf(first));
-    expect((await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": h })).status).toBe(200);
-    const replay = await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": h });
+    expect((await get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": h })).status).toBe(200);
+    const replay = await get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": h });
     expect(replay.status).toBe(402);
     expect((await replay.json()).error).toBe("invoice_already_used");
-    const second = await (await get("/v1/fear-greed")).json();
-    const again = await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": header(stellarOf(second)) });
+    const second = await (await get("/v1/verdict?url=https://a.example/x")).json();
+    const again = await get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": header(stellarOf(second)) });
     expect(again.status).toBe(402);
     expect((await again.json()).error).toBe("authorization_already_used");
     expect(st.calls.filter((c) => c.path === "/settle")).toHaveLength(1);
@@ -119,33 +119,33 @@ describe("Stellar x402 option", () => {
 
   it("rejects a tampered amount, maps facilitator failures (re-quote, 503, 409)", async () => {
     const { get, st } = setup();
-    const body = await (await get("/v1/fear-greed")).json();
-    const bad = await get("/v1/fear-greed", { "PAYMENT-SIGNATURE": header({ ...stellarOf(body), amount: "1" }) });
+    const body = await (await get("/v1/verdict?url=https://a.example/x")).json();
+    const bad = await get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": header({ ...stellarOf(body), amount: "1" }) });
     expect(bad.status).toBe(402);
     expect(st.calls).toHaveLength(0);
 
     const inval = setup({ st: stFacilitator({ verify: () => jsonResponse(200, { isValid: false, invalidReason: "invalid_exact_stellar_payload_wrong_amount" }) }) });
-    const b2 = await (await inval.get("/v1/fear-greed")).json();
-    const r2 = await inval.get("/v1/fear-greed", { "PAYMENT-SIGNATURE": header(stellarOf(b2)) });
+    const b2 = await (await inval.get("/v1/verdict?url=https://a.example/x")).json();
+    const r2 = await inval.get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": header(stellarOf(b2)) });
     expect(r2.status).toBe(402);
     expect((await r2.json()).error).toMatch(/^verify_failed:/);
 
     const down = setup({ st: stFacilitator({ verify: () => new Response("x", { status: 502 }) }) });
-    const b3 = await (await down.get("/v1/fear-greed")).json();
-    const r3 = await down.get("/v1/fear-greed", { "PAYMENT-SIGNATURE": header(stellarOf(b3)) });
+    const b3 = await (await down.get("/v1/verdict?url=https://a.example/x")).json();
+    const r3 = await down.get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": header(stellarOf(b3)) });
     expect(r3.status).toBe(503);
 
     const unk = setup({ st: stFacilitator({ settle: () => new Response("x", { status: 500 }) }) });
-    const b4 = await (await unk.get("/v1/fear-greed")).json();
-    const r4 = await unk.get("/v1/fear-greed", { "PAYMENT-SIGNATURE": header(stellarOf(b4)) });
+    const b4 = await (await unk.get("/v1/verdict?url=https://a.example/x")).json();
+    const r4 = await unk.get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": header(stellarOf(b4)) });
     expect(r4.status).toBe(409);
   });
 
   it("is absent when disabled, and the XRPL flow is unchanged", async () => {
     const off = setup({ env: { ACCEPT_STELLAR_USDC: "false" } });
-    const body = await (await off.get("/v1/fear-greed")).json();
+    const body = await (await off.get("/v1/verdict?url=https://a.example/x")).json();
     expect(body.accepts.some((a: any) => a.network.startsWith("stellar:"))).toBe(false);
-    const on = await (await setup().get("/v1/fear-greed")).json();
+    const on = await (await setup().get("/v1/verdict?url=https://a.example/x")).json();
     const strip = (a: any) => ({ ...a, extra: { ...a.extra, invoiceId: "-" } });
     expect(on.accepts.slice(0, -1).map(strip)).toEqual(body.accepts.map(strip));
   });

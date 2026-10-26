@@ -20,10 +20,9 @@ describe("config", () => {
     expect(cfg.payTo).toBe(MAINNET_PAY_TO);
     expect(cfg.facilitatorUrl).toBe("https://xrpl-facilitator-mainnet.t54.ai");
     expect(cfg.pricesDrops).toEqual({
-      institutional: "77000", vendor_report: "15000",
-      trust_check: "15000", funding: "2300", fear_greed: "2300", verdict: "7500",
+      vendor_report: "15000", trust_check: "15000", verdict: "7500",
     });
-    expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_FUNDING_XRP: "0.02" }).pricesDrops.funding).toBe("20000");
+    expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_TRUST_CHECK_XRP: "0.02" }).pricesDrops.trust_check).toBe("20000");
   });
 
   it("requires an explicit PAY_TO off mainnet and validates it", () => {

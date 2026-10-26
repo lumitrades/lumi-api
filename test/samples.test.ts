@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
-import { truncate, institutionalSample, productSample } from "../src/samples";
+import { truncate } from "../src/samples";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch } from "./helpers";
 
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", OWNER_MCP_KEY: "k".repeat(52) };
@@ -16,18 +16,6 @@ describe("samples", () => {
     expect(out.b.c[0]).toContain("[sample: truncated]");
   });
 
-  it("institutional sample: headline, big_picture, 2 items, all sources", () => {
-    const items = [1, 2, 3].map((i) => ({ headline: `h${i}`, source_url: `https://s/${i}`, additional_sources: [`https://a/${i}`] }));
-    const s = institutionalSample({ title: "T", big_picture: ["bp"], items, coin_map: {}, markdown: "# md" });
-    expect(s.sample.headline).toBe("h1");
-    expect(s.sample.big_picture).toEqual(["bp"]);
-    expect(s.sample.items).toHaveLength(2);
-    expect(s.sample.sources).toHaveLength(6);
-    expect(s.truncated.items).toBe(3);
-    expect(s.truncated.omitted).toEqual(["coin_map", "markdown"]);
-    expect(JSON.stringify(s)).not.toContain("# md");
-  });
-
   it("GET /v1/samples is free, labelled, cached and covers every paid route", async () => {
     let calls = 0;
     const f = makeFetch(happyFacilitator());
@@ -40,8 +28,8 @@ describe("samples", () => {
     expect(j.is_sample).toBe(true);
     expect(j.label).toMatch(/^SAMPLE/);
     const routes = j.products.map((p: any) => p.route);
-    expect(routes).toEqual(expect.arrayContaining(["fear_greed", "institutional", "vendor_report"]));
-    for (const gone of ["signal", "levels", "lite", "scan", "slate", "brief", "coins", "market", "yen", "sentiment", "events", "events_48h"]) expect(routes).not.toContain(gone);
+    expect(routes).toEqual(expect.arrayContaining(["trust_check", "vendor_report"]));
+    for (const gone of ["signal", "levels", "lite", "scan", "slate", "brief", "coins", "market", "yen", "sentiment", "events", "events_48h", "funding", "fear_greed", "institutional"]) expect(routes).not.toContain(gone);
     for (const p of j.products) {
       expect(p.full_url).toMatch(/^http:\/\/lumi\.test\/v1\//);
       expect(p.price.xrp).toBeTruthy();
@@ -53,10 +41,10 @@ describe("samples", () => {
 
   it("remote MCP lumi_samples returns one product", async () => {
     const app = createApp(ENV, { fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW });
-    const r = await app.fetch(new Request(BASE + "/mcp", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "lumi_samples", arguments: { route: "institutional" } } }) }));
+    const r = await app.fetch(new Request(BASE + "/mcp", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "lumi_samples", arguments: { route: "vendor_report" } } }) }));
     const j: any = await r.json();
     const t = JSON.parse(j.result.content[0].text);
-    expect(t.route).toBe("institutional");
+    expect(t.route).toBe("vendor_report");
     expect(t.label).toMatch(/^SAMPLE/);
   });
 });

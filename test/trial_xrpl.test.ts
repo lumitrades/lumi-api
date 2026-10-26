@@ -74,7 +74,7 @@ async function xrplTry(
 describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
   it("the 402 challenge offers Base and XRPL; the XRPL message is the CAIP-122 layout with XRP Ledger and the chain reference", async () => {
     const { appFetch } = setup();
-    const ext = (await (await appFetch(BASE + "/v1/fear-greed", TRIAL)).json()).extensions["sign-in-with-x"];
+    const ext = (await (await appFetch(BASE + "/v1/verdict?url=https://a.example/x", TRIAL)).json()).extensions["sign-in-with-x"];
     expect(ext.supportedChains).toEqual([{ chainId: "eip155:84532", type: "eip191" }, { chainId: "xrpl:1", type: "xrpl" }]);
     expect(ext.lumi_trial).toMatchObject({ free_calls_per_wallet: 3, one_trial_per_wallet: true, charged: false, xrpl: { type: "xrpl" } });
     const msg = siweMessage({ ...ext.info, address: "rAddr", chainId: "xrpl:1", type: "xrpl", signature: "" });
@@ -85,7 +85,7 @@ describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
 
   it("the documented client snippet builds the exact message the server verifies", async () => {
     const snip = xrplTrialSnippet(BASE, "xrpl:1");
-    const ext = await siwxChallenge("k", BASE + "/v1/fear-greed", NOW, trialChains(undefined, "xrpl:1"));
+    const ext = await siwxChallenge("k", BASE + "/v1/verdict?url=https://a.example/x", NOW, trialChains(undefined, "xrpl:1"));
     const i: any = ext.info;
     const chain = { chainId: "xrpl:1" };
     const wallet = { classicAddress: "rTest" };
@@ -100,7 +100,7 @@ describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
       const k = key(algo);
       const { appFetch, fac, xrplCalls, trialStore } = setup({ accounts: { [k.address]: {} } });
       for (let i = 1; i <= 3; i++) {
-        const r = await xrplTry(appFetch, "/v1/fear-greed", k, k.address);
+        const r = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", k, k.address);
         expect(r.status).toBe(200);
         expect(r.headers.get("PAYMENT-RESPONSE")).toBeNull();
         const b = await r.json();
@@ -108,7 +108,7 @@ describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
         expect(b.access).toEqual({ mode: "trial", charged: false, wallet: k.address, trial_calls_used: i, trial_calls_remaining: 3 - i });
       }
       expect(xrplCalls[0]).toMatchObject({ method: "account_info", params: [{ account: k.address, ledger_index: "validated" }] });
-      const r4 = await xrplTry(appFetch, "/v1/fear-greed", k, k.address);
+      const r4 = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", k, k.address);
       expect(r4.status).toBe(402);
       expect((await r4.json()).trial).toMatchObject({ granted: false, reason: "wallet_trial_used_up" });
       expect(fac.calls).toHaveLength(0);
@@ -120,26 +120,26 @@ describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
     const victim = key();
     const attacker = key();
     const { appFetch } = setup({ accounts: { [victim.address]: {}, [attacker.address]: {} } });
-    const spoof = await xrplTry(appFetch, "/v1/fear-greed", attacker, victim.address);
+    const spoof = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", attacker, victim.address);
     expect((await spoof.json()).trial).toMatchObject({ granted: false, reason: "signing_key_does_not_control_address" });
     // victim's public key but attacker's signature
-    const swapped = await xrplTry(appFetch, "/v1/fear-greed", attacker, victim.address, (p) => (p.publicKey = victim.publicKey));
+    const swapped = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", attacker, victim.address, (p) => (p.publicKey = victim.publicKey));
     expect((await swapped.json()).trial.reason).toBe("invalid_signature");
-    const tampered = await xrplTry(appFetch, "/v1/fear-greed", attacker, attacker.address, (p) => (p.statement = p.statement + " "));
+    const tampered = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", attacker, attacker.address, (p) => (p.statement = p.statement + " "));
     expect((await tampered.json()).trial.reason).toBe("challenge_mismatch");
-    const noKey = await xrplTry(appFetch, "/v1/fear-greed", attacker, attacker.address, (p) => delete p.publicKey);
+    const noKey = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", attacker, attacker.address, (p) => delete p.publicKey);
     expect((await noKey.json()).trial.reason).toBe("public_key_required_for_xrpl");
-    const wrongChain = await xrplTry(appFetch, "/v1/fear-greed", attacker, attacker.address, (p) => (p.chainId = "xrpl:0"));
+    const wrongChain = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", attacker, attacker.address, (p) => (p.chainId = "xrpl:0"));
     expect((await wrongChain.json()).trial.reason).toMatch(/^unsupported_chain/);
     const otherUrl = await (async () => {
-      const q = await (await appFetch(BASE + "/v1/fear-greed", TRIAL)).json();
+      const q = await (await appFetch(BASE + "/v1/verdict?url=https://a.example/x", TRIAL)).json();
       const p: any = { ...q.extensions["sign-in-with-x"].info, address: attacker.address, chainId: "xrpl:1", type: "xrpl", publicKey: attacker.publicKey };
       p.signature = sign(Buffer.from(siweMessage(p), "utf8").toString("hex").toUpperCase(), attacker.privateKey);
       const h = Buffer.from(JSON.stringify(p)).toString("base64");
-      expect((await appFetch(BASE + "/v1/fear-greed", { headers: { "SIGN-IN-WITH-X": h } })).status).toBe(200);
-      const replay = await (await appFetch(BASE + "/v1/fear-greed", { headers: { "SIGN-IN-WITH-X": h } })).json();
+      expect((await appFetch(BASE + "/v1/verdict?url=https://a.example/x", { headers: { "SIGN-IN-WITH-X": h } })).status).toBe(200);
+      const replay = await (await appFetch(BASE + "/v1/verdict?url=https://a.example/x", { headers: { "SIGN-IN-WITH-X": h } })).json();
       expect(replay.trial.reason).toBe("nonce_used");
-      return (await appFetch(BASE + "/v1/institutional", { headers: { "SIGN-IN-WITH-X": h } })).json();
+      return (await appFetch(BASE + "/v1/trust/check?url=https://a.example/x", { headers: { "SIGN-IN-WITH-X": h } })).json();
     })();
     expect(otherUrl.trial.reason).toBe("challenge_not_for_this_url");
   });
@@ -150,19 +150,19 @@ describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
     const stale = key();
     const unfunded = key();
     const { appFetch } = setup({ accounts: { [master.address]: { Flags: LSF_DISABLE_MASTER, RegularKey: regular.address } } });
-    expect((await xrplTry(appFetch, "/v1/fear-greed", regular, master.address)).status).toBe(200);
-    const disabled = await xrplTry(appFetch, "/v1/fear-greed", master, master.address);
+    expect((await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", regular, master.address)).status).toBe(200);
+    const disabled = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", master, master.address);
     expect((await disabled.json()).trial.reason).toMatch(/^xrpl_master_key_disabled/);
-    const notCurrent = await xrplTry(appFetch, "/v1/fear-greed", stale, master.address);
+    const notCurrent = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", stale, master.address);
     expect((await notCurrent.json()).trial.reason).toBe("signing_key_does_not_control_address");
-    const none = await xrplTry(appFetch, "/v1/fear-greed", unfunded, unfunded.address);
+    const none = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", unfunded, unfunded.address);
     expect((await none.json()).trial.reason).toBe("xrpl_account_not_activated");
   });
 
   it("ledger outage refuses without recording anything", async () => {
     const k = key();
     const { appFetch, trialStore } = setup({ accounts: { [k.address]: "down" } });
-    const r = await xrplTry(appFetch, "/v1/fear-greed", k, k.address);
+    const r = await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", k, k.address);
     expect(r.status).toBe(402);
     expect((await r.json()).trial.reason).toBe("ledger_check_unavailable");
     expect(trialStore.rows).toHaveLength(0);
@@ -174,40 +174,40 @@ describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
     const x1 = key();
     const x2 = key();
     const { appFetch, trialStore, setIp } = setup({ accounts: { [x1.address]: {}, [x2.address]: {} } });
-    expect((await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/institutional", TRIAL)).status).toBe(200);
-    expect((await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/institutional", TRIAL)).status).toBe(200);
-    expect((await xrplTry(appFetch, "/v1/institutional", x1, x1.address)).status).toBe(200);
-    expect((await (await xrplTry(appFetch, "/v1/institutional", x2, x2.address)).json()).trial.reason).toBe("ip_daily_cap");
+    expect((await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/trust/check?url=https://a.example/x", TRIAL)).status).toBe(200);
+    expect((await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/trust/check?url=https://a.example/x", TRIAL)).status).toBe(200);
+    expect((await xrplTry(appFetch, "/v1/trust/check?url=https://a.example/x", x1, x1.address)).status).toBe(200);
+    expect((await (await xrplTry(appFetch, "/v1/trust/check?url=https://a.example/x", x2, x2.address)).json()).trial.reason).toBe("ip_daily_cap");
     // the XRPL wallet's lifetime allowance follows the wallet, not the IP or chain
     setIp("198.51.100.9");
-    expect((await xrplTry(appFetch, "/v1/fear-greed", x1, x1.address)).status).toBe(200);
-    expect((await xrplTry(appFetch, "/v1/fear-greed", x1, x1.address)).status).toBe(200);
-    expect((await (await xrplTry(appFetch, "/v1/fear-greed", x1, x1.address)).json()).trial.reason).toBe("wallet_trial_used_up");
+    expect((await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", x1, x1.address)).status).toBe(200);
+    expect((await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", x1, x1.address)).status).toBe(200);
+    expect((await (await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", x1, x1.address)).json()).trial.reason).toBe("wallet_trial_used_up");
     expect(await trialStore.usedByWallet(x1.address)).toBe(3);
   });
 
   it("Base clients are unaffected (wrapFetchWithSIWx picks eip191) and XRPL works without an EVM config", async () => {
     const { appFetch } = setup();
     const acct = privateKeyToAccount(generatePrivateKey());
-    const r = await wrapFetchWithSIWx(appFetch, acct)(BASE + "/v1/fear-greed", TRIAL);
+    const r = await wrapFetchWithSIWx(appFetch, acct)(BASE + "/v1/verdict?url=https://a.example/x", TRIAL);
     expect((await r.json()).access).toMatchObject({ mode: "trial", wallet: acct.address.toLowerCase() });
 
     const k = key();
     const xr = setup({ accounts: { [k.address]: {} }, env: { EVM_PAY_TO: "", EVM_NETWORK: "", EVM_FACILITATOR_URL: "" } });
     expect(xr.app.config.evm).toBeFalsy();
-    const ext = (await (await xr.appFetch(BASE + "/v1/fear-greed", TRIAL)).json()).extensions["sign-in-with-x"];
+    const ext = (await (await xr.appFetch(BASE + "/v1/verdict?url=https://a.example/x", TRIAL)).json()).extensions["sign-in-with-x"];
     expect(ext.supportedChains).toEqual([{ chainId: "xrpl:1", type: "xrpl" }]);
-    expect((await (await xrplTry(xr.appFetch, "/v1/fear-greed", k, k.address)).json()).access).toMatchObject({ mode: "trial", wallet: k.address });
+    expect((await (await xrplTry(xr.appFetch, "/v1/verdict?url=https://a.example/x", k, k.address)).json()).access).toMatchObject({ mode: "trial", wallet: k.address });
   });
 
   it("verifySiwx rejects a Base payload type on an XRPL-only chain list and bad XRPL addresses", async () => {
-    const ext = await siwxChallenge("k", BASE + "/v1/fear-greed", NOW, trialChains(undefined, "xrpl:0"));
+    const ext = await siwxChallenge("k", BASE + "/v1/verdict?url=https://a.example/x", NOW, trialChains(undefined, "xrpl:0"));
     const k = key();
     const p: any = { ...ext.info, address: "0x" + "1".repeat(40), chainId: "xrpl:0", type: "xrpl", publicKey: k.publicKey, signature: "00" };
-    expect(await verifySiwx("k", p, BASE + "/v1/fear-greed", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: false, reason: "invalid_address" });
-    expect(await verifySiwx("k", { ...p, type: "eip191", chainId: "eip155:8453" }, BASE + "/v1/fear-greed", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: false });
+    expect(await verifySiwx("k", p, BASE + "/v1/verdict?url=https://a.example/x", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: false, reason: "invalid_address" });
+    expect(await verifySiwx("k", { ...p, type: "eip191", chainId: "eip155:8453" }, BASE + "/v1/verdict?url=https://a.example/x", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: false });
     const good: any = { ...ext.info, address: k.address, chainId: "xrpl:0", type: "xrpl", publicKey: k.publicKey };
     good.signature = sign(Buffer.from(siweMessage(good), "utf8").toString("hex").toUpperCase(), k.privateKey);
-    expect(await verifySiwx("k", good, BASE + "/v1/fear-greed", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: true, wallet: k.address, chain: "xrpl", signingKeyAddress: k.address });
+    expect(await verifySiwx("k", good, BASE + "/v1/verdict?url=https://a.example/x", NOW, trialChains(undefined, "xrpl:0"))).toMatchObject({ ok: true, wallet: k.address, chain: "xrpl", signingKeyAddress: k.address });
   });
 });

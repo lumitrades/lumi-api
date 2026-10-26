@@ -105,8 +105,8 @@ describe("Bazaar metadata", () => {
       expect(sanitizeResourceServiceMetadata(meta as any)).toEqual(meta);
       expect(validateDiscoveryExtension(body.extensions.bazaar).valid).toBe(true);
     }
-    const md = decodeB64Json((await app.fetch(new Request("http://lumi.test/v1/institutional?format=md"))).headers.get("PAYMENT-REQUIRED"));
-    expect(md.extensions.bazaar.info.input.queryParams).toEqual({ format: "md" });
+    const tc = decodeB64Json((await app.fetch(new Request("http://lumi.test/v1/trust/check?url=https%3A%2F%2Fa.example%2Fx"))).headers.get("PAYMENT-REQUIRED"));
+    expect(Object.keys(tc.extensions.bazaar.info.input.queryParams)).toEqual(["url"]);
   });
 });
 
@@ -153,7 +153,7 @@ function setup(cdp: { verify?: Handler; settle?: Handler } = {}, env: Record<str
   };
 }
 
-async function payBase(app: { fetch: (r: Request) => Promise<Response> }, path = "/v1/institutional", strip = false) {
+async function payBase(app: { fetch: (r: Request) => Promise<Response> }, path = "/v1/trust/check?url=https://a.example/x", strip = false) {
   const first = await app.fetch(new Request("http://lumi.test" + path));
   const pr = await first.json();
   const account = privateKeyToAccount(generatePrivateKey());
@@ -263,6 +263,7 @@ describe("bazaar service tags", () => {
       expect(new Set(t.map((x) => x.toLowerCase())).size).toBe(5);
       for (const x of t) { expect(x).toMatch(/^[\x20-\x7e]{1,32}$/); all.add(x); }
     }
-    expect(all.size).toBeGreaterThanOrEqual(20); // 6 paid routes since the market feeds were retired (2026-10-25)
+    expect(all.size).toBeGreaterThanOrEqual(10); // trust-only since v1.2.0 (market feeds and the policy brief retired 2026-10-25)
+    for (const x of all) expect(x).not.toMatch(/funding|fear|greed|institutional|market data|sentiment|trading/i);
   });
 });

@@ -17,7 +17,7 @@ describe("private traffic log", () => {
     expect(row.ip_hash).toMatch(/^[0-9a-f]{16}$/);
     expect(row.ref_host).toBe("news.example.com");
     expect(row.ua_class).toBe("cli");
-    expect(safePath("/v1/fear-greed")).toBe("/v1/fear-greed");
+    expect(safePath("/v1/verdict?url=https://a.example/x")).toBe("/v1/verdict?url=https://a.example/x");
     expect(uaClass("Mozilla/5.0 (Macintosh) Chrome/130 Safari/537")).toBe("browser");
     expect(uaClass("Mozilla/5.0 (compatible; GPTBot/1.2)")).toBe("ai-agent");
     expect(uaClass("node")).toBe("sdk");
@@ -28,7 +28,7 @@ describe("private traffic log", () => {
     const app = createApp(ENV as any, { fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW, trafficStore, trafficFlushMs: 10 * 60_000 });
     const waits: Promise<unknown>[] = [];
     const ctx = { waitUntil: (p: Promise<unknown>) => void waits.push(p) };
-    for (const [p, ip] of [["/v1/fear-greed", "203.0.113.1"], ["/v1/fear-greed", "203.0.113.2"], ["/", "203.0.113.1"], ["/v1/coins", "203.0.113.1"]]) {
+    for (const [p, ip] of [["/v1/verdict?url=https://a.example/x", "203.0.113.1"], ["/v1/verdict?url=https://a.example/x", "203.0.113.2"], ["/", "203.0.113.1"], ["/v1/coins", "203.0.113.1"]]) {
       const req = new Request(BASE + p, { headers: { "CF-Connecting-IP": ip, "User-Agent": "x402-test/1.0" } });
       const res = await app.fetch(req, ctx);
       app.logTraffic(req, res, ctx);
@@ -52,7 +52,7 @@ describe("private traffic log", () => {
     expect(s.totals.paid).toBe(0);
     expect(s.totals.visitor_days).toBe(2);
     expect(s.daily.length).toBe(3);
-    expect(s.top_paths[0]).toMatchObject({ key: "/v1/fear-greed", requests: 2 });
+    expect(s.top_paths[0]).toMatchObject({ key: "/v1/verdict", requests: 2 });
     expect(JSON.stringify(s)).not.toContain("203.0.113");
   });
 
@@ -68,7 +68,7 @@ describe("private traffic log", () => {
   });
 
   const row = (over: Partial<TrafficRow> = {}): TrafficRow => ({
-    ts: NOW, day: new Date(NOW).toISOString().slice(0, 10), method: "GET", path: "/v1/fear-greed", status: 402, ua: "node", ua_class: "sdk",
+    ts: NOW, day: new Date(NOW).toISOString().slice(0, 10), method: "GET", path: "/v1/verdict?url=https://a.example/x", status: 402, ua: "node", ua_class: "sdk",
     ref_host: null, ip_hash: "aaaaaaaaaaaaaaaa", country: "US", is_402: true, paid: false, ...over,
   });
 
@@ -77,7 +77,7 @@ describe("private traffic log", () => {
     const buf = new TrafficBuffer(store, { flushMs: 120_000, maxRequests: 500 });
     const waits: Promise<void>[] = [];
     for (let i = 0; i < 300; i++) {
-      const p = buf.add(row({ ts: NOW + i * 100, ip_hash: `ip${i % 7}`.padEnd(16, "0"), path: i % 3 ? "/v1/fear-greed" : "/openapi.json", status: i % 3 ? 402 : 200, is_402: i % 3 !== 0 }), NOW + i * 100);
+      const p = buf.add(row({ ts: NOW + i * 100, ip_hash: `ip${i % 7}`.padEnd(16, "0"), path: i % 3 ? "/v1/verdict?url=https://a.example/x" : "/openapi.json", status: i % 3 ? 402 : 200, is_402: i % 3 !== 0 }), NOW + i * 100);
       if (p) waits.push(p);
     }
     expect(waits.length).toBe(0);
@@ -89,7 +89,7 @@ describe("private traffic log", () => {
     expect(store.list.length).toBe(1);
     const b = store.list[0].b;
     expect(b.requests).toBe(301);
-    expect(b.paths["/v1/fear-greed"][0]).toBe(201);
+    expect(b.paths["/v1/verdict?url=https://a.example/x"][0]).toBe(201);
     expect(b.paths["/openapi.json"]).toEqual([100, 0, 0]);
     expect(b.ips.length).toBe(8); // 7 + the flushing request's visitor
     // request cap also flushes
@@ -125,8 +125,8 @@ describe("private traffic log", () => {
     expect(s.totals.visitor_days).toBe(2);
     expect(s.totals.by_status).toEqual({ "200": 2, "402": 1 });
     expect(s.daily).toEqual([{ day, requests: 3, visitors: 2, payment_required_402: 1, paid: 1, paid_logged: 1, browser: 1, non_browser: 2 }]);
-    expect(s.top_paths[0]).toEqual({ key: "/v1/fear-greed", requests: 2 });
-    expect(s.top_paid_paths).toEqual([{ key: "/v1/fear-greed", requests: 1 }]);
+    expect(s.top_paths[0]).toEqual({ key: "/v1/verdict?url=https://a.example/x", requests: 2 });
+    expect(s.top_paid_paths).toEqual([{ key: "/v1/verdict?url=https://a.example/x", requests: 1 }]);
     expect(s.top_referrers).toEqual([{ key: "news.example.com", requests: 1 }]);
     expect(s.top_user_agents[0]).toEqual({ key: "sdk: node", requests: 2 });
   });
@@ -164,7 +164,7 @@ describe("private traffic log", () => {
     const call = async (headers: Record<string, string> = {}) => {
       const waits: Promise<unknown>[] = [];
       const ctx = { waitUntil: (p: Promise<unknown>) => void waits.push(p) };
-      const req = new Request(BASE + "/v1/fear-greed", { headers: { "User-Agent": "node", ...headers } });
+      const req = new Request(BASE + "/v1/verdict?url=https://a.example/x", { headers: { "User-Agent": "node", ...headers } });
       const res = await app.fetch(req, ctx);
       app.logTraffic(req, res, ctx);
       await Promise.all(waits);
@@ -189,8 +189,8 @@ describe("private traffic log", () => {
     const app = createApp({ ...ENV, SALES_TEST_WALLETS: PAYER } as any, { fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW, trafficStore });
     const waits: Promise<unknown>[] = [];
     const ctx = { waitUntil: (p: Promise<unknown>) => void waits.push(p) };
-    const q: any = await (await app.fetch(new Request(BASE + "/v1/fear-greed"))).json();
-    const req = new Request(BASE + "/v1/fear-greed", { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) } });
+    const q: any = await (await app.fetch(new Request(BASE + "/v1/verdict?url=https://a.example/x"))).json();
+    const req = new Request(BASE + "/v1/verdict?url=https://a.example/x", { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) } });
     app.logTraffic(req, await app.fetch(req, ctx), ctx);
     await Promise.all(waits);
     expect(trafficStore.list.map((x) => [x.b.paid, x.b.paid_test])).toEqual([[1, 1]]);

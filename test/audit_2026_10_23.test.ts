@@ -23,7 +23,7 @@ function setup(extra: Record<string, string> = {}, deps: Record<string, unknown>
 }
 async function enroll(s: ReturnType<typeof setup>) {
   const { message } = await (await s.req(`/v1/monitor/challenge?pay_to=${SELLER}`)).json();
-  const r = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints: [{ url: `${BASE}/v1/fear-greed` }] });
+  const r = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints: [{ url: `${BASE}/v1/verdict?url=https://a.example/x` }] });
   expect(r.status).toBe(201);
   return (await r.json()).enrollment_id as string;
 }
@@ -41,9 +41,10 @@ describe("M-1 test-buy cadence wording", () => {
 });
 
 describe("M-2 Bazaar metadata", () => {
-  it("descriptions carry XRP / RLUSD / Fear and Greed keywords within the 500-char limit", () => {
+  it("descriptions stay within the 500-char limit and carry no retired market-data routes", () => {
     for (const [r, m] of Object.entries(BAZAAR_ROUTES)) expect(m.description.length, r).toBeLessThanOrEqual(BAZAAR_MAX_DESCRIPTION);
-    expect(BAZAAR_ROUTES.fear_greed.description).toMatch(/Fear and Greed/);
+    expect(Object.keys(BAZAAR_ROUTES)).not.toEqual(expect.arrayContaining(["fear_greed"]));
+    for (const m of Object.values(BAZAAR_ROUTES)) expect(m.description).not.toMatch(/fear (and|&) greed|funding rate|institutional/i);
   });
   it("plan quotes say seller monitoring / trust data feed", () => {
     const cfg: any = { xrpRate: { usd: 0.5 }, xrpUsdFallback: 0.5, ious: [] };
@@ -129,7 +130,7 @@ describe("L-5 agent card coin counts", () => {
 describe("I-3 openapi", () => {
   it("free lookup vs paid check wording; data_returned nullable; outcome enum = receipt outcomes", async () => {
     const o = await (await setup().req("/openapi.json")).json();
-    expect(o.info.description).toMatch(/free lookup; paid pre-payment check/);
+    expect(o.info.description).toMatch(/free lookup and signed check; paid pre-payment check/);
     const sch = o.paths["/v1/trust/receipts/verify"].post.requestBody.content["application/json"].schema;
     const d = sch.properties.delivery;
     expect(d.properties.data_returned.type).toEqual(["boolean", "null"]);

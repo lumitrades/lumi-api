@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
 import { MemoryLiveStore, LIVE_UNIVERSE, fetchCandles } from "../src/live";
-import { MemoryFeedStore, dueFeed, FEEDS, band } from "../src/feeds";
-import { trustVerdict, events48View, fundingView, fearGreedFromContext } from "../src/quick";
+import { MemoryFeedStore } from "../src/feeds";
+import { trustVerdict, events48View } from "../src/quick";
 import { seededStores, liveRows } from "./stage_c_fixtures";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor, fixture } from "./helpers";
 
@@ -117,79 +117,24 @@ describe("Stage C: /v1/trust/check", () => {
   });
 });
 
-describe("Stage C: feeds", () => {
-  it("funding: view with reads; stale feed -> 503 not charged", async () => {
-    const s = setup();
-    const j: any = await (await s.buy("/v1/funding")).json();
-    expect(j.kind).toBe("funding");
-    expect(j.btc.symbol).toBe("BTC");
-    expect(j.coins).toHaveLength(3);
-    s.setNow(NOW + FEEDS.funding.stale_ms + 60_000);
-    // keep scan/lite inputs irrelevant: funding only reads its feed
-    const r = await s.get("/v1/funding");
-    expect(r.status).toBe(503);
-  });
-
-  it("fundingView reads positive/negative funding", () => {
-    const v: any = fundingView({ venue: "x", coins: [{ symbol: "A", rate_8h_pct: 0.08 }, { symbol: "B", rate_8h_pct: -0.06 }, { symbol: "BTC", rate_8h_pct: 0.01 }] });
-    expect(v.most_positive[0].symbol).toBe("A");
-    expect(v.most_negative[0].symbol).toBe("B");
-  });
-
-  it("fear & greed: live feed, then the CoinMarketCap context fallback when stale", async () => {
-    const s = setup();
-    const j: any = await (await s.buy("/v1/fear-greed")).json();
-    expect(j.kind).toBe("fear_greed");
-    expect(j.value).toBe(38);
-    expect(j.change.vs_yesterday).toBe(-4);
-    const empty = setup({ feedStore: new MemoryFeedStore() });
-    const r = await empty.get("/v1/fear-greed");
-    const ctx = fixture("context") as any;
-    if (ctx?.fear_greed?.source === "CoinMarketCap" && !ctx.fear_greed.stale) expect(r.status).toBe(402);
-    else expect(r.status).toBe(503);
-    expect(fearGreedFromContext({ fear_greed: { source: "alternative.me", value: 50 } })).toBeNull();
-    expect(band(10)).toBe("Extreme fear");
-    expect(band(85)).toBe("Extreme greed");
-  });
-
-  it("dueFeed picks the most overdue feed, or none", () => {
-    expect(dueFeed({}, NOW)).not.toBeNull();
-    expect(dueFeed({ funding: NOW - 60_000, fear_greed: NOW - 60_000 }, NOW)).toBeNull();
-    expect(dueFeed({ funding: NOW - FEEDS.funding.every_ms - 1, fear_greed: NOW - 60_000 }, NOW)).toBe("funding");
-  });
-
-  it("a cron run with a due feed refreshes only that feed; a failure backs off without faking freshness", async () => {
+describe("Stage C: market feeds retired (2026-10-25)", () => {
+  it("the cron tick fetches nothing external and funding / fear & greed are 410, never charged", async () => {
     const calls: string[] = [];
     const inner = makeFetch(happyFacilitator());
     const f = (async (input: any, init?: any) => {
       const url = String(input?.url ?? input);
-      if (url.includes("okx.com/api/v5/public/funding-rate")) {
-        calls.push("funding");
-        return Response.json({ code: "0", data: [{ instId: "BTC-USDT-SWAP", fundingRate: "0.0001", fundingTime: String(NOW + 3_600_000), prevFundingTime: String(NOW - 7 * 3_600_000) }] });
-      }
-      if (url.includes("coinmarketcap.com")) { calls.push("cmc"); return new Response("no", { status: 500 }); }
-      if (url.includes("coinbase.com") || url.includes("kraken.com") || url.includes("okx.com")) calls.push("candles");
+      if (/okx\.com|coinmarketcap\.com|coinbase\.com|kraken\.com/.test(url)) calls.push(url);
       return inner(input, init);
     }) as typeof fetch;
-    const feedStore = new MemoryFeedStore();
-    feedStore.rows.set("fear_greed", { id: "fear_greed", fetched_at: NOW - FEEDS.fear_greed.every_ms - 10_000, doc: { source: "CoinMarketCap", now: { value: 50 } } });
-    feedStore.rows.set("funding", { id: "funding", fetched_at: NOW - FEEDS.funding.every_ms - 1_000, doc: { coins: [] } });
-    const s = setup({ fetch: f, feedStore, liveStore: new MemoryLiveStore() });
-    await s.app.liveRefresh(); // most overdue: fear_greed (fails)
-    expect(calls).toEqual(["cmc"]);
-    const fg = await feedStore.get("fear_greed");
-    expect(fg!.fetched_at).toBe(NOW - FEEDS.fear_greed.every_ms - 10_000);
-    await s.app.liveRefresh(); // fear_greed backed off -> funding
-    expect(calls).toEqual(["cmc", "funding"]);
-    const fund = await feedStore.get("funding");
-    expect(fund!.fetched_at).toBe(NOW);
-    expect(fund!.doc.coins[0].rate_8h_pct).toBeCloseTo(0.01, 5);
-    await s.app.liveRefresh(); // nothing due: the per-coin candle slice is retired (2026-10-25), so nothing is fetched
-    expect(calls).toEqual(["cmc", "funding"]);
+    const s = setup({ fetch: f, feedStore: new MemoryFeedStore(), liveStore: new MemoryLiveStore() });
+    const r: any = await s.app.liveRefresh();
+    expect(r.skipped).toBe("market_feeds_retired");
+    expect(calls).toEqual([]);
+    for (const p of ["/v1/funding", "/v1/fear-greed", "/v1/institutional"]) expect((await s.get(p, { "PAYMENT-SIGNATURE": "x" })).status, p).toBe(410);
   });
 });
 
-describe("Stage C: /v1/fear-greed", () => {
+describe("Stage C: /v1/verdict?url=https://a.example/x", () => {
   it("keeps only the next 48 hours", () => {
     const now = Date.parse("2026-10-22T12:00:00Z");
     const ev = { events: [

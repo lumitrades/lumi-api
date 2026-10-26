@@ -4,7 +4,7 @@ import { issueInvoiceId, checkInvoiceId, encodeHeader, b64decodeUtf8, canonicalJ
 import { PAY_TO, fakeDurableObjectNamespace } from "./helpers";
 
 const cfg = loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO, INVOICE_SECRET: "test-secret" });
-const quote: Quote = { routeKey: "signal:XRP", amountDrops: "20000", description: "d", resourceUrl: "http://x/v1/institutional" };
+const quote: Quote = { routeKey: "signal:XRP", amountDrops: "20000", description: "d", resourceUrl: "http://x/v1/trust/check?url=https://a.example/x" };
 
 describe("stateless invoices", () => {
   it("round-trips", async () => {

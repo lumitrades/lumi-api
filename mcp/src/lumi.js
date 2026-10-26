@@ -41,7 +41,7 @@ export function loadSettings(env = process.env) {
     seed: env.XRPL_SEED || "",
     evmKey,
     wsUrl: env.XRPL_WS_URL || (network === "xrpl:0" ? "wss://xrplcluster.com" : "wss://testnet.xrpl-labs.com"),
-    // Defaults cover every Lumi tool, including the $0.10 Institutional Brief.
+    // Defaults cover every Lumi paid tool (the most expensive is $0.02).
     maxXrpPerCall: num(env.LUMI_MAX_XRP_PER_CALL, 0.25, "LUMI_MAX_XRP_PER_CALL"),
     maxUsdPerCall: num(env.LUMI_MAX_USD_PER_CALL, 0.3, "LUMI_MAX_USD_PER_CALL"),
     // Session budget across all paid calls in this server process, in the chosen asset (XRP or USD). 0 = no paid calls.

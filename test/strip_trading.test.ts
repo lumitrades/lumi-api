@@ -23,15 +23,25 @@ async function paid(path: string) {
 const TRADE_KEYS = /"(entry|entry_zone|entries|stop|stop_loss|targets?|price_targets?|leverage|scenarios|projection|bull|base|bear|invalidation|move_stop|breakeven|paper_trades|direction)":/i;
 const TRADE_WORDS = /strong buy|strong sell|\bbullish\b|\bbearish\b|move (the )?stop|break-?even|price target|entry zone|\bleverage\b/i;
 
-describe("no trading content in the market-data routes that stay", () => {
-  for (const p of ["/v1/fear-greed", "/v1/institutional", "/v1/fear-greed", "/v1/fear-greed", "/v1/fear-greed", "/v1/institutional"]) {
+describe("no trading content: market-data routes are retired, trust routes carry no trade wording", () => {
+  for (const p of ["/v1/funding", "/v1/fear-greed", "/v1/institutional", "/v1/fear-greed?format=md", "/v1/institutional?format=md"]) {
+    it(`${p}: 410 Gone, never quoted or charged, even with a payment header`, async () => {
+      const get = setup();
+      for (const headers of [{}, { "PAYMENT-SIGNATURE": "x" }, { "X-PAYMENT": "x" }] as Record<string, string>[]) {
+        const r = await get(p, headers);
+        expect(r.status, p).toBe(410);
+        expect(r.headers.get("PAYMENT-REQUIRED"), p).toBeNull();
+        expect(r.headers.get("PAYMENT-RESPONSE"), p).toBeNull();
+      }
+    });
+  }
+  for (const p of ["/v1/trust/check?url=https%3A%2F%2Fa.example%2Fx", "/v1/verdict?url=https%3A%2F%2Fa.example%2Fx"]) {
     it(`${p}: no targets, stops, entries, leverage, scenarios, Strong Buy/Sell or bull/bear; no SOL`, async () => {
       const b = await paid(p);
-      const s = JSON.stringify(b, (k, v) => (k === "url" ? undefined : v)); // third-party source URLs are kept verbatim
+      const s = JSON.stringify(b, (k, v) => (k === "url" ? undefined : v));
       expect(s, p).not.toMatch(TRADE_KEYS);
       expect(s, p).not.toMatch(TRADE_WORDS);
-      if (p !== "/v1/institutional") expect(s, p).not.toMatch(/"SOL"|\bsolana\b/i); // ETF flow data names third-party funds
-      expect(b.disclaimer ?? b.notice, p).toBeTruthy();
+      expect(s, p).not.toMatch(/"SOL"|\bsolana\b|fear.?greed|funding rate|institutional/i);
     });
   }
   it("bias helpers", () => {
@@ -49,6 +59,7 @@ describe("no trading content in the market-data routes that stay", () => {
       expect(s, p).not.toMatch(/Lumi Market Ideas|Lumi Trust\b/);
       expect(s, p).not.toMatch(/quote-verified|purchase-verified|verified (agent )?reports|paper-trade|51 coins/i);
       expect(s, p).not.toMatch(/strong buy|strong sell|paper-trade ideas|entry zone|price target/i);
+      expect(s, p).not.toMatch(/\/v1\/(funding|fear-greed|institutional)\b|fear (and|&) greed|funding rates|institutional (&|and) policy|market data|the trust layer/i);
     }
   });
 });

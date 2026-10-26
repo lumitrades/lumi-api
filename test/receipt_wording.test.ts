@@ -26,7 +26,7 @@ describe("receipt and test-buy cap wording", () => {
     expect(r).toMatch(/\/v1\/feed\/lookup/);
     expect(r).toMatch(/POST [^"]*\/v1\/trust\/receipts\/verify/);
   });
-  it("public test-buy cap is the current one (0.40 RLUSD + 0.10 XRP)", async () => {
+  it("public test-buy cap is the current one (0.30 RLUSD + 0.10 XRP, plus Stellar USDC) and the README states no stale cap", async () => {
     const get = setup();
     for (const p of ["/v1/trust/methodology", "/llms.txt"]) {
       const t = await get(p);
@@ -34,6 +34,7 @@ describe("receipt and test-buy cap wording", () => {
     }
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
     expect(readme).not.toMatch(/0\.15 RLUSD \+ 0\.05 XRP/);
-    expect(readme).toMatch(/0\.40 RLUSD \+ 0\.10 XRP/);
+    expect(readme).not.toMatch(/0\.40 RLUSD/); // the README no longer restates the cap; docs and methodology are the source
+    expect(await get("/llms.txt") + await get("/v1/trust/methodology")).toMatch(/0\.30 RLUSD \+ 0\.10 XRP/);
   });
 });

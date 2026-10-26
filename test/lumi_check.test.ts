@@ -199,7 +199,7 @@ describe("earned-only Tested by Lumi badge (/v1/badge/{key})", () => {
     // 2. monitoring enrolment + paid plan
     const hex = (x: string) => Buffer.from(x, "utf8").toString("hex").toUpperCase();
     const { message } = await (await req(`/v1/monitor/challenge?pay_to=${SELLER}`)).json();
-    const en = await req("/v1/monitor/enroll", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints: [{ url: `${BASE}/v1/fear-greed` }] }) });
+    const en = await req("/v1/monitor/enroll", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints: [{ url: `${BASE}/v1/verdict?url=https://a.example/x` }] }) });
     expect(en.status).toBe(201);
     const sub = await pay(`/v1/monitor/subscribe/watch?endpoints=1&enrollment=${(await en.json()).enrollment_id}`);
     expect([200, 201]).toContain(sub.status);

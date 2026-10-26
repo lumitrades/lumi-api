@@ -34,7 +34,7 @@ function setup(extra: Record<string, string> = {}) {
 }
 type S = ReturnType<typeof setup>;
 
-async function enroll(s: S, endpoints: unknown[] = [{ url: `${BASE}/v1/fear-greed` }]) {
+async function enroll(s: S, endpoints: unknown[] = [{ url: `${BASE}/v1/verdict?url=https://a.example/x` }]) {
   const { message } = await (await s.req(`/v1/monitor/challenge?pay_to=${SELLER}`)).json();
   const r = await s.post("/v1/monitor/enroll", { message, signature: sign(hex(message), kp.privateKey), public_key: kp.publicKey, endpoints });
   expect(r.status).toBe(201);
@@ -210,7 +210,7 @@ describe("Free Watch", () => {
     expect((await s.post("/v1/monitor/free", { enrollment_id: e2.enrollment_id }, { Authorization: `Bearer ${e2.management_token}` })).status).toBe(409);
     const due = await (await s.req("/v1/owner/monitor/due", { headers: auth })).json();
     expect(due.tasks.filter((t: any) => t.enrollment_id === e.enrollment_id)).toHaveLength(0);
-    const res = await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: b.plan_id, endpoint: `${BASE}/v1/fear-greed`, network: "xrpl:1", asset: "XRP", outcome: "delivered", http_status: 200, data_returned: true, tx_hash: "D".repeat(64), cost_usd: 0.003 }] }, auth);
+    const res = await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: b.plan_id, endpoint: `${BASE}/v1/verdict?url=https://a.example/x`, network: "xrpl:1", asset: "XRP", outcome: "delivered", http_status: 200, data_returned: true, tx_hash: "D".repeat(64), cost_usd: 0.003 }] }, auth);
     expect(JSON.stringify(await res.json())).toMatch(/free|no_test_buys|rejected/i);
     const badge = await (await s.req(`/v1/monitor/badge/${e.enrollment_id}.json`)).json();
     expect(badge.status).toBe("removed");
@@ -257,7 +257,7 @@ describe("Watch trial (internal id watch_plus_trial)", () => {
 
   it("caps test-buys at the trial total, freezes read-only at the end and never converts", async () => {
     const s = setup({ PRICE_INSTITUTIONAL_XRP: "0.03", PRICE_INSTITUTIONAL_RLUSD: "0.09", PRICE_INSTITUTIONAL_USDC: "0.09" });
-    const ep = `${BASE}/v1/institutional`;
+    const ep = `${BASE}/v1/trust/check?url=https://a.example/x`;
     const e = await enroll(s, [{ url: ep }]);
     const h = { Authorization: `Bearer ${e.management_token}` };
     const { c } = await trialProof(s);
@@ -314,7 +314,7 @@ describe("legal wording (review 2026-10-23)", () => {
     const e = await enroll(s);
     const paid = await pay(s, `/v1/monitor/subscribe/watch?enrollment=${e.enrollment_id}&endpoints=1`);
     const planId = paid.body.plan_id ?? paid.body.plans?.[0]?.plan_id;
-    const r = await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: planId, endpoint: `${BASE}/v1/fear-greed`, network: "xrpl:1", asset: "XRP", quote_pay_to: SELLER, outcome: "delivered", http_status: 200, data_returned: true, tx_hash: "A".repeat(64), cost_usd: 0.003 }] }, auth);
+    const r = await s.post("/v1/owner/monitor/results", { results: [{ enrollment_id: e.enrollment_id, plan_id: planId, endpoint: `${BASE}/v1/verdict?url=https://a.example/x`, network: "xrpl:1", asset: "XRP", quote_pay_to: SELLER, outcome: "delivered", http_status: 200, data_returned: true, tx_hash: "A".repeat(64), cost_usd: 0.003 }] }, auth);
     expect(r.status).toBe(200);
     const b = await (await s.req(`/v1/monitor/badge/${e.enrollment_id}.json`)).json();
     expect(b).toMatchObject({ label: PAID_BADGE_LABEL, paid: true });
@@ -338,7 +338,7 @@ describe("uptime rollups and status page", () => {
   it("accepts daily rollups inside the plan period, turns transitions into findings and renders a status page", async () => {
     const s = setup({ SALES_TEST_WALLETS: SELLER });
     const e = await enroll(s);
-    const ep = `${BASE}/v1/fear-greed`;
+    const ep = `${BASE}/v1/verdict?url=https://a.example/x`;
     await pay(s, `/v1/monitor/subscribe/watch?enrollment=${e.enrollment_id}&endpoints=1`);
     const today = new Date(s.now()).toISOString().slice(0, 10);
     const probes = await (await s.req("/v1/owner/monitor/probes", { headers: auth })).json();

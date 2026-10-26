@@ -20,8 +20,8 @@ async function listTools() {
   return tools;
 }
 
-test("0.10.0: versions agree across package.json, server.json and the server", () => {
-  assert.equal(VERSION, "0.10.0");
+test("0.9.9: versions agree across package.json, server.json and the server", () => {
+  assert.equal(VERSION, "0.9.9");
   assert.equal(pkg.version, VERSION);
   assert.equal(srv.version, VERSION);
   assert.equal(srv.packages[0].version, VERSION);
@@ -30,7 +30,7 @@ test("0.10.0: versions agree across package.json, server.json and the server", (
   assert.match(srv.description, /x402 sellers/);
 });
 
-test("descriptions are current (no per-coin readings since 0.10.0; no Solana)", () => {
+test("descriptions are current (no per-coin readings since 0.9.8; no Solana)", () => {
   assert.doesNotMatch(pkg.description, /\d+ coins|trend readings|signals?\b|levels/);
   assert.match(pkg.description, /Lumi Check/);
   assert.match(pkg.description, /XRPL, Base and Stellar/);
@@ -39,6 +39,7 @@ test("descriptions are current (no per-coin readings since 0.10.0; no Solana)", 
   assert.ok(pkg.description.length <= 255, `description is ${pkg.description.length} chars`);
   assert.match(pkg.description, /\.$/);
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  assert.doesNotMatch(pkg.description + srv.description + readme + pkg.keywords.join(" "), /fear.?greed|lumi_funding|funding rates|institutional|policy.brief|market data|trust layer/i);
   assert.doesNotMatch(readme, /12 more coins|The 13 coins covered|The 50 coins covered|top 50|top-50|7-day projection|solana/i);
 });
 
@@ -47,9 +48,10 @@ test("tools: seller monitoring and trust feed present; retired trading tools gon
   const by = Object.fromEntries(tools.map((t) => [t.name, t]));
   assert.ok(by.lumi_seller_monitoring && by.lumi_trust_feed);
   assert.match(by.lumi_seller_monitoring.description, /paying never changes a score/);
-  for (const n of ["lumi_coins", "lumi_signal", "lumi_lite", "lumi_scan", "lumi_levels", "lumi_slate", "lumi_brief", "lumi_market", "lumi_macro_yen", "lumi_sentiment", "lumi_events", "lumi_events_48h"]) assert.ok(!by[n], `${n} retired`);
+  for (const n of ["lumi_coins", "lumi_signal", "lumi_lite", "lumi_scan", "lumi_levels", "lumi_slate", "lumi_brief", "lumi_market", "lumi_macro_yen", "lumi_sentiment", "lumi_events", "lumi_events_48h", "lumi_funding", "lumi_fear_greed", "lumi_institutional_brief"]) assert.ok(!by[n], `${n} retired`);
+  for (const t of tools) assert.doesNotMatch(JSON.stringify(t), /\/v1\/(funding|fear-greed|institutional)|fear.?greed|funding rate|institutional brief|policy brief|market data/i, t.name);
   for (const t of tools) assert.doesNotMatch(t.description, /projection|leverage|support|resistance|\bsignal\b|trade idea/i, t.name);
-  assert.equal(tools.length, 15); // 5 market-feed tools retired 2026-10-25
+  assert.equal(tools.length, 12); // 0.9.9: funding, fear_greed and institutional brief tools removed
   assert.ok(by.lumi_verdict, "lumi_verdict present");
   assert.match(by.lumi_verdict.description, /never changes a result/);
   assert.ok(!tools.some((t) => t.name === "lumi_trades"), "lumi_trades removed");

@@ -1,16 +1,16 @@
 # lumi-trades-mcp
 
 MCP server (stdio) for **[Lumi Trades](https://lumitrades.io)**: **Lumi Check**, a free signed allow/warn/block check before your agent pays an x402 seller,
-backed by Lumi's own paid test-buys on XRPL, Base and Stellar. Also a **daily Institutional & Policy Brief** and neutral crypto market data
-(information only, not advice). Works with Claude Desktop, Cursor, Claude Code, Cline, Windsurf and any other MCP client.
+backed by Lumi's own paid test-buys on XRPL, Base and Stellar: x402 seller trust you can verify. Works with Claude Desktop, Cursor, Claude Code, Cline, Windsurf and any other MCP client.
 Paid tools **pay per call via x402 with your own wallet: USDC on Base (gasless) or XRP / RLUSD / USDC on the XRP Ledger**
 (the API also accepts USDC on Stellar; this package pays only on Base or the XRP Ledger).
 No API key, no account: each paid tool call is one small payment, signed locally on your machine.
 
-> Information only. Not financial advice and not a recommendation to buy, sell or hold.
+> Automated observations by Lumi, not a rating, endorsement or guarantee.
 >
-> **Retired 2026-10-25:** `lumi_signal`, `lumi_lite`, `lumi_scan`, `lumi_levels`, `lumi_slate`, `lumi_brief` and `lumi_coins` were removed in 0.10.0
-> (their API paths now answer 410 Gone, never charged). Use `lumi_check` / `/v1/check` to check a seller before paying.
+> **Changed in 0.9.9:** this package is now only about checking x402 sellers. Tools for API routes retired on Oct 25, 2026 were removed;
+> those routes answer 410 Gone and are never charged. Use `lumi_check` / `/v1/check` to check a seller before paying.
+> zod is now required at the patched range (GHSA-mrhx-c7xc-m3w5) for every dependency.
 
 **No install needed to browse:** the same tools are also served remotely at `https://api.lumitrades.io/mcp` (Streamable HTTP),
 for clients that take a remote MCP server URL. A remote connector has no wallet, so its paid tools return the price and how to pay;
@@ -32,7 +32,7 @@ use this package when you want paid tools to pay automatically from your own wal
 |---|---|---|---|
 | `lumi_verdict` | $0.01 | `url` `payTo?` `amount?` | One label before paying, same data and signing as `/v1/check`: `checks_passed` (Delivered in recent checks) / `check_first` (Check first) / `checks_failed` (Recent checks failed) / `no_data` (Not enough data), with dates, evidence window, sample count, reason codes, evidence and appeal links. Paying Lumi never changes a result |
 | `lumi_vendor_scores` | free | `url?` `domain?` `payTo?` `vendor_id?` | Look up any x402 seller before paying: tier (catalogued / quote-checked, low confidence / test-bought), last free 402-quote check, price and payTo vs its Bazaar listing, on-chain test-buy evidence. No args: Lumi's curated vendor scores |
-| `lumi_seller_monitoring` | free | `enrollment_id?` | Seller monitoring plans (per endpoint per 30d: Watch $5, Watch Pro $20; 10+ endpoints -20% or 3 terms prepaid -10%, not stacked; Audit $99 one-off; test-buy packs: Re-test $6.50 for 30 test-buys, Founder $5.00 for 24 test-buys, first 10 sellers; free Watch tier; 14-day Watch trial; Monitor, Monitor Plus and Watch Plus are no longer sold), enrolment steps; with an id, that seller's public entry and badge. Paying never changes a score |
+| `lumi_seller_monitoring` | free | `enrollment_id?` | Seller monitoring plans (per endpoint per 30d: Watch $5, Watch Pro $20; 10+ endpoints -20% or 3 terms prepaid -10%, not stacked; Audit $99 one-off; test-buy packs: Re-test $6.50 for 30 test-buys, Founder $5.00 for 24 test-buys, first 10 sellers; free Watch tier; 14-day Watch trial), enrolment steps; with an id, that seller's public entry and badge. Paying never changes a score |
 | `lumi_trust_feed` | free | – | Trust data feed plans (free key 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d) and licence terms |
 | `lumi_check` | free | `url?` `pay_to?` `amount_usd?` `network?` | **Lumi Check** before you pay any x402 seller: allow / warn / block with reasons, the seller's score and a link to its live report. Signed by Lumi and verified locally. Only origin + path of the URL is sent. Fail-open: warn if Lumi is unreachable within 2.5 s |
 | `lumi_scan_seller` | free | `url` | Fetch an x402 seller's 402 quote without paying, plus a dry-run test-buy plan against local caps |
@@ -40,18 +40,10 @@ use this package when you want paid tools to pay automatically from your own wal
 | `lumi_trust_check` | paid | $0.02 | Pre-payment check of any x402 URL you are about to pay: payTo/price mismatches vs listings and Lumi's observations. `url` required |
 | `lumi_vendor_report` | paid | $0.02 | Full observation history for one x402 vendor on Lumi's trust list: every quote check (90 days) and paid test-buy with tx hash and delivered yes/no, latency stats and trend, uptime %, agent reports, vendor replies, confidence labels. `vendor_id` required |
 
-**Market data**
-
-| Tool | Paid? | Price (USD) | What you get |
-|---|---|---|---|
-| `lumi_funding` | paid | $0.003 | Perp funding rates for every tracked coin listed on OKX (8h-normalised, annualised, size band) |
-| `lumi_fear_greed` | paid | $0.003 | CoinMarketCap Fear & Greed now vs yesterday/week/month, yearly high/low, 30-day series |
-| `lumi_institutional_brief` | paid | $0.10 | Daily Institutional & Policy Brief: BIS, IMF, US Treasury/regulators, JPMorgan, SBI, Cross River, Securitize, R3 and others mapped to XRP, XLM, XDC, QNT, AXL, HBAR (confirmed vs indirect-alignment links, sourced). `format: "md"` for markdown. Allowed by the default caps (0.30 USD / 0.25 XRP) |
-
 How to pay, in order of preference: **1. USDC on Base** (gasless, `EVM_PRIVATE_KEY`), **2. the XRP Ledger** (`XRPL_SEED`):
 RLUSD or USDC at the same USD price, or XRP at the live XRP/USD rate (quoted per call, rounded up to 0.0001 XRP).
-Prices are read live from each 402 quote; the table is for orientation. **You only pay when you get data**: the API refuses to quote
-(503, "Not charged.") when its data is missing or stale, so a payment is never settled without data.
+Prices are read live from each 402 quote; the table is for orientation. **You only pay when you get an answer**: the API checks
+your input before quoting (4xx, nothing charged) and answers 503 "Not charged." when it cannot answer, so a payment is never settled without an answer.
 
 ## Install
 
@@ -139,8 +131,6 @@ does not sign. Every paid result carries the on-chain transaction hash.
 npm test                         # spend-cap / payee / settings unit tests + a mocked Base USDC payment through @x402/fetch
 node scripts-e2e-testnet.mjs     # testnet only: real x402 payments through MCP against a local testnet API (see the file header)
 ```
-
-The market, yen, sentiment and events tools were retired on Oct 25 2026 (the API answers 410 Gone, never charged).
 
 ## License
 
