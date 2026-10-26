@@ -497,7 +497,7 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
         return text({ ...(doc.body ?? {}), license_terms: lic.body }, doc.status !== 200);
       }
       case "lumi_vendor_scores": {
-        if (!deps.trust) return text({ error: "trust layer unavailable" }, true);
+        if (!deps.trust) return text({ error: "trust checks unavailable" }, true);
         const lq = { url: str(args.url), domain: str(args.domain), payTo: str(args.payTo) ?? str(args.pay_to) };
         if (lq.url || lq.domain || lq.payTo) {
           // Empty optional args are ignored (MCP clients often send ""); non-empty but malformed ones are errors.

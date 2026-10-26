@@ -954,7 +954,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       let act: unknown = null;
       if (v) { try { act = activityPublic(await activity.lookup(new URL(v.homepage).hostname, [...v.pay_to.xrpl, ...(v.pay_to.evm ?? [])]), now(), verdictTh); } catch { act = null; } }
       return hasContent("vendor_report", r.doc)
-        ? { ok: true, route: "vendor_report", body: isoTimestamps(withMeta({ kind: "vendor_report", timestamp: new Date(now()).toISOString(), source: "api.lumitrades.io trust layer", ...r.doc, observed_onchain_payments: act, disclaimer: TRUST_DISCLAIMER }, vendorMeta(r.doc))) }
+        ? { ok: true, route: "vendor_report", body: isoTimestamps(withMeta({ kind: "vendor_report", timestamp: new Date(now()).toISOString(), source: "api.lumitrades.io seller trust checks", ...r.doc, observed_onchain_payments: act, disclaimer: TRUST_DISCLAIMER }, vendorMeta(r.doc))) }
         : notForSale("data_unavailable", "no observations for this vendor yet", 1800, null);
     }
     if (r.reason === "unknown_vendor") {
