@@ -20,7 +20,7 @@ describe("config", () => {
     expect(cfg.payTo).toBe(MAINNET_PAY_TO);
     expect(cfg.facilitatorUrl).toBe("https://xrpl-facilitator-mainnet.t54.ai");
     expect(cfg.pricesDrops).toEqual({
-      vendor_report: "15000", trust_check: "15000", verdict: "7500",
+      vendor_report: "15000", trust_check: "15000", verdict: "7500", receipts: "3800", batch_check: "6000",
     });
     expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_TRUST_CHECK_XRP: "0.02" }).pricesDrops.trust_check).toBe("20000");
   });

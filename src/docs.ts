@@ -214,7 +214,8 @@ export function wellKnownX402(cfg: Config, base: string) {
     description: `Pay-per-call reads from Lumi Trades (lumitrades.io), settled in ${settledIn(cfg)}, : checks before paying an x402 seller (a pre-payment check, a one-label verdict and seller reputation reports from Lumi's trust observations). Each resource carries product_line. Also: seller monitoring plans (Watch $5, Watch Pro $20 per endpoint per 30d; Audit $99; Re-test pack $6.50 for 30 seller-funded test-buys; Founder pack $5 for 24 seller-funded test-buys, first 10 sellers; free tier and 14-day trial; seller-funded buys never change a public score) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
     resources: paidEndpoints(cfg).map((e) => ({
       name: e.name,
-      url: `${base}${e.example}`,
+      // receipts: the doc example seller has no receipts (a 404, never charged), so crawlers get the bare path, which answers 402.
+      url: `${base}${e.route === "receipts" ? e.path : e.example}`,
       template: `${base}${e.template}`,
       mimeType: "application/json",
       method: e.method,
@@ -356,11 +357,17 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
               { name: "payTo", in: "query", required: false, description: "The payTo address in its 402 quote (EVM 0x... or XRPL r...), to check against the listing", schema: { type: "string" } },
               { name: "amount", in: "query", required: false, description: "The quoted price in USD (decimal), to check against the listing", schema: { type: "string", pattern: "^[0-9]+(\\.[0-9]+)?$" }, example: "0.01" },
             ]
+          : e.route === "receipts"
+          ? [{ name: "seller", in: "query", required: true, description: "The seller: a domain (api.example.com), an x402 resource URL or a payTo address", schema: { type: "string", maxLength: 500 }, example: "api.example.com" }]
+          : e.route === "batch_check"
+          ? [{ name: "urls", in: "query", required: true, description: "1 to 10 comma-separated x402 resource URLs or seller domains", schema: { type: "string", maxLength: 5000 }, example: "https://api.example.com/v1/data,data.example.org" }]
           : []), IDEMPOTENCY_PARAM],
         ...(e.template.includes("{id}")
           ? { "x-example-url": `${base}${e.template.replace("{id}", "printmoneylab")}` }
           : e.route === "trust_check" || e.route === "verdict"
           ? { "x-example-url": `${base}${e.template}?url=${encodeURIComponent("https://api.example.com/v1/data")}` }
+          : e.route === "receipts" || e.route === "batch_check"
+          ? { "x-example-url": `${base}${e.example}` }
           : {}),
         "x-free-trial": trialEligible(e.route, Number(usdPrice(cfg, e.route))) ? { eligible: true, free_calls_per_wallet: TRIAL_LIMITS.perWallet, opt_in_header: `${TRIAL_OPT_IN_HEADER}: 1`, header: SIWX_HEADER, extension: SIWX_KEY } : { eligible: false },
         "x-payment-info": {
@@ -398,7 +405,10 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
             ? { "400": { description: "Path template not filled in (e.g. :id, <id>, ${id}), or any unfilled path sent with a payment header; the body gives an example URL (never charged). Without a payment header, the literal OpenAPI template path ({id}, as discovery crawlers request it) returns the route's normal 402 quote with a note to fill the placeholder; a payment sent to it is refused with this 400." } }
             : e.route === "trust_check" || e.route === "verdict"
             ? { "400": { description: "url missing, empty or not an absolute http(s) URL, or payTo/amount malformed (never charged). A request with no query string at all, as discovery crawlers send it, returns the normal 402 quote; a payment sent without url is refused with this 400.", content: { "application/json": { example: { error: "invalid_query", detail: "url is required: the x402 resource URL (or the seller's domain) you are about to pay.", example: `${base}/v1/${e.route === "verdict" ? "verdict" : "trust/check"}?url=https://api.example.com/v1/data`, note: "Not charged." } } } } }
+            : e.route === "receipts" || e.route === "batch_check"
+            ? { "400": { description: e.route === "receipts" ? "seller missing, or not a domain, an absolute http(s) URL or a payTo address (never charged). A request with no query string at all returns the normal 402 quote." : "urls missing, more than 10 entries, or an entry that is not an absolute http(s) URL or a domain (never charged). A request with no query string at all returns the normal 402 quote." } }
             : {}),
+          ...(e.route === "receipts" ? { "404": { description: "Lumi holds no test-buy receipt for this seller (never charged). The free GET /v1/check still answers." } } : {}),
           ...(e.template.includes("{id}")
             ? { "404": { description: "Unknown vendor id (never charged). Vendor ids: GET /v1/trust/vendors (free)." } }
             : {}),

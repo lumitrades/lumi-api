@@ -8,7 +8,7 @@ import type { PaidRoute } from "./config";
 export const BRAND = "Lumi Trades";
 
 /** Seller-check paid routes (all paid routes). */
-export const TRUST_LINE_ROUTES: PaidRoute[] = ["trust_check", "vendor_report", "verdict"];
+export const TRUST_LINE_ROUTES: PaidRoute[] = ["trust_check", "vendor_report", "verdict", "receipts", "batch_check"];
 
 export type ProductLine = "trust";
 export const LINE_LABEL: Record<ProductLine, string> = {

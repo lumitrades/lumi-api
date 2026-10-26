@@ -126,7 +126,7 @@ describe("remote MCP: tools", () => {
   it("free tools work without a key", async () => {
     const { call } = setup();
     const cat = JSON.parse(textOf((await call("lumi_catalog")).body));
-    expect(cat.endpoints).toHaveLength(3);
+    expect(cat.endpoints).toHaveLength(5);
     expect(JSON.stringify(cat)).not.toMatch(/\/v1\/(funding|fear-greed|institutional)/);
     expect(cat.access).toMatch(/^public/);
     const q = JSON.parse(textOf((await call("lumi_quote", { path: "/v1/verdict?url=https%3A%2F%2Fa.example%2Fx" })).body));

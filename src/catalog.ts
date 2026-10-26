@@ -44,6 +44,26 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
       "Not sold (503, not charged) when the vendor has no observation in the last 48 h. The free summary is GET /v1/trust/vendors/{id}.",
     example: "/v1/trust/vendors/printmoneylab/report",
   },
+  {
+    route: "receipts",
+    name: "Lumi Trades: signed x402 test-buy receipts for one seller",
+    method: "GET",
+    path: "/v1/trust/receipts",
+    template: "/v1/trust/receipts",
+    summary:
+      "Use this when you want the proof behind a seller check: the signed test-buy receipts Lumi holds for one x402 seller, newest first (up to 50). Query: seller (required): a domain, an x402 resource URL or a payTo address. Each receipt has date, endpoint, network (Base, XRP Ledger, Stellar), amount, transaction hash, explorer link and delivered yes/no, plus the signed counterparty_delivery_receipt that anyone can verify for free at /v1/trust/receipts/verify. Only Lumi's own test-buys from its published wallets (/v1/check/wallets). Not charged on bad input or when Lumi holds no receipt for the seller (404). Paying never changes a score or label. Observations, not a guarantee.",
+    example: "/v1/trust/receipts?seller=api.example.com",
+  },
+  {
+    route: "batch_check",
+    name: "Lumi Trades: check up to 10 x402 sellers before paying (batch)",
+    method: "GET",
+    path: "/v1/check/batch",
+    template: "/v1/check/batch",
+    summary:
+      "Use this before your agent pays several x402 sellers: up to 10 resource URLs or seller domains in one call (query: urls, comma-separated), each with the same label as the free /v1/check (checks_passed, check_first, checks_failed or no_data), reason codes, conclusive test-buy count, last delivered and last failed dates and an evidence link, in one signed answer (kind lumi_batch_check). Based on Lumi's record: it does not contact the sellers (GET /v1/verdict adds a live check for one URL). Not charged on bad input. Paying never changes a score or label. Observations, not a guarantee.",
+    example: "/v1/check/batch?urls=https://api.example.com/v1/data,data.example.org",
+  },
 ];
 
 /**
@@ -63,7 +83,8 @@ export const VERDICT_ENDPOINT: PaidEndpoint = {
 
 /** Every endpoint sold over x402 under this config (adds /v1/verdict only in paid mode). */
 export function paidEndpoints(cfg: Pick<Config, "verdictPaid">): PaidEndpoint[] {
-  return cfg.verdictPaid ? [...PAID_ENDPOINTS, VERDICT_ENDPOINT] : PAID_ENDPOINTS;
+  // Listing order: the two original checks, then /v1/verdict (when paid), then the sub-cent receipt lookup and batch check.
+  return cfg.verdictPaid ? [...PAID_ENDPOINTS.slice(0, 2), VERDICT_ENDPOINT, ...PAID_ENDPOINTS.slice(2)] : PAID_ENDPOINTS;
 }
 
 /** Catalog entry for a paid route, including /v1/verdict (whether or not it is currently priced). */

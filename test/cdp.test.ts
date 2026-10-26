@@ -92,7 +92,8 @@ describe("Bazaar metadata", () => {
     });
     for (const e of PAID_ENDPOINTS) {
       if (e.route === "vendor_report") continue; // needs trust observations; covered in trust tests
-      const r = await app.fetch(new Request("http://lumi.test" + e.example));
+      // receipts: the example seller has no receipts in this fixture (404, never charged), so probe the bare path (normal 402).
+      const r = await app.fetch(new Request("http://lumi.test" + (e.route === "receipts" ? e.path : e.example)));
       expect(r.status).toBe(402);
       const h = r.headers.get("PAYMENT-REQUIRED")!;
       expect(h.length).toBeLessThan(8000);

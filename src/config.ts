@@ -178,7 +178,7 @@ export interface KVLike {
  * Paid routes: x402 seller checks only. Every non-trust data route was retired on 2026-10-25 (v1.2.0 retired the last
  * three): they answer 410 Gone (see src/retired.ts) and are never quoted.
  */
-export type PaidRoute = "vendor_report" | "trust_check" | "verdict";
+export type PaidRoute = "vendor_report" | "trust_check" | "verdict" | "receipts" | "batch_check";
 
 /**
  * Default prices per route: XRP and USD-stablecoin (RLUSD/USDC). Override with PRICE_<ROUTE>_XRP / _RLUSD / _USDC
@@ -193,6 +193,12 @@ export const DEFAULT_PRICES: Record<PaidRoute, { xrp: string; usd: string }> = {
   // GET /v1/verdict: $0.01 per call (owner approved 2026-10-25: "Ship the verdict at $0.01 a call").
   // VERDICT_MAX_USD caps env overrides; test/verdict.test.ts checks it.
   verdict: { xrp: "0.0075", usd: "0.01" },
+  // GET /v1/trust/receipts: Lumi's signed test-buy receipts for one seller, $0.005 (PROPOSED 2026-10-26, not yet approved
+  // for release). XRP fixed from XRP ~= $1.32: 0.005 / 1.32 = 0.0038.
+  receipts: { xrp: "0.0038", usd: "0.005" },
+  // GET /v1/check/batch: up to 10 record-based labels in one signed answer, $0.008 (PROPOSED 2026-10-26, not yet approved
+  // for release). XRP fixed from XRP ~= $1.32: 0.008 / 1.32 = 0.0061 -> 0.006.
+  batch_check: { xrp: "0.006", usd: "0.008" },
 };
 /**
  * ONE-LINE SWITCH: "free" = GET /v1/verdict is a free, rate-limited alias of /v1/check (no 402, not listed

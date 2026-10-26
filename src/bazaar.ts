@@ -20,12 +20,14 @@ export const BAZAAR_MAX_DESCRIPTION = 500;
 export const SERVICE_NAME = "Lumi Trades";
 /** Every listing uses one brand name (owner decision 2026-10-25); the trust routes keep their own tag set. */
 export const TRUST_SERVICE_NAME = SERVICE_NAME;
-export const TRUST_ROUTES: PaidRoute[] = ["trust_check", "vendor_report", "verdict"];
+export const TRUST_ROUTES: PaidRoute[] = ["trust_check", "vendor_report", "verdict", "receipts", "batch_check"];
 export const SERVICE_ICON = "https://lumitrades.io/assets/icon-512.png";
 export const ROUTE_TAGS: Record<PaidRoute, string[]> = {
   vendor_report: ["x402", "seller-reputation", "vendor-report", "api-monitoring", "due-diligence"],
   trust_check: ["x402", "check-before-paying", "pre-payment-check", "trust-check", "agent-payments"],
   verdict: ["x402", "check-before-paying", "pre-payment-check", "seller-reputation", "test-buys"],
+  receipts: ["x402", "test-buys", "signed-receipts", "seller-reputation", "check-before-paying"],
+  batch_check: ["x402", "check-before-paying", "batch-check", "pre-payment-check", "agent-payments"],
 };
 
 export function serviceMeta(route: PaidRoute): { serviceName: string; tags: string[]; iconUrl: string } {
@@ -143,6 +145,47 @@ export const BAZAAR_ROUTES: Record<PaidRoute, RouteMeta> = {
       payment: pay("verdict"),
     },
   },
+  receipts: {
+    description:
+      "Use when an agent wants the proof behind a seller check: the signed test-buy receipts Lumi Trades holds for one x402 seller (domain, resource URL or payTo), newest first, with date, endpoint, network (Base, XRP Ledger, Stellar), amount, transaction hash, explorer link and delivered yes/no. Anyone can verify a receipt for free at /v1/trust/receipts/verify. Not charged on bad input or when Lumi holds no receipt for the seller. Observations, not a guarantee.",
+    query: {
+      seller: { type: "string", description: "The seller: a domain (api.example.com), an x402 resource URL or a payTo address (required)" },
+    },
+    queryRequired: ["seller"],
+    example: {
+      kind: "lumi_seller_receipts",
+      query: { seller: "api.example.com" },
+      count: 1,
+      delivered: 1,
+      not_delivered: 0,
+      inconclusive: 0,
+      receipts: [{
+        at: "2026-10-22T20:37:37Z", endpoint: "https://api.example.com/v1/data", network: "eip155:8453", amount: "0.01", asset: "USDC",
+        tx_hash: "0x9c1e...7b20", explorer: "https://basescan.org/tx/0x9c1e...7b20", delivery: "delivered", receipt_hash: "5d2a...c0f1",
+      }],
+      verify: "https://api.lumitrades.io/v1/trust/receipts/verify",
+      ...FRESH("2026-10-26T11:00:00Z", "2026-10-27T11:00:00Z"),
+      payment: pay("receipts"),
+    },
+  },
+  batch_check: {
+    description:
+      "Use when an agent must check several x402 sellers before paying: up to 10 resource URLs or seller domains in one call, each with the same label as the free /v1/check (checks_passed, check_first, checks_failed or no_data), reason codes, conclusive test-buy count, last delivered date and an evidence link, in one signed answer. Based on Lumi Trades' record; it does not contact the sellers. Not charged on bad input. Observations, not a guarantee.",
+    query: {
+      urls: { type: "string", description: "Comma-separated x402 resource URLs or seller domains, 1 to 10 (required)" },
+    },
+    queryRequired: ["urls"],
+    example: {
+      kind: "lumi_batch_check",
+      count: 2,
+      results: [
+        { url: "https://api.example.com/v1/data", label: "checks_passed", reason_code: "delivered_recently", n_conclusive: 3, last_delivered_at: "2026-10-20T09:12:00Z", evidence: "https://api.lumitrades.io/trust/v/api.example.com" },
+        { url: "https://data.example.org/v1/quote", label: "no_data", reason_code: "not_observed", n_conclusive: 0, last_delivered_at: null, evidence: "https://api.lumitrades.io/trust/v/data.example.org" },
+      ],
+      ...FRESH("2026-10-26T11:00:00Z", "2026-10-27T11:00:00Z"),
+      payment: pay("batch_check"),
+    },
+  },
 };
 
 /** One documented error status of a paid route (listed in the 402 bazaar schema, OpenAPI and /.well-known/x402). */
@@ -162,10 +205,13 @@ const URL_ROUTES: PaidRoute[] = ["trust_check", "verdict"];
  */
 export function errorDocs(route: PaidRoute): ErrorDoc[] {
   const out: ErrorDoc[] = [];
-  if (URL_ROUTES.includes(route)) out.push({ status: 400, error: "invalid_input", when: "url missing or not an absolute http(s) URL, or payTo/amount malformed. Never charged." });
+  if (route === "batch_check") out.push({ status: 400, error: "invalid_input", when: "urls missing, more than 10 entries, or an entry that is not an absolute http(s) URL or a domain. Never charged." });
+  else if (URL_ROUTES.includes(route)) out.push({ status: 400, error: "invalid_input", when: "url missing or not an absolute http(s) URL, or payTo/amount malformed. Never charged." });
+  else if (route === "receipts") out.push({ status: 400, error: "invalid_input", when: "seller missing, or not a domain, an absolute http(s) URL or a payTo address. Never charged." });
   else if (COIN_ROUTES.includes(route) || route === "vendor_report") out.push({ status: 400, error: "invalid_input", when: "Path placeholder not filled in (e.g. {id}) on a paid request. Never charged." });
   out.push({ status: 402, error: "payment_required", when: "No payment, or the payment was invalid or failed to settle: x402 v2 PaymentRequired in the body and the PAYMENT-REQUIRED header." });
   if (COIN_ROUTES.includes(route)) out.push({ status: 404, error: "not_found", when: "Unknown coin. Never charged." });
+  if (route === "receipts") out.push({ status: 404, error: "not_found", when: "Lumi holds no test-buy receipt for this seller (the free GET /v1/check still answers). Never charged." });
   if (route === "vendor_report") out.push({ status: 404, error: "not_found", when: "Unknown vendor id (GET /v1/trust/vendors lists ids). Never charged." });
   out.push({ status: 409, error: "idempotency_conflict | settlement_status_unknown", when: "Idempotency-Key reused with a different payment (never charged), or the facilitator did not confirm settlement; check the transaction before paying again." });
   out.push({ status: 429, error: "rate_limited", when: "Not returned on paid calls. The free lookups (/v1/check, /v1/trust/vendors, /v1/trust/catalog) return 429 with Retry-After over their limits; a facilitator 429 surfaces as a retryable 503." });
@@ -250,6 +296,8 @@ const HEADLINES: Record<PaidRoute, (subject?: string) => string> = {
   vendor_report: (v) => `x402 seller reputation report${v ? ` for ${v}` : ""} (uptime, latency, test-buys)`,
   trust_check: () => "Check before paying an x402 URL (allow / warn / block with coded reasons)",
   verdict: () => "Check before paying: one-label x402 pre-payment check (checks_passed / check_first / checks_failed / no_data)",
+  receipts: () => "Signed x402 test-buy receipts for one seller (tx hash, explorer link, delivered yes/no)",
+  batch_check: () => "Check up to 10 x402 sellers before paying, one signed answer",
 };
 
 /**

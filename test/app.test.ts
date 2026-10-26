@@ -55,6 +55,7 @@ describe("free endpoints", () => {
     const index = await (await get("/")).json();
     expect(index.paid_endpoints.map((p: any) => [p.path, p.price_xrp])).toEqual([
       ["/v1/trust/check", "0.015"], ["/v1/trust/vendors/{id}/report", "0.015"], ["/v1/verdict", "0.0075"],
+      ["/v1/trust/receipts", "0.0038"], ["/v1/check/batch", "0.006"],
     ]);
     expect(index.guarantee).toMatch(/only pay when you get an answer/i);
     expect((await get("/health")).status).toBe(200);
@@ -66,7 +67,7 @@ describe("free endpoints", () => {
     expect(skill).not.toMatch(/\/v1\/(funding|fear-greed|institutional)/);
     const wk = await (await get("/.well-known/x402")).json();
     expect(wk).toMatchObject({ x402Version: 2, kind: "resource-server" });
-    expect(wk.resources).toHaveLength(11); // 2026-10-25: market, yen, sentiment, events, events_48h retired (410). 2026-10-25: Watch Plus + founder retired, Re-test and Founder packs added. 2026-10-25: + Watch Plus founder. 2026-10-25: per-coin readings, slate, scan and brief retired (410); Monitor and Monitor Plus no longer sold
+    expect(wk.resources).toHaveLength(13); // 2026-10-26: + receipts, batch_check (branch). 2026-10-25: market, yen, sentiment, events, events_48h retired (410). 2026-10-25: Watch Plus + founder retired, Re-test and Founder packs added. 2026-10-25: + Watch Plus founder. 2026-10-25: per-coin readings, slate, scan and brief retired (410); Monitor and Monitor Plus no longer sold
     expect(wk.resources.filter((r: any) => r.plan).map((r: any) => r.url)).toEqual(["watch", "watch_pro", "audit", "retest_pack", "founder_pack"].map((p) => `${BASE}/v1/monitor/subscribe/${p}`).concat([`${BASE}/v1/feed/subscribe/feed`, `${BASE}/v1/feed/subscribe/feed_pro`, `${BASE}/v1/feed/credits`]));
     expect(wk.resources.map((r: any) => r.url)).toContain(`${BASE}/v1/verdict?url=https://api.example.com/v1/data`);
     for (const gone of ["/v1/funding", "/v1/fear-greed", "/v1/institutional"]) expect(wk.resources.map((r: any) => r.url)).not.toContain(`${BASE}${gone}`);

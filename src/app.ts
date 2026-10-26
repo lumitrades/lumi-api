@@ -188,6 +188,8 @@ const NEEDS: Record<PaidRoute, DataFile[]> = {
   vendor_report: [], // trust-layer data (D1), checked in prepare()
   trust_check: [], // trust catalog (D1)
   verdict: [], // trust catalog + seller_activity (D1), same lookup as /v1/check
+  receipts: [], // trust catalog purchases + signed receipt store (D1)
+  batch_check: [], // trust catalog (D1), same check core as /v1/check
 };
 /** Inputs that enrich a product but whose absence does not block it (the field is simply omitted). */
 const OPTIONAL: Partial<Record<PaidRoute, DataFile[]>> = {};
@@ -195,7 +197,15 @@ const OPTIONAL: Partial<Record<PaidRoute, DataFile[]>> = {};
 const FIXED: Record<string, PaidRoute> = {
   "/v1/trust/check": "trust_check",
   "/v1/verdict": "verdict",
+  "/v1/trust/receipts": "receipts",
+  "/v1/check/batch": "batch_check",
 };
+/** Paid routes whose input is the query string (validated in prepare(), refused with 400 and never charged when malformed). */
+const QUERY_ROUTES: PaidRoute[] = ["trust_check", "verdict", "receipts", "batch_check"];
+/** GET /v1/check/batch: at most this many URLs or domains per call. */
+export const BATCH_MAX = 10;
+/** GET /v1/trust/receipts: at most this many receipts per answer (newest first). */
+export const RECEIPTS_MAX = 50;
 
 /** Unfilled path placeholders in any common style: {coin}, {{coin}}, :coin, <coin>, [coin], ${coin}, $coin. */
 const PATH_TEMPLATE_RE = /^(?:\{\{?\s*|:|<|\[|\$\{?)(?:coin|id|symbol|ticker|asset|vendor|vendor_?id|vendorId)(?:\s*\}\}?|>|\])?$/i;
@@ -704,6 +714,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (route === "vendor_report") return prepareVendorReport(coinArg ?? "", base);
     if (route === "trust_check") return prepareTrustCheck(coinArg ?? "", base);
     if (route === "verdict") return prepareVerdict(coinArg ?? "", base);
+    if (route === "receipts") return prepareReceipts(coinArg ?? "", base);
+    if (route === "batch_check") return prepareBatch(coinArg ?? "", base);
     // Every paid route is a seller check; all other data routes were retired on 2026-10-25 (src/retired.ts).
     return { ok: false, status: 404, error: { error: "not_found", route, note: "Not charged." } };
   }
@@ -884,6 +896,131 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       if (!r.ok) return r;
       const meta = metaFrom(r.t, r.t + 86_400_000, r.t + 30 * 60_000, r.t);
       return { ok: true, route: "verdict", body: isoTimestamps(withMeta(r.body, meta)), onServed: r.onServed, enrich: r.live };
+    } catch {
+      return notForSale("data_unavailable", "the trust catalog is unavailable right now", 60, null);
+    }
+  }
+
+  /**
+   * GET /v1/trust/receipts?seller=<domain | resource URL | payTo>: Lumi's own test-buys of one seller, newest first, each with
+   * its signed receipt when Lumi holds one (counterparty_delivery_receipt, verifiable free at /v1/trust/receipts/verify).
+   * Read-only: the same purchase rows a full lookup returns. 400 / 404 / 503 happen before any payment (never charged).
+   */
+  async function prepareReceipts(qs: string, base: string): Promise<Prepared> {
+    const sp = new URLSearchParams(qs);
+    const raw = (sp.get("seller") ?? sp.get("domain") ?? sp.get("url") ?? sp.get("payTo") ?? sp.get("pay_to") ?? "").trim();
+    const bad = (detail: string) => ({ ok: false as const, status: 400, error: { error: "invalid_query", detail, example: `${base}/v1/trust/receipts?seller=api.example.com`, note: "Not charged." } });
+    if (!raw) return bad("seller is required: a domain (api.example.com), an x402 resource URL or a payTo address.");
+    let q: LookupQuery;
+    if (/^(0x[0-9a-fA-F]{40}|r[1-9A-HJ-NP-Za-km-z]{24,34}|G[A-Z2-7]{55})$/.test(raw)) q = { payTo: raw } as LookupQuery;
+    else {
+      let host = "";
+      try { host = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`).hostname.toLowerCase(); } catch { /* invalid */ }
+      if (!host || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(host)) return bad("seller must be a domain, an absolute http(s) URL or a payTo address.");
+      q = { domain: host } as LookupQuery;
+    }
+    const err = lookupError(q, {}, "lookup");
+    if (err) return { ok: false, status: 400, error: { ...err, note: "Not charged." } };
+    try {
+      const doc = (await trust.lookup(q, base)) as any;
+      const rows: any[] = [];
+      for (const e of [...(doc?.catalog?.entries ?? []), ...(doc?.curated ?? [])]) {
+        for (const b of (Array.isArray(e?.purchases) ? e.purchases : []) as any[]) {
+          if (!b?.tx_hash) continue;
+          rows.push({
+            at: b.at ?? null, endpoint: b.endpoint ?? e.resource ?? null, network: b.network ?? null, amount: b.amount ?? null, asset: b.asset ?? null,
+            tx_hash: b.tx_hash, explorer: b.explorer ?? null, http_status: b.http_status ?? null, delivery: b.delivery ?? null,
+            ...(b.inconclusive_reason ? { inconclusive_reason: b.inconclusive_reason } : {}),
+            ...(b.corrected_at ? { corrected_at: b.corrected_at, corrections: b.corrections } : {}),
+            receipt: b.receipt ?? null,
+          });
+        }
+      }
+      const seen = new Set<string>();
+      const receipts = rows.filter((r) => (seen.has(r.tx_hash) ? false : (seen.add(r.tx_hash), true)))
+        .sort((a, b) => (Date.parse(b.at ?? "") || 0) - (Date.parse(a.at ?? "") || 0)).slice(0, RECEIPTS_MAX);
+      if (!receipts.length) {
+        return { ok: false, status: 404, error: { error: "not_found", detail: "Lumi holds no test-buy receipt for this seller yet. No receipt is not a negative finding.", free_check: `${base}/v1/check?url=${encodeURIComponent(q.domain ? `https://${q.domain}/` : "")}`, note: "Not charged." } };
+      }
+      const t = now();
+      const count = (d: string) => receipts.filter((r) => r.delivery === d).length;
+      const payload = {
+        query: { seller: raw },
+        count: receipts.length,
+        delivered: count("delivered"),
+        not_delivered: count("not_delivered"),
+        inconclusive: receipts.length - count("delivered") - count("not_delivered"),
+        receipts: receipts.map(({ receipt, ...r }) => ({ ...r, receipt_hash: receipt?.receipt_hash ?? null })),
+      };
+      const signed = await signResponse("lumi_seller_receipts", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
+      const body = {
+        kind: "lumi_seller_receipts", ...payload,
+        signed_receipts: receipts.filter((r) => r.receipt).map((r) => r.receipt),
+        lumi_receipt: signed,
+        verify: `${base}/v1/trust/receipts/verify`,
+        wallets: `${base}/v1/check/wallets`,
+        note: "Lumi's own test-buys only: Lumi paid the seller and recorded whether data came back. Paying for this never changes a score, label or 'Tested by Lumi' result. Observations, not a guarantee.",
+      };
+      const meta = metaFrom(t, t + 86_400_000, t + 30 * 60_000, t);
+      return { ok: true, route: "receipts", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)) };
+    } catch {
+      return notForSale("data_unavailable", "the trust catalog is unavailable right now", 60, null);
+    }
+  }
+
+  /**
+   * GET /v1/check/batch?urls=<u1>,<u2>,...: up to BATCH_MAX record-based labels in one signed answer, from the same check core as
+   * the free /v1/check (same lookup, same review gate, same label). No live contact with the sellers. Bad input is a 400 before
+   * any quote is paid (never charged).
+   */
+  async function prepareBatch(qs: string, base: string): Promise<Prepared> {
+    const sp = new URLSearchParams(qs);
+    const list = [...sp.getAll("urls"), ...sp.getAll("url")].flatMap((x) => x.split(",")).map((x) => x.trim()).filter(Boolean);
+    const bad = (detail: string) => ({ ok: false as const, status: 400, error: { error: "invalid_query", detail, example: `${base}/v1/check/batch?urls=https://api.example.com/v1/data,data.example.org`, note: "Not charged." } });
+    if (!list.length) return bad(`urls is required: 1 to ${BATCH_MAX} comma-separated x402 resource URLs or seller domains.`);
+    const uniq = [...new Set(list)];
+    if (uniq.length > BATCH_MAX) return bad(`At most ${BATCH_MAX} URLs or domains per call (got ${uniq.length}).`);
+    const items: { input: string; url: string; host: string }[] = [];
+    for (const x of uniq) {
+      const raw = !/^[a-z][a-z0-9+.-]*:\/\//i.test(x) && /^[a-z0-9.-]+\.[a-z]{2,}(\/.*)?$/i.test(x) ? `https://${x}` : x;
+      if (lookupError({ url: raw }, { url: true }, "check")) return bad(`Not an absolute http(s) URL or a domain: ${x.slice(0, 200)}`);
+      let host = "";
+      try { host = new URL(raw).hostname.toLowerCase(); } catch { return bad(`Not an absolute http(s) URL or a domain: ${x.slice(0, 200)}`); }
+      items.push({ input: x, url: originPath(raw) ?? raw, host });
+    }
+    try {
+      const results: Record<string, unknown>[] = [];
+      for (const it of items) {
+        const r = await checkVerdict({ url: it.url }, base, false);
+        const { verdict: check, tests, lab } = r;
+        if (check?.verdict === "block" && check?.reasons?.[0]?.code === "sanctioned_address") {
+          const hit = sanctions.checkAny(((r.exact?.catalog?.entries?.[0]?.pay_to ?? r.dom?.catalog?.entries?.[0]?.pay_to ?? []) as any[]).map((p) => String(p?.pay_to ?? "")));
+          if (hit) sanctions.refuse("batch_check", hit, { url_host: it.host });
+        }
+        results.push({
+          input: it.input,
+          url: it.url,
+          host: it.host,
+          label: lab.label,
+          label_text: LABELS[lab.label],
+          reason_code: lab.reason_code,
+          reason_codes: (check.reasons ?? []).filter((x: any) => x.severity !== "info" || ["not_observed", "not_quote_checked", "lumi_itself"].includes(x.code)).map((x: any) => String(x.code)),
+          decision: String(check.verdict),
+          n_conclusive: tests.conclusive,
+          last_delivered_at: tests.last_delivered_at,
+          last_failed_at: tests.last_failed_at,
+          evidence: `${base}/trust/v/${encodeURIComponent(it.host)}`,
+        });
+      }
+      const t = now();
+      const payload = { as_of: new Date(t).toISOString().slice(0, 10), count: results.length, results, rules_version: VERDICT_RULES_VERSION, rules: `${base}/v1/verdict/rules` };
+      const signed = await signResponse("lumi_batch_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
+      const body = {
+        kind: "lumi_batch_check", ...payload, receipt: signed,
+        note: "Same check core, labels and signing key as the free GET /v1/check, from Lumi's record (no live contact with the sellers; GET /v1/verdict adds the live check for one URL). Paying for this never changes a score, label or 'Tested by Lumi' result. Observations, not a guarantee.",
+      };
+      const meta = metaFrom(t, t + 86_400_000, t + 30 * 60_000, t);
+      return { ok: true, route: "batch_check", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)) };
     } catch {
       return notForSale("data_unavailable", "the trust catalog is unavailable right now", 60, null);
     }
@@ -1351,10 +1488,14 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     // /v1/trust/check probed bare (no query string at all, as x402scan and other discovery crawlers do): the normal 402 price
     // quote, so the paywall is visible. A query without a usable url, or any request with a payment header and no url, is
     // refused below (400, nothing verified or settled).
-    if ((route === "trust_check" || route === "verdict") && !url.search.replace(/^\?/, "") && !(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT))) {
+    if (QUERY_ROUTES.includes(route) && !url.search.replace(/^\?/, "") && !(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT))) {
       const endpoint = endpointFor(route);
       const usd = config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route];
-      const example = route === "verdict" ? `${base}/v1/verdict?url=https://api.example.com/v1/data` : `${base}/v1/trust/check?url=https://api.example.com/v1/data&payTo=0x...&amount=0.01`;
+      const example = route === "verdict" ? `${base}/v1/verdict?url=https://api.example.com/v1/data`
+        : route === "receipts" ? `${base}/v1/trust/receipts?seller=api.example.com`
+        : route === "batch_check" ? `${base}/v1/check/batch?urls=https://api.example.com/v1/data,data.example.org`
+        : `${base}/v1/trust/check?url=https://api.example.com/v1/data&payTo=0x...&amount=0.01`;
+      const probeQuery: Record<string, string> = route === "receipts" ? { seller: "api.example.com" } : route === "batch_check" ? { urls: "https://api.example.com/v1/data,data.example.org" } : { url: "https://api.example.com/v1/data" };
       return paymentRequiredResponse(config, {
         routeKey: `${route}:probe`,
         amountDrops: config.pricesDrops[route],
@@ -1366,13 +1507,17 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           amountStellar: config.stellar?.amounts[route],
         description: resourceDescription(route, `Lumi API ${endpoint.template}: ${endpoint.summary}`, { usd }),
         resourceUrl: `${base}${path}`,
-        bazaar: bazaarExtension(route, undefined, { url: "https://api.example.com/v1/data" }, usd),
+        bazaar: bazaarExtension(route, undefined, probeQuery, usd),
         service: serviceMeta(route),
-        note: `Add ?url=<the x402 resource URL you are about to pay> (optional payTo, amount) and request that URL for a fresh quote before paying: ${example}. A payment sent without url is refused and not charged.`,
+        note: route === "receipts"
+          ? `Add ?seller=<domain, resource URL or payTo> and request that URL for a fresh quote before paying: ${example}. A payment sent without seller is refused and not charged.`
+          : route === "batch_check"
+          ? `Add ?urls=<1 to ${BATCH_MAX} comma-separated resource URLs or domains> and request that URL for a fresh quote before paying: ${example}. A payment sent without urls is refused and not charged.`
+          : `Add ?url=<the x402 resource URL you are about to pay> (optional payTo, amount) and request that URL for a fresh quote before paying: ${example}. A payment sent without url is refused and not charged.`,
       }, "PAYMENT-SIGNATURE header is required");
     }
 
-    const prep = await prepare(route, route === "trust_check" || route === "verdict" ? url.search : m[2], base);
+    const prep = await prepare(route, QUERY_ROUTES.includes(route) ? url.search : m[2], base);
     if (!prep.ok) return json(prep.status, prep.error, prep.headers);
     const { coin, body } = prep;
     // Owner key (Authorization: Bearer <OWNER_MCP_KEY>) reads the vendor report at no charge.
@@ -1403,7 +1548,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       bazaar: bazaarExtension(
         route,
         coin?.symbol ?? vendorId,
-        route === "trust_check" || route === "verdict" ? Object.fromEntries(url.searchParams) : undefined,
+        QUERY_ROUTES.includes(route) ? Object.fromEntries(url.searchParams) : undefined,
         config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route],
       ),
       service: serviceMeta(route),

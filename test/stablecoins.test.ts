@@ -20,7 +20,7 @@ function setup(env: Record<string, string> = {}, fac: FakeFacilitator = happyFac
 describe("stablecoin config", () => {
   it("defaults to Ripple's / Circle's official issuers per network and USD-cent prices", () => {
     const main = loadConfig({ XRPL_NETWORK: "xrpl:0", INVOICE_SECRET: "x".repeat(32) });
-    const cents = { vendor_report: "0.02", trust_check: "0.02", verdict: "0.01" };
+    const cents = { vendor_report: "0.02", trust_check: "0.02", verdict: "0.01", receipts: "0.005", batch_check: "0.008" };
     expect(main.ious).toEqual([
       { symbol: "RLUSD", currency: RLUSD_CURRENCY, issuer: MAINNET_ISSUER, prices: cents },
       { symbol: "USDC", currency: USDC_CURRENCY, issuer: USDC_MAINNET, prices: cents },
@@ -134,8 +134,8 @@ describe("stablecoins in the 402", () => {
   it("documents RLUSD in index, discovery, OpenAPI and skill.md", async () => {
     const { get } = setup();
     const index = await (await get("/")).json();
-    expect(index.paid_endpoints.map((p: any) => p.price_rlusd)).toEqual(["0.02", "0.02", "0.01"]);
-    expect(index.paid_endpoints.map((p: any) => p.price_usdc)).toEqual(["0.02", "0.02", "0.01"]);
+    expect(index.paid_endpoints.map((p: any) => p.price_rlusd)).toEqual(["0.02", "0.02", "0.01", "0.005", "0.008"]);
+    expect(index.paid_endpoints.map((p: any) => p.price_usdc)).toEqual(["0.02", "0.02", "0.01", "0.005", "0.008"]);
     expect(index.payment.assets[1]).toMatchObject({ symbol: "RLUSD", issuer: TESTNET_ISSUER, accepts_index: 1 });
     expect(index.payment.assets[2]).toMatchObject({ symbol: "USDC", issuer: USDC_TESTNET, accepts_index: 2 });
     const wk = await (await get("/.well-known/x402")).json();
