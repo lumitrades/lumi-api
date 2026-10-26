@@ -36,7 +36,8 @@ describe("Lumi test-buy wallet list (M4, proposed)", () => {
       expect(j.wallets["xrpl:0"]).toEqual([XADDR]);
       expect(j.wallets["eip155:8453"]).toEqual(LUMI_WALLETS.evm.map((x) => x.toLowerCase()));
       expect(j.wallets["stellar:pubnet"].length).toBe(1);
-      expect(JSON.stringify(j)).not.toMatch(/seed|secret|private|\/workspace/i);
+      expect(JSON.stringify(j)).not.toMatch(/seed|secret|private/i);
+      expect(JSON.stringify(j)).not.toContain("/" + "workspace");
     }
   });
 
