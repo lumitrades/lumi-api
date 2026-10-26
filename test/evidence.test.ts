@@ -3,7 +3,7 @@ import { createApp } from "../src/app";
 import { MemoryCatalogStore } from "../src/trust/catalog";
 import { buyCandidate } from "../src/trust/catalog_service";
 import { MemoryActivityStore, createActivity } from "../src/trust/activity";
-import { MemoryEvidenceStore, classifyPayers, xrplCensus, baseLogs, vet402View, parseVet402, X402_SOURCE_TAG, VET402 } from "../src/trust/evidence";
+import { MemoryEvidenceStore, classifyPayers, LUMI_WALLETS, KNOWN_TESTERS, xrplCensus, baseLogs, vet402View, parseVet402, X402_SOURCE_TAG, VET402 } from "../src/trust/evidence";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor } from "./helpers";
 
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -50,6 +50,28 @@ describe("evidence: payer classification", () => {
     expect(c.organic_payers).toBe(3); // {a,b} via f, e, g (hub not used for clustering)
     expect(c.organic_wallets).toBe(4);
     expect(c.organic_payments).toBe(5);
+  });
+});
+
+describe("evidence: exchange withdrawal wallets are not Lumi", () => {
+  const COINBASE_HOT = "r4sRyacXpbh4HbagmgfoQq8Q3j8ZJzbZ1J"; // Coinbase withdrawal hot wallet (XRPScan: "Coinbase 6")
+  it("LUMI_WALLETS does not list the Coinbase hot wallet", () => {
+    expect(LUMI_WALLETS.xrpl).not.toContain(COINBASE_HOT);
+  });
+  it("a payer funded by the Coinbase hot wallet stays organic", () => {
+    const c = classifyPayers(
+      [{ payer: "rBuyerFundedFromCoinbase1111111111", funder: COINBASE_HOT, funder_known: true, n: 2, last_ts: NOW, last_tx: "t1" }],
+      { payTo: "rSeller", sellerPayTos: [], lumi: [...LUMI_WALLETS.xrpl], testers: [...KNOWN_TESTERS.xrpl], hubs: new Set() });
+    expect(c.excluded.lumi).toBe(0);
+    expect(c.organic_payers).toBe(1);
+    expect(c.organic_payments).toBe(2);
+  });
+  it("a payer funded by a Lumi wallet is still excluded", () => {
+    const c = classifyPayers(
+      [{ payer: "rBuyerFundedFromLumi1111111111111", funder: LUMI_WALLETS.xrpl[0], funder_known: true, n: 1, last_ts: NOW, last_tx: "t2" }],
+      { payTo: "rSeller", sellerPayTos: [], lumi: [...LUMI_WALLETS.xrpl], testers: [], hubs: new Set() });
+    expect(c.excluded.lumi).toBe(1);
+    expect(c.organic_payers).toBe(0);
   });
 });
 

@@ -11,9 +11,12 @@ type Fetch = typeof fetch;
 export const X402_SOURCE_TAG = 804681468;
 export const BASE_NET = "eip155:8453";
 export const XRPL_NET = "xrpl:0";
-/** Lumi's own wallets (payments from them, or from accounts they funded, are never organic). */
+/**
+ * Lumi's own wallets (payments from them, or from accounts they funded, are never organic). Only wallets Lumi controls:
+ * never an exchange withdrawal wallet, or every buyer who withdrew from that exchange would be dropped from organic counts.
+ */
 export const LUMI_WALLETS = {
-  xrpl: ["rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM", "rpvsTYDZmX1j1ndmEFG6YjjZZwp6VRtQRz", "r4sRyacXpbh4HbagmgfoQq8Q3j8ZJzbZ1J"],
+  xrpl: ["rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM", "rpvsTYDZmX1j1ndmEFG6YjjZZwp6VRtQRz"],
   evm: ["0x5e617bac19912e6d212cb303ae84655e9e203532", "0x7722dfae6bbed2fd02dc07455c2f5bf14be25e4a", "0xbaaf2635c9a7697601600749ca90456274667999"],
 };
 /** Known test/scanner wallets (owner can extend via meta `known_testers`). */
