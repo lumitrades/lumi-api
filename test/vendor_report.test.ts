@@ -11,7 +11,7 @@ const ENV = {
 };
 const BASE = "http://lumi.test";
 const DAY = 86_400_000;
-const PATH = "/v1/trust/vendors/asksurf/report";
+const PATH = "/v1/trust/vendors/heurist-mesh/report";
 const BANNED = /\b(scam\w*|fraud\w*|untrustworthy|rip-?off|thie(f|ves)|steal\w*)\b/i;
 
 function probes(vendor: string, days: number, every = 3_600_000): ProbeRow[] {
@@ -104,14 +104,14 @@ describe("paid vendor report: x402 terms", () => {
 describe("paid vendor report: content", () => {
   it("has the full history, stats, trend, labels and neutral wording", async () => {
     const store = new MemoryTrustStore(SEED_OBSERVATIONS);
-    await store.addProbes(probes("asksurf", 20));
-    await store.addProbes(probes("asksurf", 120).filter((p) => p.ts < NOW - 100 * DAY)); // beyond retention: excluded
+    await store.addProbes(probes("heurist-mesh", 20));
+    await store.addProbes(probes("heurist-mesh", 120).filter((p) => p.ts < NOW - 100 * DAY)); // beyond retention: excluded
     const { get } = setup({ store });
     const b = await (await get(PATH, { Authorization: `Bearer ${KEY}` })).json();
-    expect(b).toMatchObject({ kind: "trust_vendor_report", id: "asksurf", methodology: `${BASE}/v1/trust/methodology`, label: expect.stringContaining("not a rating") });
+    expect(b).toMatchObject({ kind: "trust_vendor_report", id: "heurist-mesh", methodology: `${BASE}/v1/trust/methodology`, label: expect.stringContaining("not a rating") });
     expect(b.confidence_label).toMatch(/^LOW CONFIDENCE/);
     expect(b.score.confidence).toBe("low");
-    const n = probes("asksurf", 20).length;
+    const n = probes("heurist-mesh", 20).length;
     expect(b.quote_checks.rows).toHaveLength(n);
     expect(b.quote_checks.columns[0]).toBe("checked_at");
     expect(b.windows.map((w: any) => w.window)).toEqual(["24h", "7d", "30d", "90d"]);
@@ -120,7 +120,7 @@ describe("paid vendor report: content", () => {
     expect(w30.uptime_pct).toBeCloseTo(90, 0);
     expect(w30.quote_latency).toMatchObject({ min_ms: 300, max_ms: 900 });
     expect(b.trend.quote_latency).toMatchObject({ recent_median: 900, previous_median: 300, direction: "higher" });
-    expect(b.paid_test_buys.count).toBe(2);
+    expect(b.paid_test_buys.count).toBe(1)  // heurist-mesh has one seeded test-buy (asksurf report retired 2026-10-26);
     expect(b.paid_test_buys.history[0]).toMatchObject({ tx_hash: expect.any(String), delivered: expect.stringMatching(/^(yes|no)$/), explorer: expect.stringContaining("http") });
     const ep = b.endpoints.find((e: any) => e.url === "https://api.asksurf.ai/x402/test");
     expect(ep.listed).toBe(false);
@@ -134,7 +134,7 @@ describe("paid vendor report: content", () => {
 
   it("leaves the free summary endpoints unchanged", async () => {
     const { get } = setup();
-    const one = await get("/v1/trust/vendors/asksurf");
+    const one = await get("/v1/trust/vendors/heurist-mesh");
     expect(one.status).toBe(200);
     const d = await one.json();
     expect(d.kind).toBe("trust_vendor");
@@ -159,11 +159,11 @@ describe("paid vendor report: docs, MCP and A2A", () => {
 
   it("MCP: public gets price and how to pay; owner gets the report; vendor_id is required", async () => {
     const { mcp, fac } = setup();
-    const pub = await mcp("lumi_vendor_report", { vendor_id: "asksurf" });
+    const pub = await mcp("lumi_vendor_report", { vendor_id: "heurist-mesh" });
     expect(pub.isError).toBe(true);
     expect(pub.content[0].text).toMatch(/0\.02 USDC on Base Sepolia, or 0\.015 XRP or 0\.02 RLUSD or 0\.02 USDC on the XRP Ledger/);
     expect(pub.content[0].text).toContain(`${BASE}${PATH}`);
-    const own = await mcp("lumi_vendor_report", { vendor_id: "asksurf" }, { Authorization: `Bearer ${KEY}` });
+    const own = await mcp("lumi_vendor_report", { vendor_id: "heurist-mesh" }, { Authorization: `Bearer ${KEY}` });
     expect(own.isError).toBeUndefined();
     expect(JSON.parse(own.content[0].text)).toMatchObject({ kind: "trust_vendor_report", access: { mode: "owner", charged: false } });
     expect((await mcp("lumi_vendor_report", {})).content[0].text).toContain("vendor_id");
@@ -174,10 +174,10 @@ describe("paid vendor report: docs, MCP and A2A", () => {
 
   it("A2A: vendor_report skill returns live terms for the vendor's report URL", async () => {
     const { a2a } = setup();
-    const p = await a2a([{ text: "vendor report asksurf" }]);
+    const p = await a2a([{ text: "vendor report heurist-mesh" }]);
     expect(p[1].data.url).toBe(`${BASE}${PATH}`);
     expect(p[1].data.options.map((o: any) => o.amount)).toEqual(["0.02", "0.015", "0.02", "0.02"]);
-    expect((await a2a([{ data: { skill: "vendor_report", vendor_id: "asksurf" } }]))[1].data.url).toBe(`${BASE}${PATH}`);
+    expect((await a2a([{ data: { skill: "vendor_report", vendor_id: "heurist-mesh" } }]))[1].data.url).toBe(`${BASE}${PATH}`);
     expect((await a2a([{ data: { skill: "vendor_report" } }]))[1].data.error).toBe("missing_vendor_id");
     expect((await a2a([{ text: "vendor trust scores" }]))[0].text).toMatch(/observations/);
   });

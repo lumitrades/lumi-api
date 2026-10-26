@@ -16,7 +16,7 @@ function mk() {
 
 describe("vendor report: HTML page for unpaid browser visits", () => {
   it("a browser gets a small page explaining the $0.02 x402 call, with docs links; nothing charged", async () => {
-    const r = await mk()("/v1/trust/vendors/asksurf/report", { Accept: BROWSER });
+    const r = await mk()("/v1/trust/vendors/heurist-mesh/report", { Accept: BROWSER });
     expect(r.status).toBe(200);
     expect(r.headers.get("content-type")).toMatch(/text\/html/);
     expect(r.headers.get("vary")).toMatch(/Accept/);
@@ -24,8 +24,8 @@ describe("vendor report: HTML page for unpaid browser visits", () => {
     expect(html).toContain("$0.02");
     expect(html).toContain("x402");
     expect(html).toContain(`${BASE}/openapi.json`);
-    expect(html).toContain(`${BASE}/v1/trust/vendors/asksurf`);
-    expect(html).toContain("AskSurf");
+    expect(html).toContain(`${BASE}/v1/trust/vendors/heurist-mesh`);
+    expect(html).toContain("Heurist Mesh");
   });
   it("escapes unknown ids", async () => {
     const html = await (await mk()("/v1/trust/vendors/%3Cscript%3E/report", { Accept: BROWSER })).text();
@@ -34,9 +34,9 @@ describe("vendor report: HTML page for unpaid browser visits", () => {
   it("agents still get the 402 (JSON, */*, no Accept, or any payment header)", async () => {
     const get = mk();
     for (const h of [{ Accept: "application/json" }, { Accept: "*/*" }, {}, { Accept: "application/json, text/html;q=0.5" }] as Record<string, string>[]) {
-      expect((await get("/v1/trust/vendors/asksurf/report", h)).status).toBe(402);
+      expect((await get("/v1/trust/vendors/heurist-mesh/report", h)).status).toBe(402);
     }
-    const paid = await get("/v1/trust/vendors/asksurf/report", { Accept: BROWSER, "PAYMENT-SIGNATURE": "not-a-real-payment" });
+    const paid = await get("/v1/trust/vendors/heurist-mesh/report", { Accept: BROWSER, "PAYMENT-SIGNATURE": "not-a-real-payment" });
     expect(paid.status).not.toBe(200);
     expect(paid.headers.get("content-type") ?? "").not.toMatch(/text\/html/);
   });

@@ -18,16 +18,29 @@ export const RETIRED_TOOLS = ["lumi_signal", "lumi_lite", "lumi_scan", "lumi_lev
 export const RETIRED_SKILLS = ["signal", "lite", "scan", "levels", "slate", "brief", "coins", "market", "macro_yen", "sentiment", "events", "events_48h",
   "funding", "fear_greed", "institutional"];
 
+/** Retired vendor reports (2026-10-26, owner approved 11:22 AM CT): only these vendors' GET /v1/trust/vendors/<id>/report
+ *  answers 410 Gone (never quoted, never settled). The vendor's data stays; every other vendor's report is unchanged. */
+export const RETIRED_VENDOR_REPORTS_ON = "2026-10-26";
+export const RETIRED_VENDOR_REPORTS = ["asksurf"];
+const RETIRED_VENDOR_REPORT_RE = new RegExp(`^/v1/trust/vendors/(?:${RETIRED_VENDOR_REPORTS.join("|")})/report/?$`, "i");
+
+export function isRetiredVendorReport(path: string): boolean {
+  return RETIRED_VENDOR_REPORT_RE.test(path);
+}
+
 export function isRetiredPath(path: string): boolean {
-  return RETIRED_PATH_RE.test(path);
+  return RETIRED_PATH_RE.test(path) || isRetiredVendorReport(path);
 }
 
 export function retiredBody(path: string, base = "") {
+  const vendorReport = isRetiredVendorReport(path);
   return {
     error: "gone",
     status: 410,
     path,
-    detail: `This endpoint was retired on ${RETIRED_ON}. Lumi now offers x402 seller checks only. Nothing is sold or charged here.`,
+    detail: vendorReport
+      ? `This vendor report was retired on ${RETIRED_VENDOR_REPORTS_ON}. Nothing is sold or charged here.`
+      : `This endpoint was retired on ${RETIRED_ON}. Lumi now offers x402 seller checks only. Nothing is sold or charged here.`,
     use: `${base}${RETIRED_USE}`,
     use_detail: "Lumi now checks x402 sellers before you pay: GET /v1/check?url=<x402 resource> (free).",
     note: "Not charged.",

@@ -176,7 +176,7 @@ describe("Base settlement via CDP with keyless fallback", () => {
       settle: (b) => jsonResponse(200, { success: true, transaction: TX, network: "eip155:8453", payer: b.paymentPayload.payload.authorization.from }, { "EXTENSION-RESPONSES": bazaarOk }),
     });
     const { app, k } = await s.ready();
-    const r = await payBase(app, "/v1/trust/vendors/asksurf/report", true);
+    const r = await payBase(app, "/v1/trust/vendors/heurist-mesh/report", true);
     expect(r.status).toBe(200);
     expect((await r.json()).payment).toMatchObject({ transaction: TX, network: "eip155:8453", asset: "USDC", amount: "0.02" });
     expect(s.calls.map((c) => `${c.fac}${c.path}`)).toEqual(["cdp/verify", "cdp/settle"]);
@@ -186,10 +186,10 @@ describe("Base settlement via CDP with keyless fallback", () => {
       expect(fromB64u(cl).uris).toEqual([`POST cdp.test/platform/v2/x402${c.path}`]);
       expect(await crypto.subtle.verify({ name: "Ed25519" }, k.publicKey, Buffer.from(sig, "base64url"), new TextEncoder().encode(`${h}.${cl}`))).toBe(true);
       const pp = c.body.paymentPayload;
-      expect(pp.resource).toMatchObject({ url: "http://lumi.test/v1/trust/vendors/asksurf/report", mimeType: "application/json" });
+      expect(pp.resource).toMatchObject({ url: "http://lumi.test/v1/trust/vendors/heurist-mesh/report", mimeType: "application/json" });
       expect(pp.resource.description.length).toBeLessThanOrEqual(500);
       expect(pp.extensions.bazaar.routeTemplate).toBe("/v1/trust/vendors/:id/report");
-      expect(pp.extensions.bazaar.info.input.pathParams).toEqual({ id: "asksurf" });
+      expect(pp.extensions.bazaar.info.input.pathParams).toEqual({ id: "heurist-mesh" });
       const info = extractDiscoveryInfo(pp, c.body.paymentRequirements);
       expect(info?.resourceUrl).toBe("http://lumi.test/v1/trust/vendors/:id/report");
     }

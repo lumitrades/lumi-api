@@ -30,7 +30,7 @@ describe("paid-route discovery descriptions carry no embedded price", () => {
   it("every live 402 (body and PAYMENT-REQUIRED header) uses the v2 text without a price", async () => {
     const a = app();
     for (const e of PAID_ENDPOINTS) {
-      const path = e.route === "trust_check" ? `${e.example}?url=${encodeURIComponent("https://api.example.com/v1/data")}` : e.route === "vendor_report" ? "/v1/trust/vendors/asksurf/report" : e.route === "receipts" ? e.path : e.example;
+      const path = e.route === "trust_check" ? `${e.example}?url=${encodeURIComponent("https://api.example.com/v1/data")}` : e.route === "vendor_report" ? "/v1/trust/vendors/heurist-mesh/report" : e.route === "receipts" ? e.path : e.example;
       const r = await a.fetch(new Request(BASE + path));
       expect(r.status, path).toBe(402);
       const body = await r.json();

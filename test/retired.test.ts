@@ -146,3 +146,36 @@ describe("retired trading routes (2026-10-25)", () => {
     for (const t of PAID_TOOLS) expect(t.name).not.toMatch(/funding|fear|institutional/);
   });
 });
+
+describe("retired vendor report: asksurf (2026-10-26)", () => {
+  const PATHS = ["/v1/trust/vendors/asksurf/report", "/v1/trust/vendors/asksurf/report/", "/v1/trust/vendors/ASKSURF/report", "/v1/trust/vendors/asksurf/report?format=md"];
+  it("answers 410 Gone with a short JSON body, never a 402, with or without payment headers", async () => {
+    const { get, fac } = setup();
+    for (const p of PATHS) {
+      for (const h of PAY_HEADERS) {
+        const r = await get(p, h as Record<string, string>);
+        expect(r.status, `${p} ${Object.keys(h)}`).toBe(410);
+        expect(r.headers.get("PAYMENT-REQUIRED"), p).toBeNull();
+        expect(r.headers.get("PAYMENT-RESPONSE"), p).toBeNull();
+        const b: any = await r.json();
+        expect(b.error).toBe("gone");
+        expect(b.detail).toMatch(/vendor report was retired on 2026-10-26/);
+        expect(b.note).toBe("Not charged.");
+        expect(JSON.stringify(b)).not.toMatch(/accepts|x402Version/);
+      }
+    }
+    expect(fac.calls.length).toBe(0);
+  });
+
+  it("leaves every other vendor's report and the asksurf vendor data untouched", async () => {
+    const { get } = setup();
+    expect(isRetiredPath("/v1/trust/vendors/asksurf")).toBe(false);
+    expect(isRetiredPath("/v1/trust/vendors/asksurf-x/report")).toBe(false);
+    expect(isRetiredPath("/v1/trust/vendors/x-asksurf/report")).toBe(false);
+    const other = await get("/v1/trust/vendors/heurist-mesh/report");
+    expect(other.status).toBe(402);
+    expect(other.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
+    const list: any = await (await get("/v1/trust/vendors")).json();
+    expect(JSON.stringify(list)).toContain("asksurf");
+  });
+});

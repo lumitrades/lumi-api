@@ -18,7 +18,7 @@ const kp = deriveKeypair(generateSeed({ entropy: new Uint8Array(16).fill(9) }));
 const BUYER = deriveAddress(kp.publicKey);
 
 async function signFor(tx: string, ts: number, extra: Partial<PendingBuy> = {}): Promise<Receipt> {
-  const b: PendingBuy = { kind: "vendor", ref: "asksurf", endpoint: "https://x402.asksurf.ai/x402/xrpl/data/v1/news/feed", domain: null, pay_to: null, ts, network: "xrpl:0", tx_hash: tx, amount: "0.006", asset: "RLUSD", http_status: 200, data_returned: true, latency_ms: 700, summary: "ok", source: "lumi_test_buy", ...extra };
+  const b: PendingBuy = { kind: "vendor", ref: "heurist-mesh", endpoint: "https://mesh.heurist.xyz/x402/xrpl/agents/FundingRateAgent/get_all_funding_rates", domain: null, pay_to: null, ts, network: "xrpl:0", tx_hash: tx, amount: "0.006", asset: "RLUSD", http_status: 200, data_returned: true, latency_ms: 700, summary: "ok", source: "lumi_test_buy", ...extra };
   const body = buildReceiptBody(b, { payer: BUYER, pay_to: "ra9b6JX5aPVbdJhogDDddsRAcasWg7gzC3", ledger_result: "tesSUCCESS", ledger_index: 1 }, { issuedAt: new Date(NOW).toISOString() });
   const h = await receiptHash(body);
   const message = receiptMessage("xrpl:0", tx, h);
@@ -45,18 +45,18 @@ describe("H-2 signed receipts are served exactly as signed", () => {
     const fac = happyFacilitator();
     const app = createApp(ENV as any, { fetch: makeFetch(fac), log: () => {}, now: () => NOW, trustStore: store, receiptStore: rs } as any);
     const get = (p: string, h: Record<string, string> = {}) => app.fetch(new Request(BASE + p, { headers: h }));
-    const first = await (await get("/v1/trust/vendors/asksurf/report", { Authorization: `Bearer ${KEY}` })).json();
+    const first = await (await get("/v1/trust/vendors/heurist-mesh/report", { Authorization: `Bearer ${KEY}` })).json();
     const hist: any[] = first.paid_test_buys?.history ?? [];
     expect(hist.length).toBeGreaterThan(0);
     const stored: Receipt[] = [];
     for (const h of hist) {
       const r = await signFor(h.tx_hash, Date.parse(h.at ?? h.ts ?? new Date(NOW - 3_600_000).toISOString()));
       stored.push(r);
-      await rs.put([{ tx_hash: h.tx_hash, network: "xrpl:0", kind: "vendor", ref: "asksurf", receipt: r }]);
+      await rs.put([{ tx_hash: h.tx_hash, network: "xrpl:0", kind: "vendor", ref: "heurist-mesh", receipt: r }]);
     }
     expect(stored.some((r) => /\.\d{3}Z$/.test(r.delivery.observed_at))).toBe(true);
-    const q = await (await get("/v1/trust/vendors/asksurf/report")).json();
-    const paid = await get("/v1/trust/vendors/asksurf/report", { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[2]) });
+    const q = await (await get("/v1/trust/vendors/heurist-mesh/report")).json();
+    const paid = await get("/v1/trust/vendors/heurist-mesh/report", { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[2]) });
     expect(paid.status).toBe(200);
     const b = await paid.json();
     expect(b.payment).toBeTruthy();

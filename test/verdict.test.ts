@@ -287,8 +287,8 @@ describe("observed on-chain payments (activity)", () => {
 
   it("the paid vendor report shows the same activity block (bands only)", async () => {
     const s = await setup();
-    await s.owner("/v1/owner/activity", { source: "test", rows: [row({ seller: "asksurf", domains: ["asksurf.ai"], pay_to: ["eip155:8453:0x" + "a".repeat(40)], payer_groups_30d: 150 })] });
-    const r = await s.owner("/v1/trust/vendors/asksurf/report");
+    await s.owner("/v1/owner/activity", { source: "test", rows: [row({ seller: "heurist-mesh", domains: ["mesh.heurist.xyz"], pay_to: ["eip155:8453:0x" + "a".repeat(40)], payer_groups_30d: 150 })] });
+    const r = await s.owner("/v1/trust/vendors/heurist-mesh/report");
     expect(r.status).toBe(200);
     const b = await r.json();
     expect(b.observed_onchain_payments).toMatchObject({ name: ACTIVITY_NAME, shown: true, payer_groups_30d: "100–999" });
