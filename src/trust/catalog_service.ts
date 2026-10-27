@@ -1,5 +1,6 @@
 /** Catalog orchestration: cron scheduling, queue consumer, lookups and owner-posted purchase evidence. */
 import { isExcludedUrl } from "./excluded";
+import { classifyProbe, classifySkipReason, nextReach, reachChanged, reachStateOf, REACH_POST_MAX, type ReachState } from "./reachability";
 import type { Receipt, ReceiptStore } from "./receipts";
 import { dataReturnedView, deliveryCounts, deliveryState, guardBuy, inconclusiveReason, INCONCLUSIVE_REASONS, isInconclusiveReason } from "./delivery";
 import type { D1Like } from "../config";
@@ -332,6 +333,13 @@ export function createCatalog(deps: CatalogDeps) {
     if (!(await underBudget("probe"))) return { skipped: "daily write budget" };
     const rows = (await store.range(job.after, PROBE_BATCH)).filter((r) => r.method !== "MCP" && r.last_seen > t - DELISTED_AFTER_MS);
     const results = await probeAll(rows, t);
+    // Reachability (dead-listing flags) rides in the same UPDATE as the probe columns: no extra row or statement.
+    const prevById = new Map(rows.map((r) => [r.id, r]));
+    for (const p of results) {
+      const prev = reachStateOf(prevById.get(p.id));
+      const next = nextReach(prev, classifyProbe(p));
+      if (reachChanged(prev, next)) p.reach = next;
+    }
     const w = await store.saveProbes(results);
     if (deps.onStatusChanges) {
       const byId = new Map(rows.map((r) => [r.id, r]));
@@ -869,10 +877,62 @@ export function createCatalog(deps: CatalogDeps) {
     return json(ins === "inserted" ? 201 : 200, { recorded: ins === "inserted", duplicate: ins === "duplicate", tx_hash: tx, explorer: explorerFor(network, tx) });
   }
 
+  /**
+   * Owner-only: reachability results from the operator box test-buyer's unpaid quote step (it stopped before paying).
+   * Body: {checks: [{resource, reason, checked_at}]} (<= REACH_POST_MAX). `reason` is the buyer's skip reason text,
+   * classified here by the same rules as Lumi's own quote check (./reachability.ts). Skips that are about Lumi's own
+   * limits (budget, balance, listed price) and unknown resources are ignored and counted. One UPDATE per listing whose
+   * state changed. Never touches scores, buys or spending.
+   */
+  async function postReachability(request: Request): Promise<Response> {
+    if (!(await deps.isOwner(request))) return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
+    const noStore = { "Cache-Control": "no-store" };
+    let b: any;
+    try { b = await request.json(); } catch { return json(400, { error: "invalid_json" }, noStore); }
+    const checks = Array.isArray(b?.checks) ? b.checks : null;
+    if (!checks) return json(400, { error: "checks_required" }, noStore);
+    if (checks.length > REACH_POST_MAX) return json(400, { error: "too_many_checks", max: REACH_POST_MAX }, noStore);
+    const t = now();
+    let ignored = 0, excluded = 0;
+    const parsed: { resource: string; ts: number; kind: ReturnType<typeof classifySkipReason> & {} }[] = [];
+    for (const c of checks) {
+      const resource = typeof c?.resource === "string" ? normalizeUrl(c.resource) : null;
+      if (!resource) { ignored++; continue; }
+      if (isExcludedUrl(resource)) { excluded++; continue; }
+      const kind = classifySkipReason(typeof c?.reason === "string" ? c.reason.slice(0, 300) : "");
+      const ts = typeof c?.checked_at === "string" ? Date.parse(c.checked_at) : Number(c?.checked_at);
+      // Not a reachability signal, or a time that is unreadable / in the future / older than 30 days.
+      if (!kind || !Number.isFinite(ts) || ts > t + 300_000 || ts < t - 30 * 86_400_000) { ignored++; continue; }
+      parsed.push({ resource, ts, kind });
+    }
+    if (!parsed.length) return json(200, { received: checks.length, recorded: 0, unknown: 0, ignored, excluded, written: 0 }, noStore);
+    if (!(await underBudget("probe"))) return json(429, { error: "daily_write_budget", retryable: true }, noStore);
+    const resources = [...new Set(parsed.map((x) => x.resource))];
+    const rows = new Map<string, Awaited<ReturnType<CatalogStore["byResource"]>> & {}>();
+    for (let i = 0; i < resources.length; i += 90) for (const r of await store.byResources(resources.slice(i, i + 90))) rows.set(r.resource, r);
+    const state = new Map<number, { id: number } & ReachState>();
+    const first = new Map<number, ReachState>();
+    let unknown = 0, recorded = 0;
+    for (const c of parsed.sort((a, x) => a.ts - x.ts)) {
+      const row = rows.get(c.resource);
+      if (!row) { unknown++; continue; }
+      if (!first.has(row.id)) first.set(row.id, reachStateOf(row));
+      const prev = state.get(row.id) ?? { id: row.id, ...first.get(row.id)! };
+      state.set(row.id, { id: row.id, ...nextReach(prev, { ts: c.ts, ...c.kind }) });
+      recorded++;
+    }
+    const changed = [...state.values()].filter((s) => reachChanged(first.get(s.id)!, s));
+    const w = changed.length ? await store.saveReach(changed) : 0;
+    if (w) await store.addCounter(dayKey(t), w);
+    deps.log({ event: "catalog_reachability", received: checks.length, recorded, unknown, ignored, excluded, written: w });
+    return json(200, { received: checks.length, recorded, unknown, ignored, excluded, written: w }, noStore);
+  }
+
   async function handle(request: Request, url: URL, base: string): Promise<Response | null> {
     const path = url.pathname;
     if (request.method === "GET" && path === "/v1/trust/catalog") return json(200, await browseDoc(url, base), { "Cache-Control": "public, max-age=300" });
     if (request.method === "POST" && path === "/v1/trust/catalog/observations") return postObservation(request);
+    if (request.method === "POST" && path === "/v1/trust/catalog/reachability") return postReachability(request);
     if (request.method === "POST" && (path.startsWith("/v1/trust/catalog/evidence/") || path === "/v1/trust/catalog/buy-queue")) return postEvidence(request, url);
     if (request.method === "GET" && path === "/v1/trust/catalog/buy-queue") {
       if (!(await deps.isOwner(request))) return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });

@@ -504,6 +504,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       for (const r of (v?.reasons ?? []) as any[]) if (r?.severity === "block" || SAFETY_WARN_CODES.has(r?.code)) findings.push({ code: String(r.code), detail: String(r.detail ?? "") });
       for (const c of ((v?.live_alert as any)?.changes ?? []) as any[]) findings.push({ code: `live_${c.field}_change`, detail: String(c.text ?? "") });
       if (v?.label === "checks_failed" && !findings.some((f) => f.code === "paid_no_data")) findings.push({ code: "checks_failed", detail: LABELS.checks_failed });
+      // Listing reachability caution (factual; never part of the score): the quote's payment address differs from the listing.
+      if ((v?.reachability as any)?.flag === "pay_to_differs") findings.push({ code: "listing_quote_pay_to_differs", detail: String((v.reachability as any).note ?? "") });
       return {
         checked: true, active: findings.length > 0, as_of: new Date(t).toISOString(),
         findings, live_alert: v?.live_alert ?? null,
@@ -540,7 +542,10 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const liveAlert = host ? liveAlertView(await catalogStore.getMeta(LIVE_ALERT_PREFIX + host).catch(() => null), now()) : null;
     const lab = labelFor({ check: { decision: String(v.verdict), reasons: v.reasons ?? [] }, tests, now: now(), th: verdictTh, probe: probeRow, probeScope: scope, liveAlert: !!liveAlert });
     v.live_alert = liveAlert;
-    v.data_age = dataAge([tests.last_delivered_at ? Date.parse(tests.last_delivered_at) : null, probeRow?.checked_at ?? null, Date.parse(exact?.catalog?.entries?.[0]?.quote_checks?.last_checked_at ?? dom?.catalog?.entries?.[0]?.quote_checks?.last_checked_at ?? "")], now());
+    // Reachability of the exact listing only (dead-listing flags): never borrowed from another endpoint on the domain.
+    const reach = exact?.catalog?.entries?.[0]?.reachability ?? null;
+    v.reachability = reach;
+    v.data_age = dataAge([tests.last_delivered_at ? Date.parse(tests.last_delivered_at) : null, probeRow?.checked_at ?? null, Date.parse(exact?.catalog?.entries?.[0]?.quote_checks?.last_checked_at ?? dom?.catalog?.entries?.[0]?.quote_checks?.last_checked_at ?? ""), reach?.last_checked_at ? Date.parse(reach.last_checked_at) : null], now());
     v.free_checks = probeRowPublic(probeRow, tests.last_delivered_at ? 1 : 0, scope);
     v.label = lab.label;
     v.label_text = LABELS[lab.label];

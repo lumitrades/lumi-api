@@ -130,6 +130,10 @@ export function checkPayload(o: {
     // Cached-data age, and any safety change a live check found (shown free, at once).
     data_age: v.data_age ?? null,
     live_alert: v.live_alert ?? null,
+    // Listing reachability (free): looks dead after 3 failed checks on separate occasions, down when checked, no paywall,
+    // quote payTo differs, or needs a different request. Each carries last_checked_at and clears on a later answer.
+    // Disclosure only: never an input to the decision, label or score.
+    reachability: v.reachability ?? null,
     paid: o.paid,
   };
 }

@@ -7,6 +7,7 @@
 import type { D1Like } from "../config";
 import { dataReturnedView, deliveryCounts, deliveryState, inconclusiveReason } from "./delivery";
 import { isExcludedEntry } from "./excluded";
+import { reachView, type ReachState } from "./reachability";
 
 export const DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
 /**
@@ -230,6 +231,13 @@ export interface CatalogRow {
   probe_error: string | null;
   probe_hist: string | null;
   probe_lat_hist: string | null;
+  /** Reachability (dead-listing flags, ./reachability.ts, migration 0031). Optional: null/absent until first recorded. */
+  reach_at?: number | null;
+  reach_kind?: string | null;
+  reach_detail?: string | null;
+  reach_strikes?: number | null;
+  reach_strike_at?: number | null;
+  reach_since?: number | null;
 }
 
 export interface ProbeResult {
@@ -244,6 +252,8 @@ export interface ProbeResult {
   error: string | null;
   hist: string;
   lat_hist: string;
+  /** Reachability state after this check; written in the same UPDATE (no extra row). */
+  reach?: ReachState;
 }
 
 export interface BuyRow {
@@ -304,6 +314,8 @@ export interface CatalogStore {
   maxId(): Promise<number>;
   range(afterId: number, limit: number): Promise<CatalogRow[]>;
   saveProbes(rows: ProbeResult[]): Promise<number>;
+  /** Reachability state per listing (one UPDATE per listing, batched). Returns rows written. */
+  saveReach(rows: ({ id: number } & ReachState)[]): Promise<number>;
   lookup(q: LookupQuery, limit: number): Promise<{ total: number; rows: CatalogRow[] }>;
   byResource(resource: string): Promise<CatalogRow | null>;
   /** Batched exact-resource lookup (licence feed). */
@@ -350,6 +362,7 @@ export function excludingStore(s: CatalogStore): CatalogStore {
     maxId: () => s.maxId(),
     range: async (a, l) => keep(await s.range(a, l)),
     saveProbes: (ps) => s.saveProbes(ps),
+    saveReach: (rs) => s.saveReach(rs),
     lookup: async (q, l) => { const r = await s.lookup(q, l); const rows = keep(r.rows); return { total: Math.max(0, r.total - (r.rows.length - rows.length)), rows }; },
     byResource: async (res) => { const r = await s.byResource(res); return r && isExcludedEntry(r) ? null : r; },
     byResources: async (rs) => keep(await s.byResources(rs)),
@@ -385,7 +398,7 @@ export class MemoryCatalogStore implements CatalogStore {
       if (!cdp && ex.source === CDP_SOURCE) continue;
       if ((cdp && ex.source !== CDP_SOURCE) || ex.sig !== l.sig || ex.last_seen < now - REFRESH_SEEN_MS || ((ex.quality_at ?? 0) < now - QUALITY_REFRESH_MS && qualityChanged(ex, l))) {
         const keep = { id: ex.id, first_seen: ex.first_seen };
-        const probe = Object.fromEntries(Object.entries(ex).filter(([k]) => k.startsWith("probe_")));
+        const probe = Object.fromEntries(Object.entries(ex).filter(([k]) => k.startsWith("probe_") || k.startsWith("reach_")));
         Object.assign(ex, rowFromListing(l, keep.id, now, cdp ? CDP_SOURCE : ex.source), probe, keep, { sig: l.sig });
         this.writes++;
       }
@@ -403,7 +416,18 @@ export class MemoryCatalogStore implements CatalogStore {
         probe_ts: p.ts, probe_status: p.status, probe_valid: p.valid ? 1 : 0, probe_pay_to_match: p.pay_to_match == null ? null : p.pay_to_match ? 1 : 0,
         probe_price_usd: p.price_usd, probe_price_match: p.price_match == null ? null : p.price_match ? 1 : 0, probe_latency_ms: p.latency_ms,
         probe_error: p.error, probe_hist: p.hist, probe_lat_hist: p.lat_hist,
+        ...(p.reach ?? {}),
       });
+      n++;
+    }
+    return n;
+  }
+  async saveReach(rs: ({ id: number } & ReachState)[]) {
+    let n = 0;
+    for (const { id, ...st } of rs) {
+      const r = this.rows.find((x) => x.id === id);
+      if (!r) continue;
+      Object.assign(r, st);
       n++;
     }
     return n;
@@ -492,7 +516,10 @@ function rowsWritten(res: unknown, fallback: number): number {
 
 const CAT_COLS =
   "id, resource, domain, reg_domain, pay_tos, method, body, networks, price_usd, accepts, service_name, description, calls_30d, payers_30d, last_called_at, quality_at, source, first_seen, last_seen, " +
-  "probe_ts, probe_status, probe_valid, probe_pay_to_match, probe_price_usd, probe_price_match, probe_latency_ms, probe_error, probe_hist, probe_lat_hist";
+  "probe_ts, probe_status, probe_valid, probe_pay_to_match, probe_price_usd, probe_price_match, probe_latency_ms, probe_error, probe_hist, probe_lat_hist, " +
+  "reach_at, reach_kind, reach_detail, reach_strikes, reach_strike_at, reach_since";
+const REACH_SET = "reach_at = ?, reach_kind = ?, reach_detail = ?, reach_strikes = ?, reach_strike_at = ?, reach_since = ?";
+const reachArgs = (r: ReachState) => [r.reach_at, r.reach_kind, r.reach_detail, r.reach_strikes, r.reach_strike_at, r.reach_since];
 
 export class D1CatalogStore implements CatalogStore {
   constructor(private db: D1Like) {}
@@ -539,12 +566,17 @@ export class D1CatalogStore implements CatalogStore {
         this.db
           .prepare(
             `UPDATE catalog SET probe_ts = ?2, probe_status = ?3, probe_valid = ?4, probe_pay_to_match = ?5, probe_price_usd = ?6, probe_price_match = ?7,
-               probe_latency_ms = ?8, probe_error = ?9, probe_hist = ?10, probe_lat_hist = ?11 WHERE id = ?1`,
+               probe_latency_ms = ?8, probe_error = ?9, probe_hist = ?10, probe_lat_hist = ?11${p.reach ? ", reach_at = ?12, reach_kind = ?13, reach_detail = ?14, reach_strikes = ?15, reach_strike_at = ?16, reach_since = ?17" : ""} WHERE id = ?1`,
           )
-          .bind(p.id, p.ts, p.status, p.valid ? 1 : 0, p.pay_to_match == null ? null : p.pay_to_match ? 1 : 0, p.price_usd, p.price_match == null ? null : p.price_match ? 1 : 0, p.latency_ms, p.error, p.hist, p.lat_hist),
+          .bind(p.id, p.ts, p.status, p.valid ? 1 : 0, p.pay_to_match == null ? null : p.pay_to_match ? 1 : 0, p.price_usd, p.price_match == null ? null : p.price_match ? 1 : 0, p.latency_ms, p.error, p.hist, p.lat_hist, ...(p.reach ? reachArgs(p.reach) : [])),
       ),
     );
     return rowsWritten(res, ps.length);
+  }
+  async saveReach(rs: ({ id: number } & ReachState)[]) {
+    if (!rs.length) return 0;
+    const res = await this.db.batch(rs.map((r) => this.db.prepare(`UPDATE catalog SET ${REACH_SET} WHERE id = ?`).bind(...reachArgs(r), r.id)));
+    return rowsWritten(res, rs.length);
   }
   async lookup(q: LookupQuery, limit: number) {
     const where: string[] = [];
@@ -840,6 +872,7 @@ export function catalogView(row: CatalogRow, buys: BuyRow[], dom: DomainRow | un
           ...(b.corrected_at ? { corrected_at: iso(b.corrected_at), corrections: "https://api.lumitrades.io/v1/monitor/corrections" } : {}),
         }))
       : [],
+    reachability: reachView(row),
     listed_until: row.last_seen < now - DELISTED_AFTER_MS ? iso(row.last_seen) : null,
   };
 }
@@ -873,6 +906,7 @@ export function catalogFreeView(row: CatalogRow, buys: BuyRow[], now: number) {
     test_buys: buys.length
       ? { count: buys.length, last_at: iso(last.ts), last_data_returned: dataReturnedView(last), last_delivery: deliveryState(last), ...deliveryCounts(buys) }
       : { count: 0 },
+    reachability: reachView(row),
     listed_until: row.last_seen < now - DELISTED_AFTER_MS ? iso(row.last_seen) : null,
   };
 }
