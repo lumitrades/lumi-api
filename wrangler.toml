@@ -26,7 +26,7 @@ invocation_logs = false   # no automatic per-request logs (request URLs/headers)
 XRPL_NETWORK = "xrpl:0"                                  # mainnet
 PAY_TO = "rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM"             # Lumi's receiving wallet (address only)
 FACILITATOR_URL = "https://xrpl-facilitator-mainnet.t54.ai"
-SOURCE_TAG = "804681468"
+SOURCE_TAG = "5864"                                     # Lumi's own tag ("LUMI" on a keypad), the pre-Oct-22 value
 PRICE_VENDOR_REPORT_XRP = "0.015"                        # $0.02 at XRP ~= $1.32 (Oct 22 2026); fixed, not repriced live
 # Stablecoins (XRPL issued tokens), offered as accepts[1] RLUSD and accepts[2] USDC. Issuers default to the
 # official ones per network (Ripple rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De, Circle rGm7WCVp9gb4jZHWTEtGUr4dd74z2XuWhE).
@@ -122,7 +122,7 @@ class_name = "InvoiceGuard"
 XRPL_NETWORK = "xrpl:1"
 PAY_TO = "rUJvhZ513MnBQVBcNap9NPJmKDWdKjyhC5"            # throwaway testnet receiver from `npm run testnet:setup`; replace with yours
 FACILITATOR_URL = "https://xrpl-facilitator-testnet.t54.ai"
-SOURCE_TAG = "804681468"
+SOURCE_TAG = "5864"                                     # Lumi's own tag ("LUMI" on a keypad), the pre-Oct-22 value
 PRICE_VENDOR_REPORT_XRP = "0.015"
 DATA_BASE_URL = "https://lumitrades.io/data"
 DATA_TTL_SECONDS = "60"
