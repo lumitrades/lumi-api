@@ -1,5 +1,6 @@
 /** Catalog orchestration: cron scheduling, queue consumer, lookups and owner-posted purchase evidence. */
 import { isExcludedUrl } from "./excluded";
+import { marketFromHistogram, priceVsMarket, PRICE_LABEL_MULTIPLE, PRICE_MARKET_EVERY_MS, PRICE_MARKET_META, type PriceMarket } from "./price_market";
 import { classifyProbe, classifySkipReason, nextReach, reachChanged, reachStateOf, REACH_POST_MAX, type ReachState } from "./reachability";
 import type { Receipt, ReceiptStore } from "./receipts";
 import { dataReturnedView, deliveryCounts, deliveryState, guardBuy, inconclusiveReason, INCONCLUSIVE_REASONS, isInconclusiveReason } from "./delivery";
@@ -61,6 +62,8 @@ export interface CatalogDeps {
   onStatusChanges?: (changes: StatusChange[]) => Promise<void>;
   /** OFAC SDN screen (src/sanctions.ts): queued test-buys whose listing pays a listed address are withheld from the runner. */
   sanctions?: SanctionsScreen;
+  /** "Priced well above market average" needs the cheapest price at this multiple of the catalog median or more (default PRICE_LABEL_MULTIPLE). */
+  priceLabelMultiple?: number;
 }
 
 export interface StatusChange { ts: number; resource: string; field: "quote_valid" | "pays_listed_address" | "price_matches"; old: string | null; new: string | null }
@@ -221,6 +224,31 @@ export function createCatalog(deps: CatalogDeps) {
     }
   }
 
+  let marketMemo: { at: number; m: PriceMarket | null } | undefined;
+  /** Cached market price reference (meta row written by cron; memoised 15 min per isolate). Never computed on a request. */
+  async function priceMarket(): Promise<PriceMarket | null> {
+    const t = now();
+    if (marketMemo && t - marketMemo.at < 900_000) return marketMemo.m;
+    let m: PriceMarket | null = null;
+    try { const raw = await store.getMeta(PRICE_MARKET_META); m = raw ? (JSON.parse(raw) as PriceMarket) : null; } catch { m = marketMemo?.m ?? null; }
+    marketMemo = { at: t, m };
+    return m;
+  }
+
+  /** Recompute the market reference (one catalog-wide histogram read) and store it. Cron, at most every PRICE_MARKET_EVERY_MS. */
+  async function refreshPriceMarket(force = false): Promise<PriceMarket | null> {
+    if (!store.priceHistogram) return null;
+    const t = now();
+    if (!force) {
+      const cur = await store.getMeta(PRICE_MARKET_META).catch(() => null);
+      try { const c = cur ? (JSON.parse(cur) as PriceMarket) : null; if (c && t - c.computed_at < PRICE_MARKET_EVERY_MS) return c; } catch { /* recompute */ }
+    }
+    const m = marketFromHistogram(await store.priceHistogram(t), t);
+    await store.setMeta(PRICE_MARKET_META, JSON.stringify(m));
+    marketMemo = { at: t, m };
+    return m;
+  }
+
   /** Jobs are spaced `spacing` seconds apart (queue delay) so upstream APIs and vendors see a slow, steady rate. */
   async function send(jobs: CatalogJob[], spacing = 0) {
     if (!jobs.length) return;
@@ -295,6 +323,10 @@ export function createCatalog(deps: CatalogDeps) {
     }
     const st = await stats();
     if (!st || t - st.computed_at > STATS_EVERY_MS) await store.setMeta("stats", JSON.stringify(await store.computeStats(t)));
+    try {
+      const pm = await refreshPriceMarket();
+      if (pm && pm.computed_at === t) out.price_market = { overall_median_usd: pm.overall?.median_usd ?? null, listings: pm.overall?.listings ?? 0 };
+    } catch (e) { out.price_market_error = String(e); }
     deps.log({ event: "catalog_cron", ...out });
     return out;
   }
@@ -718,10 +750,14 @@ export function createCatalog(deps: CatalogDeps) {
     const buys = await store.buysFor(rows.map((r) => r.resource));
     const doms = free ? new Map<string, any>() : new Map((await store.domainInfo([...new Set(rows.map((r) => r.reg_domain).filter((x): x is string => !!x))])).map((x) => [x.domain, x]));
     const vet = await vet402For(rows, free).catch(() => new Map());
+    const market = rows.length ? await priceMarket() : null;
+    const multiple = deps.priceLabelMultiple ?? PRICE_LABEL_MULTIPLE;
     const entries: Array<{ tier: string } & Record<string, unknown>> = (free
       ? rows.map((r) => catalogFreeView(r, buys.filter((b) => b.resource === r.resource), t))
       : rows.map((r) => catalogView(r, buys.filter((b) => b.resource === r.resource), r.reg_domain ? doms.get(r.reg_domain) : undefined, t))
-    ).map((e, i) => (vet.has(rows[i].resource) ? { ...e, third_party: { vet402: vet.get(rows[i].resource) } } : e));
+    )
+      .map((e, i) => (vet.has(rows[i].resource) ? { ...e, third_party: { vet402: vet.get(rows[i].resource) } } : e))
+      .map((e, i) => { const pv = priceVsMarket(rows[i].accepts, market, multiple); return pv ? { ...e, price_vs_market: pv } : e; });
     if (!curated.length && !entries.length) {
       return {
         kind: "trust_lookup", query, observed: false, generated_at: iso(t),
@@ -991,7 +1027,7 @@ export function createCatalog(deps: CatalogDeps) {
 
   /** Owner correction: reclassify a stored catalog buy as inconclusive (Lumi-side). The prior summary is kept. */
   const markInconclusive = (tx: string, reason: string, summary: string) => deps.store.markInconclusive(tx, reason, summary, deps.now());
-  return { cron, consume, lookupDoc, summary, handle, startIngest, stats, xrplAgg, queueBuy, queueConfirmBuy, markInconclusive };
+  return { cron, consume, lookupDoc, priceMarket, refreshPriceMarket, summary, handle, startIngest, stats, xrplAgg, queueBuy, queueConfirmBuy, markInconclusive };
 }
 
 export type Catalog = ReturnType<typeof createCatalog>;

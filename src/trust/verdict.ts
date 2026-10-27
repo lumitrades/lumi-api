@@ -1,3 +1,4 @@
+import { notScoredDoc } from "./price_market";
 /**
  * ONE label vocabulary for the free /v1/check, the paid /v1/trust/check and /v1/verdict:
  *
@@ -218,7 +219,7 @@ export function thresholdsDoc(th: VerdictThresholds) {
     check_first: `Not enough positive evidence yet: a warning from the check, a failed test-buy that has not met the bar above, a pending review or re-test (paused up to ${APPEAL_PAUSE_HOURS} h), or no Lumi test-buy delivered within ${th.payMaxAgeDays} days.`,
     checks_passed: `The check found no warning, a Lumi paid test-buy delivered within ${th.payMaxAgeDays} days, and no newer free probe of that same bought endpoint failed.`,
     no_data: `Lumi has no observations (or has not checked this listing yet), its newest test-buy evidence is more than ${EVIDENCE_AGE.noDataAfterDays} days old, or it is Lumi itself. Not a negative finding.`,
-    not_scored: "A vendor score (0-100) exists only after at least one conclusive Lumi paid test-buy. Until then the score is null with status not_scored and a plain reason, and the label is check_first (untested, or probe_checked_only when the free probe passed). Free probes never produce a score on their own; with a test-buy they count for at most 0.25 of one.",
+    not_scored: "A vendor score (0-100) exists only after at least one conclusive Lumi paid test-buy. Until then the score is null with status not_scored and a plain reason, and the label is check_first (untested, or probe_checked_only when the free probe passed). Free probes never produce a score on their own; with a test-buy they count for at most 0.25 of one. " + notScoredDoc(),
     live_check: "The paid /v1/trust/check ($0.02) contacts the seller at call time (one unpaid request; Lumi never pays the seller in a live check) and compares the quote, price, payTo and TLS with Lumi's record. A safety-relevant change (a payTo Lumi has not seen, a price more than double the listed one, or TLS failing where it worked) sets check_first with live_check_safety_change on every check, free included, for 48 hours or until a live check matches the record again. The free /v1/check is cached and says how old its data is (data_age).",
     probe_scope: "When a free probe fails on a seller Lumi has test-bought with delivery, free_checks.failure_scope says where: bought_endpoint (the same endpoint; newer than the last delivered buy makes the label check_first), other_endpoint (a different endpoint of the domain; label unchanged, explained) or endpoint_not_recorded (older run; label unchanged, explained). Probes test the bought endpoint first.",
     evidence_age: EVIDENCE_AGE,

@@ -58,6 +58,7 @@ import { TRUST_DISCLAIMER } from "./lines";
 import { isRetiredPath, retiredResponse, RETIRED_ON } from "./retired";
 import { D1IdempotencyStore, MemoryIdempotencyStore, type IdempotencyStore } from "./idempotency";
 import { labelFor, LABELS, DEFINITION, FAILED_RULE, testBuyEvidence, thresholdsDoc, verdictThresholds, VERDICT_KIND, VERDICT_RULES_VERSION, DISPUTE_URL, CHECK_NOTE } from "./trust/verdict";
+import { notScoredReason, type NotScoredReason } from "./trust/price_market";
 import { createReviewGate, D1ReviewStore, MemoryReviewStore, appealUntil, type ReviewStore } from "./trust/reviews";
 import { relationshipConfig, relationshipFor, relationshipTag } from "./trust/relationship";
 import { D1ProbeStore, MemoryProbeStore, parseProbeRow, probeRowPublic, probeScope, PROBE_MAX_ROWS_PER_LOAD, type ProbeStore } from "./trust/probe_checked";
@@ -446,18 +447,33 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (ids.length !== 1) return null;
     return trust.vendorScore(ids[0]);
   }
-  const scoreView = (s: Awaited<ReturnType<typeof liveScore>>, tier: unknown) => s
+  /**
+   * Why a check's score is null, as a machine-readable code plus a plain note (priced_well_above_market |
+   * not_yet_test_bought | scores_for_curated_vendors_only). Disclosure only: never an input to a score, label or badge.
+   */
+  const notScoredFor = (exact: any, dom: any): NotScoredReason => {
+    const de = (Array.isArray(dom?.catalog?.entries) ? dom.catalog.entries : []) as any[];
+    const curated = (exact?.curated?.length ?? 0) + (dom?.curated?.length ?? 0) > 0;
+    return notScoredReason({
+      exact: exact?.catalog?.entries?.[0] ?? null,
+      domainEntries: de,
+      complete: !curated && de.length > 0 && Number(dom?.catalog?.total_matches) === de.length,
+      conclusiveBuys: testBuyEvidence(exact, dom).conclusive,
+    });
+  };
+  const scoreView = (s: Awaited<ReturnType<typeof liveScore>>, tier: unknown, ns?: NotScoredReason) => s
     ? {
         scored: s.score.value != null,
         status: s.score.status,
         ...(s.score.reason ? { reason: s.score.reason } : {}),
+        ...(s.score.value == null && ns ? ns : {}),
         vendor_id: s.vendor_id,
         value: s.score.value,
         confidence: s.score.confidence,
         tier: tier ?? null,
         paid_test_buys: s.score.samples.paid_test_buys,
       }
-    : { scored: false, status: "not_scored" as const, value: null, confidence: null, tier: tier ?? null, note: "Numeric scores exist for curated vendors only, and only after a conclusive Lumi test-buy; the tier comes from the catalog." };
+    : { scored: false, status: "not_scored" as const, ...(ns ?? {}), value: null, confidence: null, tier: tier ?? null, note: "Numeric scores exist for curated vendors only, and only after a conclusive Lumi test-buy; the tier comes from the catalog." };
 
   async function checkVerdict(input: { url: string; payTo?: string; amountUsd?: number; network?: string }, base: string, free: boolean) {
     const exact = (await trust.lookup({ url: input.url } as LookupQuery, base, free ? { free: true } : undefined)) as any;
@@ -588,7 +604,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     // One check core for /v1/check, /v1/trust/check and /v1/verdict: the same full catalog lookup and the same trustVerdict, so
     // the free check, the paid check and the verdict can never disagree for the same seller at the same time. Only the
     // response shape differs (checkPayload is answer-only).
-    const { verdict, host, exact } = clean ? await checkVerdict({ url: clean, payTo, amountUsd, network }, base, false) : await payToVerdict({ payTo: payTo!, amountUsd, network }, base);
+    const { verdict, host, exact, dom } = clean ? await checkVerdict({ url: clean, payTo, amountUsd, network }, base, false) : await payToVerdict({ payTo: payTo!, amountUsd, network }, base);
     if (verdict?.verdict === "block" && verdict?.reasons?.[0]?.code === "sanctioned_address") {
       const hit = sanctions.check(payTo);
       if (hit) sanctions.refuse("free_check", hit, host ? { url_host: host } : {});
@@ -598,7 +614,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const p = prioritySignal(verdict, exact, "free_check").catch((e) => { deps.log?.({ event: "buy_queue_error", source: "free_check", error: String(e) }); return null; });
       if (ctx) ctx.waitUntil(p); else await p;
     }
-    const score = host ? scoreView(await liveScore(host), verdict.matched?.tier) : null;
+    const score = host ? scoreView(await liveScore(host), verdict.matched?.tier, notScoredFor(exact, dom)) : null;
     const link = host ? `${base}/trust/v/${encodeURIComponent(host)}` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(payTo!)}`;
     const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict, score, link, paid: false });
     const t = now();
@@ -783,7 +799,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         if (hit) sanctions.refuse("trust_check", hit, { url_host: host });
       }
       const t = now();
-      const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: body, score: scoreView(await liveScore(host), (body as any).matched?.tier), link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: true });
+      const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: body, score: scoreView(await liveScore(host), (body as any).matched?.tier, notScoredFor(exact, dom)), link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: true });
       (body as any).lumi_receipt = await signResponse("trust_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
       const meta = metaFrom(t, t + 86_400_000, t + 30 * 60_000, t);
       // Runs once the check is served, paid or free trial: the same priority signal either way.
@@ -829,7 +845,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     const t = now();
     const link = `${base}/trust/v/${encodeURIComponent(host)}`;
-    const score = scoreView(await liveScore(host), check.matched?.tier);
+    const score = scoreView(await liveScore(host), check.matched?.tier, notScoredFor(exact, dom));
     // Identical to what GET /v1/check signs for this query at this moment (paid: false: the check itself is free).
     const checkBody = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: check, score, link, paid: false });
     const key = await signKey();
@@ -865,6 +881,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       seller_replies: replies,
       score: score.value,
       score_status: score.status,
+      ...("not_scored_reason" in score && score.not_scored_reason ? { not_scored_reason: score.not_scored_reason, not_scored_note: score.not_scored_note } : {}),
       observed_onchain_payments: act,
       free_checks: check.free_checks ?? null,
       relationship,
