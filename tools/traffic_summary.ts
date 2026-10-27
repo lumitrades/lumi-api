@@ -45,6 +45,17 @@ async function main() {
   list("Top user agents", s.top_user_agents);
   list("Top referrers", s.top_referrers);
   list("Top countries", s.top_countries);
+  const pf = s.payment_failures;
+  if (pf) {
+    const kv = (o: Record<string, number>) => Object.entries(o ?? {}).map(([k, v]) => `${k} ${v}`).join(", ") || "-";
+    console.log(`\nFailed payment attempts (payment header sent, request refused): ${pf.total}${pf.dropped_over_batch_cap ? ` (${pf.dropped_over_batch_cap} without detail)` : ""}`);
+    console.log(`  By reason: ${kv(pf.by_reason)}`);
+    console.log(`  By network: ${kv(pf.by_network)}`);
+    console.log(`  By x402 version: ${kv(pf.by_x402_version)}`);
+    console.log(`  By route: ${kv(pf.by_route)}`);
+    console.log(`  By UA family: ${kv(pf.by_ua_family)}`);
+    console.log(`  Daily: ${kv(pf.daily)}`);
+  }
 }
 
 main().catch((e) => {

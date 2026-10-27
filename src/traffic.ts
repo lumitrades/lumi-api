@@ -21,6 +21,24 @@ export interface TrafficRow {
   paid: boolean;
   /** Paid by one of Lumi's own wallets (sales is_test); set by the app from the recorded sale, absent on legacy rows. */
   paid_test?: boolean;
+  /** Set when the request carried a payment header and was refused (see payFailFrom). */
+  pay_fail?: PayFail;
+}
+
+/**
+ * One refused payment attempt (request carried PAYMENT-SIGNATURE or X-PAYMENT, response >= 400). Built from the request
+ * path, the refusal body's error code and the payment header's x402Version / scheme / network only. Never the payer
+ * address, signature, authorization, tx blob or any other payload field; addresses inside reason strings are masked.
+ */
+export interface PayFail {
+  ts: number;
+  route: string;
+  status: number;
+  reason: string;
+  network: string;
+  scheme: string;
+  x402_version: number | null;
+  ua_family: string;
 }
 
 /** One flushed aggregate: every request counted in one isolate during one flush window (single UTC day). */
@@ -44,6 +62,9 @@ export interface TrafficBatch {
   countries: Record<string, number>;
   /** distinct daily-rotating IP hashes seen in this batch (never raw IPs) */
   ips: string[];
+  /** Refused payment attempts in this batch (capped at PAY_FAIL_BATCH_MAX; overflow counted in pay_fails_dropped). */
+  pay_fails?: PayFail[];
+  pay_fails_dropped?: number;
 }
 
 export interface TrafficStore {
@@ -99,6 +120,63 @@ async function hmacHex(secret: string, msg: string): Promise<string> {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg)));
   return [...sig.slice(0, 8)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** The inbound x402 payment header (PAYMENT-SIGNATURE, else X-PAYMENT), or null. */
+export function paymentHeaderOf(request: Request): string | null {
+  return request.headers.get("PAYMENT-SIGNATURE") || request.headers.get("X-PAYMENT") || null;
+}
+
+const SAFE_TOKEN = /^[A-Za-z0-9:_.\-]{1,48}$/;
+/** x402Version / scheme / network from a payment header (v2: accepted.*, v1: top level). Nothing else is read out. */
+export function payHeaderMeta(header: string): { x402_version: number | null; scheme: string; network: string } {
+  const out = { x402_version: null as number | null, scheme: "unknown", network: "unknown" };
+  if (header.length > 16 * 1024) return { ...out, scheme: "oversize", network: "oversize" };
+  let obj: any;
+  try {
+    const b = atob(header.trim().replace(/-/g, "+").replace(/_/g, "/"));
+    obj = JSON.parse(new TextDecoder().decode(Uint8Array.from(b, (c) => c.charCodeAt(0))));
+  } catch {
+    return { ...out, scheme: "undecodable", network: "undecodable" };
+  }
+  if (!obj || typeof obj !== "object") return { ...out, scheme: "undecodable", network: "undecodable" };
+  const v = Number(obj.x402Version);
+  out.x402_version = Number.isInteger(v) && v >= 0 && v < 100 ? v : null;
+  const src = obj.accepted && typeof obj.accepted === "object" ? obj.accepted : obj;
+  if (typeof src.scheme === "string") out.scheme = SAFE_TOKEN.test(src.scheme) ? src.scheme : "other";
+  if (typeof src.network === "string") out.network = SAFE_TOKEN.test(src.network) ? src.network : "other";
+  return out;
+}
+
+/** Refusal reason safe to store: wallet addresses / hashes / long opaque tokens masked, short charset, 80 chars. */
+export function safeReason(raw: string): string {
+  return raw
+    .replace(/0x[0-9a-fA-F]{6,}/g, "0x*")
+    .replace(/\br[1-9A-HJ-NP-Za-km-z]{24,34}\b/g, "r*")
+    .replace(/\b[GCM][A-Z2-7]{55,68}\b/g, "G*")
+    .replace(/[A-Za-z0-9+/=]{24,}/g, "*")
+    .replace(/[^A-Za-z0-9:_.\- *]/g, "_")
+    .slice(0, 80) || "unknown";
+}
+
+/**
+ * The refused-payment event for a request/response pair, or null when the request carried no payment header or the
+ * response is not a refusal. `body` is the (JSON) response body text, read from a clone by the caller.
+ */
+export function payFailFrom(request: Request, status: number, body: string | null, now: number): PayFail | null {
+  const header = paymentHeaderOf(request);
+  if (!header || status < 400) return null;
+  let reason = `http_${status}`;
+  try {
+    const j = body ? JSON.parse(body) : null;
+    if (j && typeof j === "object") {
+      const e = typeof j.error === "string" ? j.error : typeof j.reason === "string" ? j.reason : null;
+      if (e) reason = typeof j.reason === "string" && j.reason !== e ? `${e}:${j.reason}` : e;
+    }
+  } catch { /* non-JSON refusal: keep http_<status> */ }
+  if (/header is required/i.test(reason)) reason = "payment_header_missing";
+  const meta = payHeaderMeta(header);
+  return { ts: now, route: safePath(new URL(request.url).pathname), status, reason: safeReason(reason), ...meta, ua_family: uaFamily(request.headers.get("User-Agent")) };
 }
 
 /** Build the log row for one request/response pair. `secret` keys the IP hash (no secret = no hash). */
@@ -200,7 +278,16 @@ export function countRow(b: TrafficBatch, r: TrafficRow, ips?: Set<string>) {
   inc(b.refs, r.ref_host);
   inc(b.countries, r.country);
   if (r.ip_hash && (!ips || !ips.has(r.ip_hash))) { ips?.add(r.ip_hash); b.ips.push(r.ip_hash); }
+  if (r.pay_fail) {
+    const list = (b.pay_fails ??= []);
+    if (list.length < PAY_FAIL_BATCH_MAX) list.push(r.pay_fail);
+    else b.pay_fails_dropped = (b.pay_fails_dropped ?? 0) + 1;
+  }
 }
+
+export const PAY_FAIL_BATCH_MAX = 100;
+/** A refused payment flushes its batch at once, but at most once per this window per isolate (D1 write budget). */
+export const PAY_FAIL_FLUSH_MS = 10_000;
 
 export const TRAFFIC_FLUSH_MS = 120_000;
 export const TRAFFIC_FLUSH_MAX = 500;
@@ -212,6 +299,7 @@ export const TRAFFIC_FLUSH_MAX = 500;
  */
 export class TrafficBuffer {
   private open: { b: TrafficBatch; ips: Set<string>; started: number } | undefined;
+  private lastFailFlush = -Infinity;
   constructor(private store: TrafficStore, private opts: { flushMs?: number; maxRequests?: number } = {}) {}
   add(row: TrafficRow, now: number): Promise<void> | undefined {
     let pending: Promise<void> | undefined;
@@ -220,7 +308,11 @@ export class TrafficBuffer {
     countRow(this.open.b, row, this.open.ips);
     // A paid call flushes at once: paid calls are rare (one extra D1 row each) and often arrive in a short burst on an
     // isolate that then idles and is evicted before the 2-minute window would flush, which silently lost them (Oct 23-25 2026).
-    const due = row.paid || now - this.open.started >= (this.opts.flushMs ?? TRAFFIC_FLUSH_MS) || this.open.b.requests >= (this.opts.maxRequests ?? TRAFFIC_FLUSH_MAX);
+    // A refused payment attempt also flushes at once (rare, and the evidence we need), rate-capped per isolate so a client
+    // retrying a bad header in a loop costs at most one D1 row per PAY_FAIL_FLUSH_MS; the rest ride the normal window.
+    const failDue = !!row.pay_fail && now - this.lastFailFlush >= PAY_FAIL_FLUSH_MS;
+    if (failDue) this.lastFailFlush = now;
+    const due = row.paid || failDue || now - this.open.started >= (this.opts.flushMs ?? TRAFFIC_FLUSH_MS) || this.open.b.requests >= (this.opts.maxRequests ?? TRAFFIC_FLUSH_MAX);
     if (due) {
       const f = this.flush();
       pending = pending ? Promise.all([pending, f]).then(() => {}) : f;
@@ -269,6 +361,9 @@ export async function trafficSummary(store: TrafficStore, now: number, days: num
     countRow(b, r);
   }
   const all = [...batches, ...byDay.values()];
+  const fails: PayFail[] = [];
+  let failsDropped = 0;
+  for (const b of batches) { if (b.pay_fails) fails.push(...b.pay_fails); failsDropped += b.pay_fails_dropped ?? 0; }
   const daily = new Map<string, { requests: number; visitors: Set<string>; r402: number; paid: number; browser: number }>();
   for (let t = since; t <= now; t += 86_400_000) daily.set(new Date(t).toISOString().slice(0, 10), { requests: 0, visitors: new Set(), r402: 0, paid: 0, browser: 0 });
   const paths = new Map<string, number>(), p402 = new Map<string, number>(), ppaid = new Map<string, number>();
@@ -339,11 +434,40 @@ export async function trafficSummary(store: TrafficStore, now: number, days: num
       ...(ledger ? { paid_outside: L(day).outside, paid_test: L(day).test, usd_outside: usd6(L(day).usd_outside), usd_test: usd6(L(day).usd_test) } : {}),
       paid_logged: e.paid, browser: e.browser, non_browser: e.requests - e.browser,
     })),
+    payment_failures: payFailSummary(fails, failsDropped),
     top_paths: topOf(paths, 25),
     top_402_paths: topOf(p402, 15),
     top_paid_paths: topOf(ppaid, 15),
     top_user_agents: topOf(uas, 25),
     top_referrers: topOf(refs, 20),
     top_countries: topOf(countries, 20),
+  };
+}
+
+/** Refused payment attempts by reason / route / network / scheme / x402 version / UA family / day, plus the latest 25. */
+export function payFailSummary(fails: PayFail[], dropped = 0) {
+  const by = (f: (x: PayFail) => string) => {
+    const m = new Map<string, number>();
+    for (const x of fails) m.set(f(x), (m.get(f(x)) ?? 0) + 1);
+    return Object.fromEntries(topOf(m, 30).map((x) => [x.key, x.requests]));
+  };
+  return {
+    note: "Requests that carried PAYMENT-SIGNATURE or X-PAYMENT and were refused (HTTP >= 400). No payer addresses or signatures are stored.",
+    total: fails.length + dropped,
+    detailed: fails.length,
+    dropped_over_batch_cap: dropped,
+    by_reason: by((x) => x.reason),
+    by_route: by((x) => x.route),
+    by_network: by((x) => x.network),
+    by_scheme: by((x) => x.scheme),
+    by_x402_version: by((x) => (x.x402_version === null ? "unknown" : `v${x.x402_version}`)),
+    by_ua_family: by((x) => x.ua_family),
+    daily: by((x) => new Date(x.ts).toISOString().slice(0, 10)),
+    daily_by_reason: fails.reduce<Record<string, Record<string, number>>>((o, x) => {
+      const d = (o[new Date(x.ts).toISOString().slice(0, 10)] ??= {});
+      d[x.reason] = (d[x.reason] ?? 0) + 1;
+      return o;
+    }, {}),
+    recent: [...fails].sort((a, b) => b.ts - a.ts).slice(0, 25).map((x) => ({ ...x, at: new Date(x.ts).toISOString() })),
   };
 }
