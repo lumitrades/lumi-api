@@ -132,7 +132,7 @@ export function checkPayload(o: {
     live_alert: v.live_alert ?? null,
     // Listing reachability (free): looks dead after 3 failed checks on separate occasions, down when checked, no paywall,
     // quote payTo differs, or needs a different request. Each carries last_checked_at and clears on a later answer.
-    // Disclosure only: never an input to the decision, label or score.
+    // Never a score input. listing_looks_dead also adds the warn reason listing_looks_dead (check_first); the rest is disclosure.
     reachability: v.reachability ?? null,
     paid: o.paid,
   };

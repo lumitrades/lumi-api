@@ -189,6 +189,11 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
       else add("purchase_verified", "info", `Lumi paid ${last.amount} ${last.asset} on ${last.at} and got data back (tx ${last.tx_hash}).`);
     }
     if (e.listed_until) add("delisted", "warn", `No longer in the Bazaar listing (last seen ${e.listed_until}).`);
+    // Listing reachability: only the 3-strike flag adds a reason (check_first); notes such as no_paywall or a payTo
+    // difference stay disclosure in `reachability`. Clears with the flag on the next check that gets an answer.
+    const reach = e.reachability;
+    const day = (x: unknown) => (typeof x === "string" ? x.slice(0, 10) : "unknown date");
+    if (reach?.flag === "listing_looks_dead") add("listing_looks_dead", "warn", `listing looks dead: do not pay until it answers again. Lumi's last ${reach.failed_checks_in_a_row} checks on separate occasions got no working answer (last checked ${day(reach.last_checked_at)}, ${reach.last_result ?? "no answer"}).`);
   }
   const age = ref?.domain_age?.age_days;
   if (typeof age === "number" && age < 30) add("young_domain", "warn", `The domain was registered ${age} days ago.`);

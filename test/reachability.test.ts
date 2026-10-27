@@ -34,6 +34,7 @@ describe("classifySkipReason (test-buyer skip text)", () => {
     expect(k("HTTP 429 (expected 402)")).toBe("rate_limited");
     expect(k("quote payTo 0xabc differs from listing")).toBe("pay_to_differs");
     expect(k("unreadable 402: no PAYMENT-REQUIRED header")).toBe("ok");
+    expect(k("unreadable 402: quote lacks EIP-712 name/version (USDC eip155:8453)")).toBe("ok");
     expect(k("no Base USDC exact option")).toBe("ok");
     expect(k("price 0.2 USDC above $0.05")).toBe("ok");
     // Lumi-side reasons are not about the seller: never recorded
@@ -93,9 +94,9 @@ describe("three strikes on separate occasions", () => {
   });
 });
 
-function mk(store = new MemoryCatalogStore(), now = NOW) {
+function mk(store = new MemoryCatalogStore(), now = NOW, env: Record<string, string> = {}) {
   let t = now;
-  const app = createApp(ENV as any, { fetch: makeFetch(happyFacilitator()), now: () => t, catalogStore: store, log: () => {} } as any);
+  const app = createApp({ ...ENV, ...env } as any, { fetch: makeFetch(happyFacilitator()), now: () => t, catalogStore: store, log: () => {} } as any);
   return { app, store, at: (x: number) => { t = x; } };
 }
 const post = (app: any, checks: unknown[], headers: Record<string, string> = owner) =>
@@ -182,5 +183,31 @@ describe("D1 writes stay small", () => {
     expect(sql[0].q).not.toContain("reach_");
     expect(sql[1].q).toContain("reach_since = ?17");
     expect(sql[1].args).toHaveLength(17);
+  });
+});
+
+describe("listing_looks_dead adds a check_first reason", () => {
+  it("Lumi Check and the verdict carry listing_looks_dead (warn); notes do not; it clears with the flag", async () => {
+    const store = new MemoryCatalogStore();
+    await store.upsert([toListing(item("https://api.gone.example/v1/x"))!, toListing(item("https://free.example/v1/y"))!], NOW - 1000);
+    const { app, at } = mk(store, NOW + 30 * H, { VERDICT_PRICING: "free" });
+    const iso = (h: number) => new Date(NOW + h * H).toISOString();
+    await post(app, [0, 13, 26].map((h) => ({ resource: "https://api.gone.example/v1/x", reason: "HTTP 404 (expected 402)", checked_at: iso(h) })).concat([{ resource: "https://free.example/v1/y", reason: "HTTP 200 (expected 402)", checked_at: iso(26) }]));
+    const q = (u: string, p = "/v1/check") => app.fetch(new Request(BASE + p + "?url=" + encodeURIComponent(u))).then((r: Response) => r.json() as any);
+    const chk = await q("https://api.gone.example/v1/x");
+    expect(chk.reasons).toContainEqual({ code: "listing_looks_dead", severity: "warn" });
+    expect(chk.decision).toBe("warn");
+    expect(chk.label).toBe("check_first");
+    const ver = await q("https://api.gone.example/v1/x", "/v1/verdict");
+    expect(ver.label).toBe("check_first");
+    expect(ver.reason_codes).toContain("listing_looks_dead");
+    expect(ver.reason_code).toBe("listing_looks_dead");
+    expect(ver.reason).toMatch(/^listing looks dead: do not pay until it answers again/);
+    expect(JSON.stringify([chk, ver])).not.toMatch(BANNED);
+    const free = await q("https://free.example/v1/y");
+    expect(free.reasons.map((r: any) => r.code)).not.toContain("listing_looks_dead");
+    at(NOW + 41 * H);
+    await post(app, [{ resource: "https://api.gone.example/v1/x", reason: "no Base USDC exact option", checked_at: iso(40) }]);
+    expect((await q("https://api.gone.example/v1/x")).reasons.map((r: any) => r.code)).not.toContain("listing_looks_dead");
   });
 });

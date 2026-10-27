@@ -111,6 +111,7 @@ export const WORDING: Record<string, (t: TestBuyEvidence, th: VerdictThresholds)
   unreliable_quotes: () => "Fewer than half of Lumi's recent quote checks of this seller returned a valid x402 quote.",
   quoted_price_differs: () => "At Lumi's latest quote check, the quoted price differed from the listed price.",
   delisted: () => "This resource is no longer in the x402 Bazaar listing.",
+  listing_looks_dead: () => "listing looks dead: do not pay until it answers again. Lumi's last 3 checks of this listing, on separate occasions, got no working answer; this clears when a later check gets an answer.",
   young_domain: () => "The seller's domain was registered less than 30 days ago.",
   no_organic_payers: () => "Payers seen at this seller's payTo were all Lumi, known test wallets, or funded by the seller.",
   vet402_l0_fail: () => "A third-party monitor (vet402) recorded a failed free probe of this seller.",
@@ -138,7 +139,7 @@ export const WORDING: Record<string, (t: TestBuyEvidence, th: VerdictThresholds)
 export const BLOCK_PRIORITY = ["sanctioned_address", "pay_to_mismatch", "price_above_listing", "quote_pays_unlisted_address", "paid_no_data"];
 export const WARN_PRIORITY = [
   "retest_requested", "checks_failed_pending_review", "recent_buy_failed", "xrpl_paid_no_data", "pay_to_unrecognised", "last_quote_invalid",
-  "unreliable_quotes", "quoted_price_differs", "delisted", "young_domain", "no_organic_payers", "vet402_l0_fail", "slow", "no_recent_xrpl_buy", "resource_not_listed",
+  "listing_looks_dead", "unreliable_quotes", "quoted_price_differs", "delisted", "young_domain", "no_organic_payers", "vet402_l0_fail", "slow", "no_recent_xrpl_buy", "resource_not_listed",
 ];
 export const NO_DATA_PRIORITY = ["not_observed", "not_quote_checked", "lumi_itself", "old_evidence"];
 
