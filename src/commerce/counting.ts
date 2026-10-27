@@ -7,7 +7,7 @@
  *   buy wins an exact tie). A failure later in the day therefore removes the badge at once, and extra successes never add
  *   anything: they are kept and published as history, flagged counted:false, but never move the badge.
  * - Failures count exactly like successes: a counted failure is the latest counted result until a later day's counted buy.
- * - Inconclusive baseline buys (Lumi-side: Lumi never saw a response; or an empty result for Lumi's test query) and unpaid
+ * - Inconclusive baseline buys (Lumi-side: Lumi never saw a response; or an empty result for Lumi's test query, or an error caused by Lumi's own test input) and unpaid
  *   quote-only / skipped runs are not test-buys.
  *
  * Because a paid run can only take the single daily slot a baseline buy would otherwise take, a paid success can never

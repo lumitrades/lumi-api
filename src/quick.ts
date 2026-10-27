@@ -102,6 +102,8 @@ const conclusive = (p: Json) => p?.delivery !== "inconclusive" && p?.data_return
 const inconclusiveText = (p: Json, what: string) =>
   p.inconclusive_reason === "empty_result"
     ? `Lumi's latest ${what} (${p.at}, tx ${p.tx_hash}) paid ${p.amount} ${p.asset}; the seller answered with an empty result for Lumi's test query (empty_result): delivery unknown. An empty result can be a correct answer, so it is not counted against the seller.`
+    : p.inconclusive_reason === "our_query_error"
+    ? `Lumi's latest ${what} (${p.at}, tx ${p.tx_hash}) paid ${p.amount} ${p.asset}; the seller's error was caused by Lumi's own test input (our_query_error): delivery unknown. It is not counted against the seller.`
     : `Lumi's latest ${what} (${p.at}, tx ${p.tx_hash}) paid ${p.amount} ${p.asset}, but Lumi recorded no HTTP response (${p.inconclusive_reason ?? "no_http_response"}): delivery unknown. This was a Lumi-side failure and is not counted against the seller.`;
 
 /** Evidence older than this supports at most check_first, and older than NO_DATA_AFTER_DAYS at most no_data. */

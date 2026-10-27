@@ -165,6 +165,19 @@ describe("catalog pipeline", () => {
     expect(JSON.stringify(look.body)).not.toMatch(/no data returned|Lumi-side failure/i);
   });
 
+  it("owner observation: inconclusive our_query_error is accepted, stored inconclusive, worded as not counted against the seller", async () => {
+    const { app, store } = mkApp();
+    await app.fetch(new Request(BASE + "/v1/trust/catalog/ingest?now=1", { method: "POST", headers: owner }));
+    const body = { resource: "https://api.seller0.com/v1/thing/2", network: "eip155:8453", tx_hash: "0x" + "f".repeat(64), data_returned: false, inconclusive: "our_query_error", http_status: 200, summary: "Base test-buy: HTTP 200, error caused by Lumi's test input (unfilled placeholder)", facilitator: "cdp" };
+    const post = (b: unknown) => app.fetch(new Request(BASE + "/v1/trust/catalog/observations", { method: "POST", headers: owner, body: JSON.stringify(b) }));
+    expect((await post(body)).status).toBe(201);
+    expect(store.buys[0]).toMatchObject({ inconclusive: "our_query_error", data_returned: false });
+    expect(store.buys[0].summary).toMatch(/not counted against the seller/);
+    const look = await get(app, "/v1/trust/vendors?url=" + encodeURIComponent(body.resource));
+    expect(look.body.catalog.entries[0].test_buys).toMatchObject({ count: 1, last_data_returned: null });
+    expect(JSON.stringify(look.body)).not.toMatch(/no data returned|Lumi-side failure/i);
+  });
+
   it("cron schedules probe jobs on a queue and the consumer processes them", async () => {
     const sent: any[] = [];
     const store = new MemoryCatalogStore();

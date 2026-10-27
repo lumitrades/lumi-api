@@ -21,6 +21,19 @@
  *     findings, alerts, incidents, valid, ...) is an answer ("no match"), not an empty result, and not an error either
  *     ({exists:false, message:"Not found"} or a validator's {valid:false, errors:[...]} are answers).
  *  6. Anything else -> delivered.
+ *
+ * Fairness (Bobby 2026-10-27): an error that is clearly caused by Lumi's own test input, not the seller, is inconclusive,
+ * our_query_error (never counted against the seller), checked before rules 4-5 on JSON objects:
+ *   - an unfilled placeholder: a literal {name} (or %7Bname%7D) in the request Lumi sent, or quoted back in the error text;
+ *   - an explicit invalid-input code at the top level (INPUT_INVALID, invalid_*, unsupported_*, missing_param..., validation_error,
+ *     bad_request), with no result rows beside it (validation details naming the fields are fine);
+ *   - an error payload whose text names Lumi's input: a snake_case parameter that "is not registered/covered/supported/valid"
+ *     or "is required/missing/invalid", a quoted value that "is not covered/supported/valid", "expected X, received Y",
+ *     "invalid/missing/unsupported parameter|argument|field|query|input|value".
+ * The same check applies to an HTTP 400/422 paid response (e.g. 0x INPUT_INVALID naming the fields Lumi sent).
+ * Screening answers are never our_query_error, nor is any body that also points at the seller's side (an execution or
+ * upstream failure, "retry later", a rate limit, a timeout). Other borderline bodies keep their verdict (e.g. settlement_pending stays
+ * delivered; {"message":"No such letter"} stays delivered).
  */
 
 export type JudgedState = "delivered" | "not_delivered" | "inconclusive";
@@ -32,7 +45,8 @@ export type JudgedReason =
   | "http_error"
   | "empty_body"
   | "error_after_payment"
-  | "empty_result";
+  | "empty_result"
+  | "our_query_error";
 
 export interface JudgeInput {
   /** HTTP status of the paid response; null/0 when Lumi saw none. */
@@ -42,6 +56,8 @@ export interface JudgeInput {
   contentType?: string | null;
   /** Set when Lumi's own fetch failed: "timeout" counts as Lumi's client timeout, anything else as no HTTP response. */
   fetchError?: string | null;
+  /** What Lumi sent (URL plus request body), used only to spot an unfilled {placeholder} in Lumi's own test input. */
+  request?: string | null;
 }
 
 export interface Judgement {
@@ -139,6 +155,44 @@ function errorShape(o: Record<string, unknown>): string | null {
   return null;
 }
 
+const PLACEHOLDER = /\{[A-Za-z_][\w-]{0,40}\}|%7B[A-Za-z_][\w-]{0,40}%7D/i;
+const INPUT_CODE =
+  /^(input_?invalid|invalid_?(input|inputs|param|params|parameter|parameters|argument|arguments|query|request|value|field|fields|fiat|currency|pair|symbol|ticker|token|address|chain|chainid|network|id|url|date)|unsupported_?\w+|missing_?(param|params|parameter|parameters|field|fields|argument|arguments|input|query|value)|validation_?(error|failed)|bad_?request)$/i;
+const INPUT_TEXT = new RegExp(
+  [
+    "\\b[a-z][a-z0-9]*_[a-z0-9_]+\\b[^.;]{0,20}\\b(is not (registered|covered|supported|valid|recognized)|is (required|missing|invalid))\\b",
+    "\"[^\"]{1,120}\" is not (covered|supported|valid|recognized)",
+    "\\bexpected \\w+,? received \\w+",
+    "\\b(invalid|missing|unsupported|unknown) (query )?(param|params|parameter|parameters|argument|arguments|field|fields|query|input|value)\\b",
+  ].join("|"),
+  "i",
+);
+
+const SELLER_SIDE = /execution_?failed|upstream|retry_?later|"retriable":\s*true|internal (server )?error|server error|rate.?limit|timed? ?out|unavailable/i;
+
+/** Non-empty result rows (a non-envelope non-empty array) in the top two levels. */
+function rowsPresent(o: Record<string, unknown>): boolean {
+  return Object.entries(o).some(([k, v]) => !isEnvelope(k) && (Array.isArray(v) ? v.length > 0 : isObj(v) && Object.entries(v).some(([k2, x]) => !isEnvelope(k2) && Array.isArray(x) && x.length > 0)));
+}
+
+/** Error clearly caused by Lumi's own test input? Returns a short description, or null. `err` = errorShape() result. */
+function ourQueryShape(o: Record<string, unknown>, request: string, err: string | null): string | null {
+  if (hasScreeningAnswer(o) || rowsPresent(o)) return null;
+  // Any sign the failure was on the seller's side (execution/upstream failure, retry later, rate limit) -> not ours.
+  if (SELLER_SIDE.test(JSON.stringify(o))) return null;
+  const keys = Object.keys(o);
+  const get = (name: string) => { const k = keys.find((x) => norm(x) === name); return k === undefined ? undefined : o[k]; };
+  const e = get("error");
+  const codes = [e, get("code"), get("name"), get("errorcode"), get("errortype"), isObj(e) ? e.code : undefined, isObj(e) ? e.type : undefined]
+    .filter((x): x is string => typeof x === "string");
+  if (codes.some((c) => INPUT_CODE.test(c.trim()))) return "invalid or unsupported input in Lumi's test query";
+  if (!err) return null;
+  const texts = [e, get("message"), get("detail"), get("msg"), get("reason"), get("hint"), isObj(e) ? e.message : undefined].map(textOf).join(" | ");
+  if (PLACEHOLDER.test(request) || PLACEHOLDER.test(texts)) return "unfilled placeholder in Lumi's test request";
+  if (INPUT_TEXT.test(texts)) return "the error names Lumi's test input";
+  return null;
+}
+
 /** Empty result? Returns a short description, or null. Assumes errorShape() already returned null. */
 function emptyShape(j: unknown): string | null {
   if (j == null) return "JSON null";
@@ -173,13 +227,23 @@ export function judgeResponse(i: JudgeInput): Judgement {
     const timeout = /timeout|timed out|abort|no (answer|response) within/i.test(String(i.fetchError ?? ""));
     return { state: "inconclusive", reason: timeout ? "lumi_client_timeout" : "no_http_response", detail: timeout ? "no response before Lumi's client timeout" : "no HTTP response recorded" };
   }
-  if (status < 200 || status > 299) return { state: "not_delivered", reason: "http_error", detail: `HTTP ${status}` };
+  if (status < 200 || status > 299) {
+    // HTTP 400/422 after payment whose body says Lumi's own input was invalid (e.g. INPUT_INVALID with field details).
+    if (status === 400 || status === 422) {
+      const j4 = tryJson(String(i.body ?? ""));
+      const q = j4.ok && isObj(j4.v) ? ourQueryShape(j4.v, String(i.request ?? ""), errorShape(j4.v) ?? `HTTP ${status}`) : null;
+      if (q) return { state: "inconclusive", reason: "our_query_error", detail: `HTTP ${status}; error caused by Lumi's test input (${q})` };
+    }
+    return { state: "not_delivered", reason: "http_error", detail: `HTTP ${status}` };
+  }
   const text = String(i.body ?? "");
   if (!text.trim()) return { state: "not_delivered", reason: "empty_body", detail: "empty body" };
   const j = tryJson(text);
   if (j.ok) {
     if (isObj(j.v)) {
       const e = errorShape(j.v);
+      const q = ourQueryShape(j.v, String(i.request ?? ""), e);
+      if (q) return { state: "inconclusive", reason: "our_query_error", detail: `error caused by Lumi's test input (${q})` };
       if (e) return { state: "not_delivered", reason: "error_after_payment", detail: `error payload after payment (${e})` };
     }
     const m = emptyShape(j.v);
@@ -202,4 +266,5 @@ export const JUDGE_SUMMARY: Record<Exclude<JudgedReason, "data" | "screening_ans
   empty_body: "empty body; no data returned",
   error_after_payment: "error after payment: the 2xx body was an error message; no data returned",
   empty_result: "empty result for Lumi's test query (inconclusive; not counted against the seller)",
+  our_query_error: "error caused by Lumi's own test input, not the seller (inconclusive; not counted against the seller)",
 };

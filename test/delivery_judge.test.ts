@@ -22,7 +22,6 @@ describe("error after payment: a 2xx error payload is not delivered", () => {
     ["error object, data null", { data: null, error: { code: "UPSTREAM", message: "upstream request failed" }, meta: { request_id: "req_1" } }],
     ["fetch error with provenance only", { url: "https://example", error: "could not fetch url (timeout, DNS, or blocked)", provider: "Example reader", fetched_at: "2026-10-22T20:40:00Z" }],
     ["upstream error code", { error: "surf_upstream_error", upstream_status: 401 }],
-    ["error code + message", { error: "unsupported_fiat", message: "\"X\" is not covered. Supported: ARS, BRL" }],
     ["error + disclaimer", { error: "campaign_not_found", disclaimer: "Educational analytics; informational only." }],
     ["success false", { success: false, error: "not_found" }],
     ["ok false + payment envelope", { ok: false, payment: { status: "pending_confirmation", network: "eip155:8453" } }],
@@ -30,7 +29,7 @@ describe("error after payment: a 2xx error payload is not delivered", () => {
     ["JSON-RPC error", { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid Request" } }],
     ["status: error", { status: "error", message: "service unavailable" }],
     ["upstream_failed after payment", { error: "upstream_failed", message: "This request failed unexpectedly after payment processing began." }],
-    ["placeholder not replaced (Stellar)", { error: "replace {pair} with a trading pair, e.g. BTC-USDT" }],
+    ["invalid_input code but the seller's execution failed (retry later)", { error: { code: "invalid_input", message: "The request was refused because its input is invalid.", details: { reason: "settled_payment_execution_failed", retriable: true, remediation: "retry_later" } } }],
   ];
   for (const [name, body] of cases)
     it(name, () => {
@@ -54,10 +53,58 @@ describe("conservative: real data next to an error-ish field stays delivered", (
   it("ping payload {data:{ok,paid,server_time}} stays delivered", () => expect(ok200({ data: { ok: true, paid: true, server_time: "2026-10-23T00:00:00Z" }, meta: { v: 1 } }).state).toBe("delivered"));
   it("upstream page status 404 with extracted text stays delivered", () =>
     expect(ok200({ url: "https://example.com/article", status: 404, markdown: "- Example Domain\n\nThis domain is for use in documentation examples without needing permission." }).state).toBe("delivered"));
-  it("error name plus structured details stays delivered (not clearly an error-only body)", () =>
-    expect(ok200({ name: "INPUT_INVALID", message: "The input is invalid", data: { zid: "<redacted>", details: [{ field: "chainId", reason: "Expected number, received nan" }, { field: "buyToken", reason: "Required" }] } }).state).toBe("delivered"));
+  it("settlement_pending notice stays delivered", () =>
+    expect(ok200({ status: "settlement_pending", message: "Payment may already be settled. Do not submit another payment.", reason: "Independent chain confirmation is pending." }).state).toBe("delivered"));
   it("message that does not read as an error stays delivered", () => expect(ok200({ message: "No such letter" }).state).toBe("delivered"));
   it("long text answers stay delivered", () => expect(ok200("The forecast for Amsterdam tomorrow is mostly cloudy with a high of 12 C.").state).toBe("delivered"));
+});
+
+describe("our_query_error: an error caused by Lumi's own test input is inconclusive, never counted against the seller", () => {
+  const ZX = { name: "INPUT_INVALID", message: "The input is invalid", data: { zid: "<redacted>", details: [{ field: "chainId", reason: "Expected number, received nan" }, { field: "buyToken", reason: "Required" }] } };
+  const cases: [string, number, unknown, string?][] = [
+    ["unsupported_fiat naming Lumi's value (arbipulse shape)", 200, { error: "unsupported_fiat", message: "\"CURRENCY CODE (DEFAULT ARS): ARS, VES\" is not covered. Supported: ARS, VES, BRL" }],
+    ["error quoting an unfilled {pair} placeholder (Stellar)", 200, { error: "replace {pair} with a trading pair, e.g. BTC-USDT" }],
+    ["unfilled {pair} in the request Lumi sent", 200, { error: "unknown pair" }, "https://api.seller.example/v1/price?pair={pair}"],
+    ["url-encoded placeholder in the request", 200, { error: "not found" }, "https://api.seller.example/v1/price/%7Bsymbol%7D"],
+    ["0x INPUT_INVALID with field details (2xx)", 200, ZX],
+    ["0x INPUT_INVALID with field details (HTTP 400)", 400, ZX],
+    ["validation_error with field list (HTTP 422)", 422, { detail: "5 parameter(s) invalid", code: "validation_error", errors: [{ field: "slabbed", message: "must be boolean" }] }],
+    ["invalid_query code", 400, { error: { code: "invalid_query", message: "class must be crypto or fiat", id: 1011 } }],
+    ["parameter not registered (redlynr shape)", 200, { error: "tenant_id is not registered — call POST /register first to claim your namespace" }],
+    ["missing/invalid parameters", 200, { error: "Missing/invalid parameters for this check — see the 402/400 body parameter guide" }],
+  ];
+  for (const [name, status, body, request] of cases)
+    it(name, () => {
+      const j = judgeResponse({ status, body: JSON.stringify(body), request });
+      expect(j).toMatchObject({ state: "inconclusive", reason: "our_query_error" });
+      expect(judgedRow(j)).toEqual({ data_returned: false, inconclusive: "our_query_error" });
+    });
+  it("stays strict otherwise: seller-side errors, other 4xx, and non-input errors are unchanged", () => {
+    expect(judgeResponse({ status: 500, body: JSON.stringify(ZX) }).state).toBe("not_delivered");
+    expect(judgeResponse({ status: 404, body: JSON.stringify({ error: "invalid_input" }) }).state).toBe("not_delivered");
+    expect(ok200({ error: "campaign_not_found", disclaimer: "Educational analytics" }).reason).toBe("error_after_payment");
+    expect(ok200({ error: "upstream_failed", message: "request failed after payment" }).reason).toBe("error_after_payment");
+    expect(ok200({ url: "https://example", error: "could not fetch url (timeout, DNS, or blocked)" }).reason).toBe("error_after_payment");
+    // A placeholder in the request does not excuse a body with real data, and data is still delivered.
+    expect(judgeResponse({ status: 200, body: JSON.stringify({ data: [{ symbol: "XRP", price: 1.3 }] }), request: "https://x.example/p?pair={pair}" }).state).toBe("delivered");
+    // A screening answer is never our_query_error.
+    expect(ok200({ valid: false, errors: [{ field: "json", message: "is required" }] }).state).toBe("delivered");
+    expect(ok200({ message: "No such letter" }).state).toBe("delivered");
+  });
+  it("is accepted as an inconclusive reason, worded as not counted against the seller, and excluded from scoring", () => {
+    expect(isInconclusiveReason("our_query_error")).toBe(true);
+    expect(JUDGE_SUMMARY.our_query_error).toMatch(/not counted against the seller/);
+    const r = { http_status: 200, data_returned: false, inconclusive: "our_query_error" };
+    expect(deliveryState(r)).toBe("inconclusive");
+    expect(deliveryText(r)).toMatch(/Lumi's own test input/);
+    expect(deliveryText(r)).toMatch(/not counted against the seller/);
+    expect(deliveryText(r)).not.toMatch(/Lumi-side|no (usable )?data/);
+    const g = guardBuy({ http_status: 200, data_returned: false, inconclusive: "our_query_error", summary: "Base test-buy: HTTP 200, error caused by Lumi's test input" });
+    expect(g.inconclusive).toBe("our_query_error");
+    expect(g.summary).toMatch(/not counted against the seller/);
+    const rows = [1, 2].map((k) => ({ http_status: 200, data_returned: true })).concat([{ http_status: 200, data_returned: false, inconclusive: "our_query_error" } as any]);
+    expect(deliveryCounts(rows as any)).toEqual({ delivered: 2, not_delivered: 0, inconclusive: 1, conclusive: 2 });
+  });
 });
 
 describe("empty result: inconclusive, not counted against the seller", () => {

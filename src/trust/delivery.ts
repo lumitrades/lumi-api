@@ -4,7 +4,9 @@
  *  - Lumi-side: Lumi never saw an HTTP response (our client gave up, our run was interrupted, another Lumi-side failure);
  *  - empty_result: the seller answered 2xx with an empty result for Lumi's test query ({}, [], null, or a data feed whose
  *    result lists were all empty). An empty list can be a correct answer to a narrow query, so it proves neither
- *    delivery nor failure.
+ *    delivery nor failure;
+ *  - our_query_error: the seller's 2xx error was clearly caused by Lumi's own test input (an unfilled {placeholder} in
+ *    Lumi's request, or an invalid/unsupported-input error naming Lumi's parameters), so it says nothing about the seller.
  * An inconclusive buy is never shown as "no data returned", never counted as a failed delivery (it is excluded from
  * the delivery rate and the score), and never turns a trust/check verdict into warn or block.
  *
@@ -25,6 +27,7 @@ export const INCONCLUSIVE_REASONS = {
   lumi_side_error: "A Lumi-side error prevented recording the response; delivery unknown.",
   no_http_response: "Lumi recorded no HTTP response for this paid call; delivery unknown.",
   empty_result: "The seller answered with an empty result for Lumi's test query (no rows, no error); an empty result can be a correct answer, so delivery is unknown and not counted against the seller.",
+  our_query_error: "The seller's error was caused by Lumi's own test input (for example an unfilled placeholder or an unsupported parameter value in Lumi's request), not by the seller; delivery unknown and not counted against the seller.",
 } as const;
 export type InconclusiveReason = keyof typeof INCONCLUSIVE_REASONS;
 export const isInconclusiveReason = (x: unknown): x is InconclusiveReason => typeof x === "string" && Object.prototype.hasOwnProperty.call(INCONCLUSIVE_REASONS, x);
@@ -34,8 +37,10 @@ export const isLumiSideReason = (x: unknown) => LUMI_SIDE_REASONS.includes(x as 
 
 const UNKNOWN_LUMI_SIDE = "delivery unknown (inconclusive, Lumi-side; not counted against the seller)";
 const UNKNOWN_EMPTY_RESULT = "empty result for Lumi's test query; delivery unknown (inconclusive; not counted against the seller)";
+const UNKNOWN_OUR_QUERY = "error caused by Lumi's own test input, not the seller; delivery unknown (inconclusive; not counted against the seller)";
 /** Short public phrase for an inconclusive buy, by reason. */
-export const inconclusiveWording = (reason: string | null | undefined) => (reason === "empty_result" ? UNKNOWN_EMPTY_RESULT : UNKNOWN_LUMI_SIDE);
+export const inconclusiveWording = (reason: string | null | undefined) =>
+  reason === "empty_result" ? UNKNOWN_EMPTY_RESULT : reason === "our_query_error" ? UNKNOWN_OUR_QUERY : UNKNOWN_LUMI_SIDE;
 
 /** Stored-row fields for a judged response (what a runner uploads as data_returned / inconclusive). */
 export function judgedRow(j: Judgement): { data_returned: boolean; inconclusive: InconclusiveReason | null } {
