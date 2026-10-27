@@ -30,7 +30,7 @@ import { VENDORS, vendorById } from "./vendors";
 import { D1TrustStore, MemoryTrustStore, type TrustStore } from "./trust/store";
 import { SEED_OBSERVATIONS } from "./trust/seed";
 import { isStorageQuotaError, storageUnavailableBody } from "./trust/storage_errors";
-import { D1CatalogStore, MemoryCatalogStore, type CatalogStore } from "./trust/catalog";
+import { D1CatalogStore, MemoryCatalogStore, excludingStore, type CatalogStore } from "./trust/catalog";
 import { createCatalog, buyCandidate, PRIORITY_DAILY_CAP, type Catalog, type CatalogJob, type QueueLike } from "./trust/catalog_service";
 import { D1EvidenceStore, MemoryEvidenceStore, type EvidenceStore } from "./trust/evidence";
 import { D1ReceiptStore, MemoryReceiptStore, type ReceiptStore } from "./trust/receipts";
@@ -285,7 +285,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   const xrplBuyers = split(env.TRUST_BUYER_ADDRESSES).length ? split(env.TRUST_BUYER_ADDRESSES) : [config.payTo];
   // OFAC SDN screen: bundled snapshot Set per isolate (+ optional KV copy); no D1 reads.
   const sanctions = createSanctionsScreen({ doc: opts.sanctions, kv: env.SANCTIONS_KV as KVLike | undefined, now, log: (e) => deps.log?.(e) });
-  const catalogStore = opts.catalogStore ?? (env.TRUST_DB ? new D1CatalogStore(env.TRUST_DB) : new MemoryCatalogStore());
+  // permanent seller exclusions (trust/excluded.ts) wrap every catalog read and write
+  const catalogStore = excludingStore(opts.catalogStore ?? (env.TRUST_DB ? new D1CatalogStore(env.TRUST_DB) : new MemoryCatalogStore()));
   /**
    * The persisted rate is only a last-known fallback (used when every live source fails, valid 7 days), so it is
    * stored at most every XRP_MEMO_MS across isolates: each isolate refreshes every 5 minutes and used to write a

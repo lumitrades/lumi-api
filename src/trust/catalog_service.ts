@@ -1,4 +1,5 @@
 /** Catalog orchestration: cron scheduling, queue consumer, lookups and owner-posted purchase evidence. */
+import { isExcludedUrl } from "./excluded";
 import type { Receipt, ReceiptStore } from "./receipts";
 import { dataReturnedView, deliveryCounts, deliveryState, guardBuy, inconclusiveReason, INCONCLUSIVE_REASONS, isInconclusiveReason } from "./delivery";
 import type { D1Like } from "../config";
@@ -877,7 +878,7 @@ export function createCatalog(deps: CatalogDeps) {
       if (!(await deps.isOwner(request))) return json(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
       if (!deps.evidence) return json(503, { error: "evidence_unavailable" });
       const status = url.searchParams.get("status") ?? "queued";
-      const rows = await deps.evidence.buyQueue(status, Math.min(200, Number(url.searchParams.get("limit") ?? "50") || 50));
+      const rows = (await deps.evidence.buyQueue(status, Math.min(200, Number(url.searchParams.get("limit") ?? "50") || 50))).filter((r) => !isExcludedUrl(r.resource));
       if (!deps.sanctions) return json(200, { status, rows }, { "Cache-Control": "no-store" });
       // Sanctions screen before the runner sees a row: the listing's payTos (one indexed read per row, owner-only, once a day).
       await deps.sanctions.ready();

@@ -6,6 +6,7 @@
  */
 import type { D1Like } from "../config";
 import { dataReturnedView, deliveryCounts, deliveryState, inconclusiveReason } from "./delivery";
+import { isExcludedEntry } from "./excluded";
 
 export const DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
 /**
@@ -335,6 +336,37 @@ function rowFromListing(l: Listing, id: number, now: number, source = CDP_SOURCE
     calls_30d: l.calls_30d, payers_30d: l.payers_30d, last_called_at: l.last_called_at, quality_at: now, source, first_seen: now, last_seen: now,
     probe_ts: null, probe_status: null, probe_valid: null, probe_pay_to_match: null, probe_price_usd: null, probe_price_match: null,
     probe_latency_ms: null, probe_error: null, probe_hist: null, probe_lat_hist: null,
+  };
+}
+
+/**
+ * Permanent seller exclusions (./excluded.ts) applied to every catalog read and write: excluded listings are never
+ * written (any source), never returned to probing/scoring/browse/lookup, and their buys are never stored or shown.
+ */
+export function excludingStore(s: CatalogStore): CatalogStore {
+  const keep = <T extends Parameters<typeof isExcludedEntry>[0]>(rows: T[]) => rows.filter((r) => !isExcludedEntry(r));
+  return {
+    upsert: (ls, now, source) => s.upsert(keep(ls), now, source),
+    maxId: () => s.maxId(),
+    range: async (a, l) => keep(await s.range(a, l)),
+    saveProbes: (ps) => s.saveProbes(ps),
+    lookup: async (q, l) => { const r = await s.lookup(q, l); const rows = keep(r.rows); return { total: Math.max(0, r.total - (r.rows.length - rows.length)), rows }; },
+    byResource: async (res) => { const r = await s.byResource(res); return r && isExcludedEntry(r) ? null : r; },
+    byResources: async (rs) => keep(await s.byResources(rs)),
+    byPayTos: async (ps, l) => keep(await s.byPayTos(ps, l)),
+    buysFor: async (rs) => keep(await s.buysFor(rs)),
+    buysByDomain: async (d, l) => keep(await s.buysByDomain(d, l)),
+    addBuy: async (b) => (isExcludedEntry(b) ? "duplicate" : s.addBuy(b)),
+    markInconclusive: (tx, r, sm, at) => s.markInconclusive(tx, r, sm, at),
+    boughtResources: async () => (await s.boughtResources()).filter((r) => !isExcludedEntry({ resource: r })),
+    popular: async (m, l, n) => keep(await s.popular(m, l, n)),
+    top: async (o, l) => keep(await s.top(o, l)),
+    saveDomain: (r) => s.saveDomain(r),
+    domainInfo: (ds) => s.domainInfo(ds),
+    computeStats: (now) => s.computeStats(now),
+    getMeta: (k) => s.getMeta(k),
+    addCounter: (k, n) => s.addCounter(k, n),
+    setMeta: (k, v) => s.setMeta(k, v),
   };
 }
 
