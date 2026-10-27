@@ -8,6 +8,7 @@ import type { D1Like } from "../config";
 import { dataReturnedView, deliveryCounts, deliveryState, inconclusiveReason } from "./delivery";
 import { isExcludedEntry } from "./excluded";
 import { reachView, type ReachState } from "./reachability";
+import { histogramFromRows, PRICE_HISTOGRAM_SQL, type HistogramRow } from "./price_market";
 
 export const DISCOVERY_URL = "https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources";
 /**
@@ -335,6 +336,8 @@ export interface CatalogStore {
   saveDomain(row: DomainRow): Promise<void>;
   domainInfo(domains: string[]): Promise<DomainRow[]>;
   computeStats(now: number): Promise<CatalogStats>;
+  /** Price histogram of active listings for the market median (src/trust/price_market.ts); cron only, one catalog-wide read. */
+  priceHistogram?(now: number): Promise<HistogramRow[]>;
   getMeta(k: string): Promise<string | null>;
   /** Atomically add n to an integer meta counter; returns the new value. */
   addCounter(k: string, n: number): Promise<number>;
@@ -377,6 +380,7 @@ export function excludingStore(s: CatalogStore): CatalogStore {
     saveDomain: (r) => s.saveDomain(r),
     domainInfo: (ds) => s.domainInfo(ds),
     computeStats: (now) => s.computeStats(now),
+    ...(s.priceHistogram ? { priceHistogram: (now: number) => s.priceHistogram!(now) } : {}),
     getMeta: (k) => s.getMeta(k),
     addCounter: (k, n) => s.addCounter(k, n),
     setMeta: (k, v) => s.setMeta(k, v),
@@ -475,6 +479,9 @@ export class MemoryCatalogStore implements CatalogStore {
   }
   async saveDomain(row: DomainRow) { const p = this.domains.get(row.domain); this.domains.set(row.domain, { ...row, registered_at: row.registered_at ?? p?.registered_at ?? null }); } // a failed lookup never erases a known date
   async domainInfo(ds: string[]) { return ds.map((d) => this.domains.get(d)).filter((x): x is DomainRow => !!x); }
+  async priceHistogram(now: number): Promise<HistogramRow[]> {
+    return histogramFromRows(this.rows.filter((r) => r.last_seen > now - DELISTED_AFTER_MS));
+  }
   async computeStats(now: number): Promise<CatalogStats> {
     const r = this.rows;
     return {
@@ -673,6 +680,9 @@ export class D1CatalogStore implements CatalogStore {
     if (!ds.length) return [];
     const ph = ds.map((_, i) => `?${i + 1}`).join(",");
     return (await this.db.prepare(`SELECT * FROM domains WHERE domain IN (${ph})`).bind(...ds).all<DomainRow>()).results;
+  }
+  async priceHistogram(now: number): Promise<HistogramRow[]> {
+    return (await this.db.prepare(PRICE_HISTOGRAM_SQL).bind(now - DELISTED_AFTER_MS).all<HistogramRow>()).results.map((r) => ({ fam: String(r.fam), usd: Number(r.usd), n: Number(r.n) }));
   }
   async computeStats(now: number): Promise<CatalogStats> {
     const a = await this.db
