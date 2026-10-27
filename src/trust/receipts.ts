@@ -324,7 +324,7 @@ export function buildReceiptBody(
       http_status: b.http_status ?? 0,
       data_returned: dataReturnedView(b),
       outcome: outcomeOf(b.http_status, b.data_returned, b.summary, b.inconclusive),
-      ...(inconclusiveReason(b) ? { inconclusive_reason: inconclusiveReason(b)!, note: "Lumi recorded no HTTP response for this paid call (Lumi-side); delivery unknown. Not counted against the seller." } : {}),
+      ...(inconclusiveReason(b) ? { inconclusive_reason: inconclusiveReason(b)!, note: inconclusiveReason(b) === "empty_result" ? "The seller answered with an empty result for Lumi's test query; delivery unknown. Not counted against the seller." : "Lumi recorded no HTTP response for this paid call (Lumi-side); delivery unknown. Not counted against the seller." } : {}),
       ...(b.latency_ms != null ? { latency_ms: b.latency_ms } : {}),
       // Label from the buy's own chain and asset (an XRPL catalog buy is not "Base USDC").
       source: b.kind === "catalog" ? `Lumi catalog test-buy (${rail})` : b.source === "lumi_buy" ? "Lumi paid buy (seeded)" : `Lumi daily test-buy (${xrpl ? "XRPL" : rail})`,

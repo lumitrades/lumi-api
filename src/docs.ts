@@ -83,9 +83,9 @@ export const RECEIPT_DELIVERY_SCHEMA = {
   properties: {
     observed_at: { type: "string", format: "date-time" },
     http_status: { type: "integer", description: "0 = Lumi recorded no HTTP response" },
-    data_returned: { type: ["boolean", "null"], description: "true/false when a response was recorded; null when delivery is inconclusive (Lumi-side: no HTTP response recorded), which never counts against the seller" },
+    data_returned: { type: ["boolean", "null"], description: "true/false when a response was recorded; null when delivery is inconclusive (Lumi-side: no HTTP response recorded; or an empty result for Lumi's test query), which never counts against the seller" },
     outcome: { type: "string", enum: [...RECEIPT_OUTCOMES] },
-    inconclusive_reason: { type: "string", description: "Only when outcome is inconclusive, e.g. lumi_client_timeout, lumi_run_interrupted" },
+    inconclusive_reason: { type: "string", description: "Only when outcome is inconclusive, e.g. lumi_client_timeout, lumi_run_interrupted, empty_result" },
     latency_ms: { type: "integer" },
     source: { type: "string" },
     note: { type: "string" },

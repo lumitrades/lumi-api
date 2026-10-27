@@ -149,6 +149,22 @@ describe("catalog pipeline", () => {
     expect(pop.body.entries.length).toBe(3);
   });
 
+  it("owner observation: inconclusive empty_result is accepted, stored inconclusive, never 'no data'", async () => {
+    const { app, store } = mkApp();
+    await app.fetch(new Request(BASE + "/v1/trust/catalog/ingest?now=1", { method: "POST", headers: owner }));
+    const body = { resource: "https://api.seller0.com/v1/thing/2", network: "eip155:8453", tx_hash: "0x" + "e".repeat(64), data_returned: false, inconclusive: "empty_result", http_status: 200, summary: "Base test-buy: HTTP 200, empty result (result lists were empty)", facilitator: "cdp" };
+    const post = (b: unknown) => app.fetch(new Request(BASE + "/v1/trust/catalog/observations", { method: "POST", headers: owner, body: JSON.stringify(b) }));
+    expect((await post({ ...body, inconclusive: "made_up" })).status).toBe(400);
+    expect((await post(body)).status).toBe(201);
+    expect(store.buys[0]).toMatchObject({ inconclusive: "empty_result", data_returned: false });
+    const look = await get(app, "/v1/trust/vendors?url=" + encodeURIComponent(body.resource));
+    const e = look.body.catalog.entries[0];
+    // Payment is confirmed on-chain, so the listing is test-bought; the outcome is unknown (null), not "no data".
+    expect(e.tier).toBe("test-bought");
+    expect(e.test_buys).toMatchObject({ count: 1, last_data_returned: null });
+    expect(JSON.stringify(look.body)).not.toMatch(/no data returned|Lumi-side failure/i);
+  });
+
   it("cron schedules probe jobs on a queue and the consumer processes them", async () => {
     const sent: any[] = [];
     const store = new MemoryCatalogStore();

@@ -100,7 +100,9 @@ interface Reason { code: string; severity: "block" | "warn" | "info"; detail: st
 /** A purchase whose delivery is known (inconclusive = Lumi never recorded a response: never a reason to warn or block). */
 const conclusive = (p: Json) => p?.delivery !== "inconclusive" && p?.data_returned !== null && !(p?.data_returned === false && (p?.http_status == null || p?.http_status === 0));
 const inconclusiveText = (p: Json, what: string) =>
-  `Lumi's latest ${what} (${p.at}, tx ${p.tx_hash}) paid ${p.amount} ${p.asset}, but Lumi recorded no HTTP response (${p.inconclusive_reason ?? "no_http_response"}): delivery unknown. This was a Lumi-side failure and is not counted against the seller.`;
+  p.inconclusive_reason === "empty_result"
+    ? `Lumi's latest ${what} (${p.at}, tx ${p.tx_hash}) paid ${p.amount} ${p.asset}; the seller answered with an empty result for Lumi's test query (empty_result): delivery unknown. An empty result can be a correct answer, so it is not counted against the seller.`
+    : `Lumi's latest ${what} (${p.at}, tx ${p.tx_hash}) paid ${p.amount} ${p.asset}, but Lumi recorded no HTTP response (${p.inconclusive_reason ?? "no_http_response"}): delivery unknown. This was a Lumi-side failure and is not counted against the seller.`;
 
 /** Evidence older than this supports at most check_first, and older than NO_DATA_AFTER_DAYS at most no_data. */
 export const EVIDENCE_CAUTION_AFTER_DAYS = EVIDENCE_AGE.checkFirstAfterDays;

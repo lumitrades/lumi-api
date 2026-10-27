@@ -301,7 +301,7 @@ export function scoreVendor(probes: ProbeSummary, obs: ObservationRow[], reports
     ...(scored ? {} : { reason: NOT_SCORED_REASON }),
     confidence,
     components: {
-      delivery: { value: round(delivery), weight: WEIGHTS.delivery, delivered, paid_test_buys: paid, inconclusive: dc.inconclusive, meaning: "share of Lumi's paid test-buys whose response contained data; inconclusive buys (Lumi-side, no response recorded) are excluded" },
+      delivery: { value: round(delivery), weight: WEIGHTS.delivery, delivered, paid_test_buys: paid, inconclusive: dc.inconclusive, meaning: "share of Lumi's conclusive paid test-buys whose response contained data; inconclusive buys (no response recorded, Lumi-side; or an empty result for Lumi's test query) are excluded" },
       uptime: { value: round(uptime), weight: WEIGHTS.uptime, valid_quotes: probes.ok, probes: probes.n, meaning: "share of free probes that got a valid x402 402 quote with an XRPL option to a listed address" },
       latency: { value: round(latency), weight: WEIGHTS.latency, median_ms: med == null ? null : Math.round(med), samples: probes.latencies.length, meaning: "median time to a valid 402 quote; 500 ms or less = 1, 5 s or more = 0" },
       agent_reports: { value: round(agentReports), weight: WEIGHTS.agent_reports, counted, meaning: "agent reports (on-ledger payment + payer signature), after a 24 h hold; excluded when there are none" },
@@ -410,7 +410,7 @@ export function methodologyDoc(base: string) {
       ordering: "vendors are listed in allowlist order, not ranked",
     },
     data_returned_rule:
-      "A response 'contained data' when the HTTP status is 2xx and the body has non-empty content for that endpoint (e.g. a non-empty result list). Error bodies, empty lists and empty objects count as no data. A paid call where Lumi recorded no HTTP response at all (Lumi's client timed out or Lumi's run was interrupted) is inconclusive: delivery unknown, shown as data_returned null and delivery \"inconclusive\", excluded from delivery rates and scores, and never a reason for a warn or block verdict. Corrections are logged at /v1/monitor/corrections.",
+      "A response 'contained data' when the HTTP status is 2xx and the body has non-empty content for that endpoint (e.g. a non-empty result list, or an explicit screening answer such as match_count 0 or a clean verdict). Not delivered: a non-2xx status, an empty body, or a 2xx body that is an error message with no data beside it (error after payment: an error/errors field, success or ok false, an error status, or a short error text). Inconclusive: a paid call where Lumi recorded no HTTP response at all (Lumi's client timed out or Lumi's run was interrupted), or a 2xx empty result for Lumi's test query ({}, [], null, or result lists that were all empty), which can be a correct answer. Inconclusive buys are shown as data_returned null and delivery \"inconclusive\" with an inconclusive_reason, excluded from delivery rates and scores, and never a reason for a warn or block verdict. Corrections are logged at /v1/monitor/corrections.",
     right_to_reply: rightToReply(base),
     reports: {
       endpoint: `POST ${base}/v1/reports`,
@@ -836,11 +836,11 @@ export function createTrust(deps: TrustDeps): Trust {
         not_delivered: dcAll.not_delivered,
         inconclusive: dcAll.inconclusive,
         delivery_pct: pct(delivered, dcAll.conclusive),
-        delivery_note: "inconclusive = Lumi never recorded an HTTP response (our client timed out or our run was interrupted); delivery unknown, excluded from delivery_pct and the score, not counted against the vendor.",
+        delivery_note: "inconclusive = Lumi never recorded an HTTP response (our client timed out or our run was interrupted), or the vendor answered with an empty result for Lumi's test query; delivery unknown, excluded from delivery_pct and the score, not counted against the vendor.",
         spent: [...spent.entries()].map(([asset, amount]) => ({ asset, amount: String(Math.round(amount * 1e6) / 1e6) })),
         http_statuses: Object.fromEntries(statuses),
         latency: latencyStats(obs.filter((o) => o.latency_ms != null).map((o) => o.latency_ms!)),
-        history: obs.map((o) => ({ ...obsView(o), delivered: { delivered: "yes", not_delivered: "no", inconclusive: "unknown (inconclusive, Lumi-side)" }[deliveryState(o)], ...(rcpts.has(o.tx_hash) ? { receipt: rcpts.get(o.tx_hash) } : {}) })),
+        history: obs.map((o) => ({ ...obsView(o), delivered: { delivered: "yes", not_delivered: "no", inconclusive: o.inconclusive === "empty_result" ? "unknown (inconclusive, empty result)" : "unknown (inconclusive, Lumi-side)" }[deliveryState(o)], ...(rcpts.has(o.tx_hash) ? { receipt: rcpts.get(o.tx_hash) } : {}) })),
         receipts: { signed: obs.filter((o) => rcpts.has(o.tx_hash)).length, of: obs.length, format: "counterparty_delivery_receipt v0.1, signed by the paying wallet", verify: `${base}/v1/trust/receipts/verify` },
       },
       quote_checks: {
