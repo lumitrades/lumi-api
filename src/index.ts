@@ -2,7 +2,11 @@
 import { createApp, type App } from "./app";
 import type { Env } from "./config";
 import type { CatalogJob } from "./trust/catalog_service";
-import { BADGE_PATH_RE, legacyBadgeRedirect } from "./trust/badge";
+import { legacyBadgeRedirect } from "./trust/badge";
+import { CrawlerLimiter, defaultEdgeCache, isEdgeCacheable, serveEdgeCached } from "./edge_cache";
+
+/** Per-isolate crawler guard for the free public pages (429 + Retry-After instead of slow misses). */
+const limiter = new CrawlerLimiter();
 
 /** Must match the one-minute entry in wrangler.toml [triggers] crons. */
 const LIVE_CRON = "* * * * *";
@@ -17,13 +21,6 @@ function appFor(env: Env): App {
     appEnv = env;
   }
   return app;
-}
-
-/** Free, public, read-only documents served from the Cloudflare edge cache (TTL = their Cache-Control max-age). */
-const EDGE_CACHED = /^\/v1\/(samples|trust\/vendors|trust\/catalog|trust\/methodology)$/;
-
-function edgeCache(): Cache | undefined {
-  return (globalThis as any).caches?.default as Cache | undefined;
 }
 
 /** Header that keeps the app's own Cache-Control on the stored copy. Cloudflare's zone "Browser Cache TTL" (4 h by default)
@@ -55,51 +52,32 @@ export function badgeCacheKey(url: URL): string {
 }
 
 /**
- * "Tested by Lumi" badge + result page. Served from the edge cache (1 h); on a miss the app reads at most a few indexed
- * D1 rows and writes nothing. Deliberately not traffic-logged (embedded badges are hot-linked and would only add
- * traffic rows) and never routed through the pricer or rate limiter.
+ * Free public pages (trust vendors/catalog/methodology, samples, and the "Tested by Lumi" /trust/v/{key} pages) go
+ * through the edge cache with stale-while-revalidate, one rebuild per key, a miss deadline and a light crawler limit
+ * (see edge_cache.ts). Badge pages are deliberately not traffic-logged (hot-linked) and skip the pricer.
  */
-async function serveBadge(request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }, url: URL): Promise<Response> {
-  const head = request.method === "HEAD";
-  const cache = edgeCache();
-  const key = badgeCacheKey(url);
-  if (cache) {
-    const hit = await cache.match(key).catch(() => undefined);
-    if (hit) {
-      const out = restoreHit(hit);
-      return head ? new Response(null, { status: out.status, headers: out.headers }) : out;
-    }
-  }
-  const res = (await appFor(env).badge(new Request(key, { method: "GET" }))) ?? new Response("Not found", { status: 404 });
-  if (cache && res.status < 500 && /public, max-age=\d+/.test(res.headers.get("Cache-Control") ?? "")) {
-    ctx.waitUntil(cache.put(key, storable(res)).catch(() => {}));
-  }
-  return head ? new Response(null, { status: res.status, headers: res.headers }) : res;
+async function servePublic(request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }, url: URL): Promise<Response> {
+  const badge = /^\/trust\/v\//i.test(url.pathname);
+  const res = await serveEdgeCached(
+    request,
+    async (req) => (badge ? ((await appFor(env).badge(req)) ?? new Response("Not found", { status: 404 })) : appFor(env).fetch(req, ctx)),
+    { cache: defaultEdgeCache(), waitUntil: (p) => ctx.waitUntil(p), limiter },
+  );
+  if (!badge) appFor(env).logTraffic(request, res, ctx);
+  return res;
 }
 
 export default {
   async fetch(request: Request, env: Env, ctx: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "GET" || request.method === "HEAD") {
-      // Legacy /badge: 301 to the signed /v1/badge route, query kept (before serveBadge, whose cache key drops the query).
+      // Legacy /badge: 301 to the signed /v1/badge route, query kept.
       const legacy = legacyBadgeRedirect(url);
       if (legacy) return legacy;
-      if (BADGE_PATH_RE.test(url.pathname)) return serveBadge(request, env, ctx, url);
     }
-    const cache = request.method === "GET" && !request.headers.has("Authorization") && EDGE_CACHED.test(url.pathname) ? edgeCache() : undefined;
-    if (cache) {
-      const hit = await cache.match(request).catch(() => undefined);
-      if (hit) {
-        const out = restoreHit(hit);
-        appFor(env).logTraffic(request, out, ctx);
-        return out;
-      }
-    }
+    if (isEdgeCacheable(request, url)) return servePublic(request, env, ctx, url);
     const res = await appFor(env).fetch(request, ctx);
     appFor(env).logTraffic(request, res, ctx);
-    if (cache && res.status === 200 && /public, max-age=\d+/.test(res.headers.get("Cache-Control") ?? "")) {
-      ctx.waitUntil(cache.put(request, storable(res)).catch(() => {}));
-    }
     return res;
   },
   /** Cron triggers. LIVE_CRON (every minute): a no-op since the market feeds were retired (2026-10-25).

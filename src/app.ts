@@ -37,7 +37,7 @@ import { D1ReceiptStore, MemoryReceiptStore, type ReceiptStore } from "./trust/r
 import { createContributors, D1ContributorStore, MemoryContributorStore, type ContributorStore, type Contributors, type ContribQueue } from "./trust/contributors";
 import { productSample, sampleEntry, SAMPLE_ARGS, SAMPLE_LABEL } from "./samples";
 import { applyRate, createXrpPricer, type XrpPricer } from "./pricing";
-import { D1TrafficStore, MemoryTrafficStore, TRAFFIC_RETENTION_DAYS, TrafficBuffer, trafficRow, trafficSummary, type TrafficStore } from "./traffic";
+import { D1TrafficStore, MemoryTrafficStore, TRAFFIC_RETENTION_DAYS, TrafficBuffer, trafficRow, trafficSummary, paymentHeaderOf, payFailFrom, type TrafficStore } from "./traffic";
 import { D1FeedStore, MemoryFeedStore, FEEDS, dueFeed, refreshFeed, feedFresh, type FeedStore } from "./feeds";
 import { fundingView, fearGreedView, fearGreedFromContext, trustVerdict } from "./quick";
 import { lookupError, withSafety } from "./trust/index";
@@ -1677,9 +1677,22 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     commerce,
     traffic,
     logTraffic(request: Request, response: Response, ctx?: WaitUntil) {
-      if (!trafficOn || request.method === "OPTIONS") return;
-      const p = trafficRow(request, response, env.TRAFFIC_SALT || env.INVOICE_SECRET || undefined, now())
-        .then((row) => trafficBuf.add(ctx && row.paid && paidByCtx.get(ctx) ? { ...row, paid_test: true } : row, now()))
+      if (request.method === "OPTIONS") return;
+      // Refused payment attempt: clone now (before the body is streamed to the client), read the error code later.
+      const failBody = paymentHeaderOf(request) && response.status >= 400 ? response.clone().text().catch(() => null) : null;
+      const failP = failBody
+        ? failBody.then((b) => {
+            const f = payFailFrom(request, response.status, b, now());
+            if (f) console.log(JSON.stringify({ event: "x402_payment_failed", ...f }));
+            return f;
+          })
+        : Promise.resolve(null);
+      if (!trafficOn) { if (ctx) ctx.waitUntil(failP.catch(() => null)); return; }
+      const p = Promise.all([trafficRow(request, response, env.TRAFFIC_SALT || env.INVOICE_SECRET || undefined, now()), failP.catch(() => null)])
+        .then(([row0, fail]) => {
+          const row = fail ? { ...row0, pay_fail: fail } : row0;
+          return trafficBuf.add(ctx && row.paid && paidByCtx.get(ctx) ? { ...row, paid_test: true } : row, now());
+        })
         .catch(trafficErr);
       if (ctx) ctx.waitUntil(p);
     },
