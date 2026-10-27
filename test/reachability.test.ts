@@ -34,7 +34,8 @@ describe("classifySkipReason (test-buyer skip text)", () => {
     expect(k("HTTP 429 (expected 402)")).toBe("rate_limited");
     expect(k("quote payTo 0xabc differs from listing")).toBe("pay_to_differs");
     expect(k("unreadable 402: no PAYMENT-REQUIRED header")).toBe("ok");
-    expect(k("unreadable 402: quote lacks EIP-712 name/version (USDC eip155:8453)")).toBe("ok");
+    // buyer skip for a 402 quote without an EIP-712 domain (seller answered): counts as an answer
+    expect(k("quote lacks EIP-712 name/version (seller answered with a 402), skipped")).toBe("ok");
     expect(k("no Base USDC exact option")).toBe("ok");
     expect(k("price 0.2 USDC above $0.05")).toBe("ok");
     // Lumi-side reasons are not about the seller: never recorded

@@ -72,7 +72,7 @@ export function classifySkipReason(reason: string): { kind: ReachKind; detail: s
   if (/timeout|timed out|aborted/i.test(r)) return { kind: "down", detail: "no answer before the timeout" };
   if (/^quote payTo .* differs from listing/.test(r)) return { kind: "pay_to_differs", detail: "quote payTo differs from listing" };
   // It answered with a 402 payment request; the reason it was not bought is on Lumi's side (limits, chain, format).
-  if (/^(unreadable 402|no Base USDC|price .* above|transfer method)/.test(r)) return { kind: "ok", detail: "answered with a 402 payment request" };
+  if (/^(unreadable 402|no Base USDC|price .* above|transfer method|quote lacks EIP-712)/.test(r)) return { kind: "ok", detail: "answered with a 402 payment request" };
   return null;
 }
 
