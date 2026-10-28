@@ -93,9 +93,16 @@ export function recipientsFromInflow(rows: InflowRow[], since: number): Recipien
 export async function readXrpl(f: typeof fetch, rpcs: string[], address: string, since: number): Promise<ReadResult> {
   const window = "the wallet's latest 200 XRP Ledger transactions";
   try {
-    const j = await rpcAny(f, rpcs, { method: "account_tx", params: [{ account: address, limit: 200, forward: false, ledger_index_min: -1, ledger_index_max: -1, api_version: 2 }] });
-    const r = j?.result ?? j;
-    if (!r || r.error) return { source: "XRP Ledger (public rippled account_tx)", window, complete: false, error: r?.error === "actNotFound" ? "account_not_found" : "read_failed", payments: [] };
+    // Try each server in turn: a public rippled can answer HTTP 200 with result.error (e.g. "slowDown" for Worker egress),
+    // which rpcAny treats as success, so the result-level error is checked here before moving on.
+    let r: any = null;
+    for (const u of rpcs) {
+      const j = await rpcAny(f, [u], { method: "account_tx", params: [{ account: address, limit: 200, forward: false, ledger_index_min: -1, ledger_index_max: -1, api_version: 2 }] }).catch(() => null);
+      const res = j?.result ?? j;
+      if (res?.error === "actNotFound") return { source: "XRP Ledger (public rippled account_tx)", window, complete: false, error: "account_not_found", payments: [] };
+      if (res && !res.error && Array.isArray(res.transactions)) { r = res; break; }
+    }
+    if (!r) return { source: "XRP Ledger (public rippled account_tx)", window, complete: false, error: "read_failed", payments: [] };
     const payments: OutPayment[] = [];
     for (const t of (r.transactions ?? []) as any[]) {
       const tx = t?.tx_json ?? t?.tx;
