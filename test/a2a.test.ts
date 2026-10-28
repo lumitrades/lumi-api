@@ -3,7 +3,7 @@ import { createApp } from "../src/app";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch } from "./helpers";
 
 const EVM_PAY_TO = "0x5E617bac19912e6d212CB303ae84655E9E203532";
-const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", EVM_PAY_TO, EVM_NETWORK: "eip155:84532" };
+const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", EVM_PAY_TO, EVM_NETWORK: "eip155:84532", EVM_CDP_ONLY_ROUTES: "none" };
 const BASE = "http://lumi.test";
 
 function setup(now = NOW) {

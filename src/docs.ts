@@ -16,6 +16,11 @@ import { MONITORED_BADGE_SUMMARY } from "./commerce/counting";
 import { SIWX_HEADER, SIWX_KEY, TRIAL_LIMITS, TRIAL_OPT_IN_HEADER, TRIAL_SHORT, TRIAL_SUMMARY, XRPL_SIWX_TYPE, trialChains, trialEligible } from "./trial";
 
 /** Free-trial terms (x402 sign-in-with-x), shown in the index, /.well-known/x402, OpenAPI, skill.md and the home page. */
+
+/** Trust/verdict routes settle Base USDC through Coinbase CDP only (config CDP_ONLY_ROUTES, docs/facilitator-routing.md). */
+const CDP_ONLY_NOTE =
+  "Trust checks and verdicts (high-value check, verdict, receipts, batch check, vendor report) settle Base USDC through Coinbase CDP only: if CDP is unavailable they answer 503 facilitator_unavailable (reason cdp_unavailable) with Retry-After and payment_help, are never charged, and never switch to another facilitator. Without CDP they do not offer Base; XRPL and Stellar are unaffected.";
+
 export function freeTrialInfo(cfg: Config) {
   return {
     summary: TRIAL_SUMMARY,
@@ -650,6 +655,7 @@ export function paymentNetworks(cfg: Config) {
       pay_to: cfg.evm.payTo,
       facilitator: cfg.evm.cdp ? cfg.evm.cdp.url : cfg.evm.facilitatorUrl,
       ...(cfg.evm.cdp ? { fallback_facilitator: cfg.evm.facilitatorUrl } : {}),
+      ...(cfg.evm.cdpOnlyRoutes.length ? { cdp_only_routes: cfg.evm.cdpOnlyRoutes, cdp_only_note: CDP_ONLY_NOTE } : {}),
       payload: "EIP-3009 transferWithAuthorization (gasless for the payer; @x402/evm, @x402/fetch)",
     });
   }
@@ -744,7 +750,7 @@ description: Lumi Trades, an x402 seller trust service. Check an x402 seller bef
 
 Base URL: ${base}
 Network: \`${net}\` (${cfg.networkName}). Assets: XRP${cfg.ious.map((o) => ` or ${o.symbol} (${IOU_NAMES[o.symbol]}, issuer \`${o.issuer}\`, currency \`${o.currency}\`)`).join("")}. Pay to: \`${cfg.payTo}\`.
-${cfg.evm ? `Also: \`${cfg.evm.network}\` (${cfg.evm.networkName}). Asset: USDC \`${cfg.evm.asset}\`. Pay to: \`${cfg.evm.payTo}\`. Facilitator: ${cfg.evm.cdp ? `${cfg.evm.cdp.url} (Coinbase CDP; fallback ${cfg.evm.facilitatorUrl})` : cfg.evm.facilitatorUrl}.
+${cfg.evm ? `Also: \`${cfg.evm.network}\` (${cfg.evm.networkName}). Asset: USDC \`${cfg.evm.asset}\`. Pay to: \`${cfg.evm.payTo}\`. Facilitator: ${cfg.evm.cdp ? `${cfg.evm.cdp.url} (Coinbase CDP; fallback ${cfg.evm.facilitatorUrl}${cfg.evm.cdpOnlyRoutes.length ? " for feed and monitor plans only" : ""})` : cfg.evm.facilitatorUrl}.${cfg.evm.cdpOnlyRoutes.length ? ` ${CDP_ONLY_NOTE}` : ""}
 ` : ""}${cfg.stellar ? `Also: \`${cfg.stellar.network}\` (${cfg.stellar.networkName}). Asset: USDC \`${cfg.stellar.asset}\` (Circle, 7 decimals). Pay to: \`${cfg.stellar.payTo}\`. Facilitator: ${cfg.stellar.facilitatorUrl} (OpenZeppelin, fees sponsored).
 ` : ""}Protocol: [x402](https://xrpl.org/docs/agents/agentic-payments-x402) v2, \`exact\` scheme (one presigned XRPL Payment per call${cfg.evm ? ", or one EIP-3009 USDC authorization on Base" : ""}${cfg.stellar ? ", or one signed USDC transfer on Stellar" : ""}).
 No API key, no account, no sign-up for the per-call endpoints (the optional trust data feed uses keys, see below).
@@ -845,7 +851,7 @@ ${cfg.evm ? `
 
 The same 402 lists \`accepts[0]\` = \`{ scheme: "exact", network: "${cfg.evm.network}", asset: "${cfg.evm.asset}", amount: "<atomic USDC, 6 decimals: 10000 = 0.01>", payTo: "${cfg.evm.payTo}", maxTimeoutSeconds: ${cfg.invoiceTtlSeconds}, extra: { name: "${cfg.evm.eip712.name}", version: "${cfg.evm.eip712.version}", invoiceId, symbol: "USDC", decimals: 6 } }\`.
 Sign an EIP-3009 \`transferWithAuthorization\` for exactly \`amount\` to \`payTo\` and retry with \`PAYMENT-SIGNATURE: base64(JSON{ x402Version: 2, accepted: <that entry, unchanged>, payload: { signature, authorization: { from, to, value, validAfter, validBefore, nonce } } })\`.
-Lumi's facilitator (${cfg.evm.cdp ? `Coinbase CDP, fallback ${cfg.evm.facilitatorUrl}` : cfg.evm.facilitatorUrl}) verifies it and submits it on ${cfg.evm.networkName}, paying the gas: your wallet needs USDC only, no ETH. Same rules: one invoice, one payment, never charged when Lumi cannot answer.
+Lumi's facilitator (${cfg.evm.cdp ? `Coinbase CDP${cfg.evm.cdpOnlyRoutes.length ? " only for trust checks and verdicts" : ""}, fallback ${cfg.evm.facilitatorUrl}${cfg.evm.cdpOnlyRoutes.length ? " for feed and monitor plans" : ""}` : cfg.evm.facilitatorUrl}) verifies it and submits it on ${cfg.evm.networkName}, paying the gas: your wallet needs USDC only, no ETH. Same rules: one invoice, one payment, never charged when Lumi cannot answer.
 The official x402 client packages (\`@x402/fetch\` + \`@x402/evm\`) do this for you; USDC on ${cfg.evm.networkName} is the first option, so they pick it by default.
 ` : ""}${cfg.stellar ? `
 ### Paying with USDC on ${cfg.stellar.networkName} (accepts[${acceptsIndex(cfg).stellar}])

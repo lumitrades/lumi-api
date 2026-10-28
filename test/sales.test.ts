@@ -12,7 +12,7 @@ const EVM_FAC = "https://evm-facilitator.test";
 const HOOK = "https://hooks.example.test/sales";
 const ENV = {
   XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", OWNER_MCP_KEY: KEY,
-  EVM_PAY_TO, EVM_NETWORK: "eip155:84532", EVM_FACILITATOR_URL: EVM_FAC,
+  EVM_PAY_TO, EVM_NETWORK: "eip155:84532", EVM_FACILITATOR_URL: EVM_FAC, EVM_CDP_ONLY_ROUTES: "none",
 };
 const BASE = "http://lumi.test";
 

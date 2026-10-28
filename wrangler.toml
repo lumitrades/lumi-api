@@ -42,6 +42,8 @@ PUBLIC_BASE_URL = "https://api.lumitrades.io"
 EVM_NETWORK = "eip155:8453"                               # Base mainnet
 EVM_PAY_TO = "0x5E617bac19912e6d212CB303ae84655E9E203532" # Lumi's Base receiving wallet (address only)
 EVM_FACILITATOR_URL = "https://facilitator.payai.network" # keyless fallback; primary is Coinbase CDP when CDP_API_KEY_ID/SECRET secrets are set
+# EVM_CDP_ONLY_ROUTES unset = default: trust/verdict routes (high_value_check, verdict, receipts, batch_check, vendor_report)
+# settle via CDP only, never PayAI (503 cdp_unavailable on a CDP outage); feed/monitor plans keep the PayAI fallback. docs/facilitator-routing.md
 ACCEPT_BASE_USDC = "true"                                 # "false" turns the Base option off; prices follow PRICE_<ROUTE>_USDC
 # Stellar USDC over x402 (stellar:pubnet, @x402/stellar exact): offered after the XRPL options, same USD prices as Base USDC.
 # Facilitator: OpenZeppelin Channels (fees sponsored); its API key is the secret STELLAR_FACILITATOR_API_KEY. Address only here.
@@ -131,6 +133,7 @@ PUBLIC_BASE_URL = ""   # empty = use the request origin (workers.dev / localhost
 EVM_NETWORK = "eip155:84532"                              # Base Sepolia
 EVM_PAY_TO = "0x5E617bac19912e6d212CB303ae84655E9E203532"
 EVM_FACILITATOR_URL = "https://x402.org/facilitator"      # x402.org public testnet facilitator
+EVM_CDP_ONLY_ROUTES = "none"                              # testnet has no CDP key and no PayAI: trust routes keep Base Sepolia via x402.org
 
 # Contributor request rate limit (Lumi Check). NOT enabled: needs owner approval and a deploy.
 # Workers Rate Limiting keeps per-key counters outside D1 (no row writes) and across isolates in a location.

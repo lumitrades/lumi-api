@@ -203,8 +203,9 @@ describe("Base settlement via CDP with keyless fallback", () => {
     ["network error", () => { throw new TypeError("fetch failed"); }],
     ["invalid_bazaar_extension", () => jsonResponse(200, { isValid: false, invalidReason: "invalid_bazaar_extension" })],
   ] as [string, Handler][]) {
-    it(`falls back to the keyless facilitator when CDP verify fails: ${name}`, async () => {
-      const s = setup({ verify });
+    // Fallback mechanics for routes that keep it (feed/monitor); trust routes are CDP-only (test/trust_cdp_only.test.ts).
+    it(`falls back to the keyless facilitator when CDP verify fails: ${name} (route not CDP-only)`, async () => {
+      const s = setup({ verify }, { EVM_CDP_ONLY_ROUTES: "none" });
       const { app } = await s.ready();
       const r = await payBase(app);
       expect(r.status).toBe(200);
@@ -225,8 +226,8 @@ describe("Base settlement via CDP with keyless fallback", () => {
     expect(s.calls.map((c) => `${c.fac}${c.path}`)).toEqual(["cdp/verify"]);
   });
 
-  it("falls back at settle when CDP fails without a transaction; never after a CDP tx hash", async () => {
-    const s = setup({ settle: () => jsonResponse(500, { success: false, errorReason: "unexpected_settle_error" }) });
+  it("falls back at settle when CDP fails without a transaction; never after a CDP tx hash (route not CDP-only)", async () => {
+    const s = setup({ settle: () => jsonResponse(500, { success: false, errorReason: "unexpected_settle_error" }) }, { EVM_CDP_ONLY_ROUTES: "none" });
     const { app } = await s.ready();
     const r = await payBase(app);
     expect(r.status).toBe(200);
@@ -247,11 +248,18 @@ describe("Base settlement via CDP with keyless fallback", () => {
     expect(s.calls.map((c) => `${c.fac}${c.path}`)).toEqual(["cdp/verify", "cdp/settle"]);
   });
 
-  it("EVM_FACILITATOR=fallback bypasses CDP entirely; XRPL never touches CDP", async () => {
-    const s = setup({}, { EVM_FACILITATOR: "fallback" });
+  it("EVM_FACILITATOR=fallback bypasses CDP entirely on routes that allow it; trust routes then offer no Base option", async () => {
+    const s = setup({}, { EVM_FACILITATOR: "fallback", EVM_CDP_ONLY_ROUTES: "none" });
     const { app } = await s.ready();
     expect((await payBase(app)).status).toBe(200);
     expect(s.calls.map((c) => c.fac)).toEqual(["payai", "payai"]);
+
+    const strict = setup({}, { EVM_FACILITATOR: "fallback" });
+    const { app: app2 } = await strict.ready();
+    const q = await (await app2.fetch(new Request("http://lumi.test/v1/trust/check/high-value?url=https://a.example/x&amount=4"))).json();
+    expect(q.accepts.some((a: any) => a.network.startsWith("eip155:"))).toBe(false);
+    expect(q.accepts.length).toBeGreaterThan(0); // XRPL still offered
+    expect(strict.calls).toEqual([]);
   });
 });
 

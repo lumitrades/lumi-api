@@ -398,6 +398,8 @@ export const isStellarRequirement = (r: { network?: unknown }) => typeof r.netwo
  */
 export function buildEvmRequirement(cfg: Config, quote: Quote, invoiceId: string): PaymentRequirements | null {
   if (!cfg.evm || !quote.amountEvm) return null;
+  // A CDP-only route (trust/verdict) without CDP configured offers no Base option: there is no facilitator it may use.
+  if (isCdpOnlyQuote(cfg, quote) && !cfg.evm.cdp) return null;
   return {
     scheme: "exact",
     network: cfg.evm.network,
@@ -407,6 +409,14 @@ export function buildEvmRequirement(cfg: Config, quote: Quote, invoiceId: string
     maxTimeoutSeconds: cfg.invoiceTtlSeconds,
     extra: { name: cfg.evm.eip712.name, version: cfg.evm.eip712.version, invoiceId, symbol: "USDC", decimals: cfg.evm.decimals },
   };
+}
+
+/** The paid route a quote is for (Quote.routeKey up to the first ':'), e.g. "verdict" for "verdict:probe". */
+export const quoteRoute = (quote: Pick<Quote, "routeKey">): string => quote.routeKey.split(":")[0];
+
+/** True when this quote's Base payment may settle only through Coinbase CDP (config CDP_ONLY_ROUTES). */
+export function isCdpOnlyQuote(cfg: Config, quote: Pick<Quote, "routeKey">): boolean {
+  return !!cfg.evm && cfg.evm.cdpOnlyRoutes.includes(quoteRoute(quote));
 }
 
 export const isEvmRequirement = (r: { network?: unknown }) => typeof r.network === "string" && r.network.startsWith("eip155:");
@@ -881,7 +891,8 @@ export function parseEip3009(payload: PaymentPayload): { authorization: Eip3009A
 }
 
 /**
- * Base USDC settlement through an x402 facilitator (Coinbase CDP when its API key is configured, PayAI as the automatic keyless fallback). Same guarantees as the XRPL path:
+ * Base USDC settlement through an x402 facilitator (Coinbase CDP when its API key is configured, PayAI as the automatic keyless
+ * fallback, except on CDP-only routes, see CDP_ONLY_ROUTES in config.ts: CDP or a 503, never PayAI). Same guarantees as the XRPL path:
  * the paid body is already built (freshness gate ran before the 402), the invoice is claimed exactly once in the
  * replay guard before settlement, and the EIP-3009 authorization nonce is claimed too, so one signed authorization
  * can never be redeemed against two invoices even if a facilitator treats a re-settle as success.
@@ -911,14 +922,18 @@ async function requireEvmPayment(
   const nonceKey = `eip3009:${expected.network}:${expected.asset.toLowerCase()}:${auth.from.toLowerCase()}:${auth.nonce.toLowerCase()}`;
   if (await deps.replay.isUsed(nonceKey)) return paymentRequiredResponse(cfg, quote, "authorization_already_used");
 
+  const cdpOnly = isCdpOnlyQuote(cfg, quote);
   const fac = evmFacilitators(cfg, payload, expected, quote, deps);
+  if (!fac.length) return cdpUnavailable(cfg, quote, deps, "verify", "cdp_not_configured");
 
   // ---- verify (no money moves; safe to retry). Facilitators answer an invalid payment with 200 or 400 + isValid:false.
-  // CDP first (when configured); any CDP-side failure falls back to the keyless facilitator.
+  // CDP first (when configured); any CDP-side failure falls back to the keyless facilitator, except on CDP-only routes
+  // (trust/verdict), where every case that would fall back answers 503 cdp_unavailable instead (nothing reaches PayAI).
   let verified: FacilitatorCall | null = null;
   for (const f of fac) {
     const r = await f.call("verify");
     const last = f === fac[fac.length - 1];
+    if (cdpOnly && r.kind === "error") return cdpUnavailable(cfg, quote, deps, "verify", r.reason, r.status, r.retryAfter);
     if (r.kind === "error") {
       if (!last) {
         deps.log?.({ event: "x402_facilitator_fallback", phase: "verify", from: f.name, status: r.status ?? null, reason: r.reason });
@@ -931,6 +946,7 @@ async function requireEvmPayment(
     }
     const v = r.json;
     if (typeof v.isValid !== "boolean" || (v.isValid && r.status !== 200)) {
+      if (cdpOnly) return cdpUnavailable(cfg, quote, deps, "verify", "invalid_verify_response", r.status);
       if (!last) {
         deps.log?.({ event: "x402_facilitator_fallback", phase: "verify", from: f.name, status: r.status, reason: "invalid_verify_response" });
         continue;
@@ -939,6 +955,7 @@ async function requireEvmPayment(
     }
     if (!v.isValid) {
       const reason = String(v.invalidReason || "verify_failed");
+      if (cdpOnly && facilitatorSideReason(reason)) return cdpUnavailable(cfg, quote, deps, "verify", reason, r.status);
       if (!last && facilitatorSideReason(reason)) {
         deps.log?.({ event: "x402_facilitator_fallback", phase: "verify", from: f.name, status: r.status, reason });
         continue;
@@ -968,7 +985,17 @@ async function requireEvmPayment(
   // authorization or fails, which is reported as settlement_status_unknown exactly as before.
   let settleFac = verified.facilitator;
   let s = await settleFac.call("settle");
-  if (settleFac !== fac[fac.length - 1] && cdpSettleShouldFallBack(s)) {
+  // CDP-only routes: no settle fallback. A CDP answer that proves nothing was submitted (auth / not found / rate limit,
+  // or a facilitator-side refusal without a tx hash) is a 503 cdp_unavailable (not charged; the invoice and authorization
+  // are spent, so the buyer re-quotes and signs again). Anything that may have reached the chain stays settlement_status_unknown.
+  if (cdpOnly && s.kind === "ok" && !(typeof s.json.transaction === "string" && s.json.transaction) && s.json.success !== true) {
+    const st = s.status;
+    if (st === 401 || st === 403 || st === 404 || st === 429 || (st < 500 && st !== 408 && facilitatorSideReason(String(s.json.errorReason ?? "")))) {
+      if (settleFac.name === "cdp") logBazaar(deps, quote, "settle", s.headers);
+      return cdpUnavailable(cfg, quote, deps, "settle", String(s.json.errorReason ?? `http_${st}`), st, s.headers.get("Retry-After"));
+    }
+  }
+  if (!cdpOnly && settleFac !== fac[fac.length - 1] && cdpSettleShouldFallBack(s)) {
     const next = fac[fac.indexOf(settleFac) + 1];
     deps.log?.({
       event: "x402_facilitator_fallback",
@@ -1116,8 +1143,47 @@ function evmFacilitators(cfg: Config, payload: PaymentPayload, expected: Payment
     };
     list.push(make("cdp", evm.cdp.url, forCdp, true));
   }
-  list.push(make("fallback", evm.facilitatorUrl, payload, false));
+  // CDP-only routes (trust/verdict) never get the keyless fallback (PayAI on mainnet): their payload, resource and
+  // bazaar declaration are never sent there. Without CDP the list is empty (and buildEvmRequirement offers no Base option).
+  if (!isCdpOnlyQuote(cfg, quote)) list.push(make("fallback", evm.facilitatorUrl, payload, false));
   return list;
+}
+
+/**
+ * CDP-only route and CDP could not be used: 503, retryable, never charged, no fallback to another facilitator.
+ * phase "verify": nothing claimed; retry the same signed payment after Retry-After (while the invoice is valid).
+ * phase "settle": CDP refused before submitting (no tx); the invoice and authorization are spent, so request a fresh quote.
+ */
+function cdpUnavailable(cfg: Config, quote: Quote, deps: PaywallDeps, phase: "verify" | "settle", why: string, status?: number, retryAfter?: string | null): Response {
+  const ra = Math.min(300, Math.max(5, Number(retryAfter) || 30));
+  const correlationId = crypto.randomUUID();
+  const otherRails = [cfg.network, ...(cfg.stellar && quote.amountStellar ? [cfg.stellar.network] : [])];
+  deps.log?.({ event: "x402_cdp_only_unavailable", route: quote.routeKey, phase, status: status ?? null, reason: why });
+  return json(
+    503,
+    {
+      error: "facilitator_unavailable",
+      reason: "cdp_unavailable",
+      retryable: true,
+      retryAfter: ra,
+      correlationId,
+      phase,
+      settlementAttempted: phase === "settle",
+      charged: false,
+      payment_help: {
+        why: "This route settles Base USDC only through the Coinbase CDP facilitator, and CDP did not accept the request just now. Lumi does not switch this route to another facilitator.",
+        facilitator: "Coinbase CDP",
+        fallback_facilitator: null,
+        upstream: { status: status ?? null, reason: why },
+        retry: phase === "verify"
+          ? `Nothing was charged. Retry the same request with the same payment after ${ra} seconds (while the quote is valid), or request the URL again for a fresh quote.`
+          : `Nothing was charged (CDP refused before submitting the transfer). This payment cannot be reused: request the URL again for a fresh 402 quote after ${ra} seconds and sign a new payment.`,
+        other_networks: otherRails,
+        other_networks_note: "The same 402 quote also offers XRPL (XRP, RLUSD, USDC)" + (otherRails.length > 1 ? " and Stellar USDC" : "") + ", which do not use CDP.",
+      },
+    },
+    { "Retry-After": String(ra), "X-Correlation-ID": correlationId, "Cache-Control": "no-store" },
+  );
 }
 
 // ---------------------------------------------------------------- Stellar flow

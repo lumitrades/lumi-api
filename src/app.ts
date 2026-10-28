@@ -1704,6 +1704,15 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
                   asset: config.evm.asset,
                   facilitator: config.evm.cdp ? config.evm.cdp.url : config.evm.facilitatorUrl,
                   ...(config.evm.cdp ? { facilitator_name: "Coinbase CDP", fallback_facilitator: config.evm.facilitatorUrl } : {}),
+                  // Trust/verdict routes: CDP only, never the fallback; without CDP they offer no Base option.
+                  cdp_only_routes: config.evm.cdpOnlyRoutes,
+                  ...(config.evm.cdpOnlyRoutes.length
+                    ? {
+                        cdp_only_on_outage: "503 facilitator_unavailable (reason cdp_unavailable, Retry-After, payment_help); no fallback facilitator",
+                        fallback_applies_to: "paid routes not in cdp_only_routes (feed credits, monitor plans and packs)",
+                        ...(config.evm.cdp ? {} : { cdp_only_routes_base: "not offered (CDP not configured)" }),
+                      }
+                    : {}),
                 },
               }
             : {}),

@@ -9,7 +9,7 @@ import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, decodeB64J
 const RPC = "https://base-rpc.test";
 const ENV = {
   XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret",
-  EVM_PAY_TO: "0x5E617bac19912e6d212CB303ae84655E9E203532", EVM_NETWORK: "eip155:84532", EVM_FACILITATOR_URL: "https://evm-fac.test", BASE_RPC_URL: RPC,
+  EVM_PAY_TO: "0x5E617bac19912e6d212CB303ae84655E9E203532", EVM_NETWORK: "eip155:84532", EVM_FACILITATOR_URL: "https://evm-fac.test", EVM_CDP_ONLY_ROUTES: "none", BASE_RPC_URL: RPC,
 };
 const BASE = "http://lumi.test";
 

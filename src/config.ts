@@ -80,6 +80,9 @@ export interface Env {
   EVM_FACILITATOR?: string;
   /** Override for the CDP facilitator base URL (default https://api.cdp.coinbase.com/platform/v2/x402). */
   CDP_FACILITATOR_URL?: string;
+  /** Paid routes whose Base payments settle ONLY through Coinbase CDP, never the keyless fallback (PayAI on mainnet).
+   *  Comma-separated route names; default CDP_ONLY_ROUTES (every trust/verdict route); "none" turns the rule off (testnet). */
+  EVM_CDP_ONLY_ROUTES?: string;
   /** Stellar (pubnet) receiving G-address for USDC over x402 (address only, never a key). Unset = Stellar payments off. */
   STELLAR_PAY_TO?: string;
   /** CAIP-2 Stellar network: stellar:pubnet (default) or stellar:testnet. */
@@ -283,6 +286,9 @@ export interface EvmOption {
   facilitatorUrl: string;
   /** Primary facilitator: Coinbase CDP with JWT auth (set when the CDP key is configured). */
   cdp?: { url: string; credentials: CdpCredentials };
+  /** Routes (Quote.routeKey prefix) that settle Base USDC through CDP only: no fallback facilitator, and no Base option at
+   *  all when CDP is not configured. See CDP_ONLY_ROUTES. */
+  cdpOnlyRoutes: string[];
   explorer: string;
   /** Decimal USDC prices per route (same as the XRPL stablecoin prices). */
   prices: Record<PaidRoute, string>;
@@ -291,7 +297,7 @@ export interface EvmOption {
 }
 
 /** Circle USDC on Base (https://developers.circle.com/stablecoins/usdc-contract-addresses), with its EIP-712 domain. */
-export const EVM_NETWORKS: Record<EvmNetwork, Omit<EvmOption, "payTo" | "prices" | "amounts" | "facilitatorUrl" | "cdp"> & { facilitatorUrl: string }> = {
+export const EVM_NETWORKS: Record<EvmNetwork, Omit<EvmOption, "payTo" | "prices" | "amounts" | "facilitatorUrl" | "cdp" | "cdpOnlyRoutes"> & { facilitatorUrl: string }> = {
   "eip155:8453": {
     network: "eip155:8453",
     networkName: "Base",
@@ -433,9 +439,30 @@ function evmConfig(env: Env): EvmOption | undefined {
     payTo,
     facilitatorUrl: (env.EVM_FACILITATOR_URL || net.facilitatorUrl).replace(/\/+$/, ""),
     ...(useCdp ? { cdp: { url: (env.CDP_FACILITATOR_URL || CDP_FACILITATOR_URL).replace(/\/+$/, ""), credentials: { keyId, keySecret } } } : {}),
+    cdpOnlyRoutes: parseCdpOnlyRoutes(env.EVM_CDP_ONLY_ROUTES),
     prices,
     amounts,
   };
+}
+
+/**
+ * Trust and verdict routes settle Base USDC ONLY through the Coinbase CDP facilitator (owner approved 2026-10-28 1:07 PM CT,
+ * branch only; Lumi Legal "stay but limit" on PayAI, notes/cleanup_2026-10-28/payai_terms_review.md).
+ * For these routes the keyless fallback (PayAI on mainnet) is never called: no verify, no settle, so the route's payload
+ * and bazaar declaration never reach PayAI. A CDP outage returns 503 facilitator_unavailable (reason cdp_unavailable)
+ * with payment_help instead of falling back. Low-risk routes (feed credits, monitor packs) keep the PayAI fallback.
+ * docs/facilitator-routing.md.
+ */
+export const CDP_ONLY_ROUTES: readonly PaidRoute[] = ["high_value_check", "verdict", "receipts", "batch_check", "vendor_report"];
+
+function parseCdpOnlyRoutes(raw: string | undefined): string[] {
+  const v = (raw ?? "").trim();
+  if (!v) return [...CDP_ONLY_ROUTES];
+  if (v.toLowerCase() === "none") return [];
+  const list = v.split(",").map((x) => x.trim()).filter(Boolean);
+  const bad = list.filter((x) => !(PAID_ROUTES as string[]).includes(x));
+  if (bad.length) throw new Error(`EVM_CDP_ONLY_ROUTES: unknown route(s) ${bad.join(", ")} (use ${PAID_ROUTES.join(", ")} or "none")`);
+  return list;
 }
 
 export type IouSymbol = "RLUSD" | "USDC";
