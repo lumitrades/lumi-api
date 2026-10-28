@@ -136,6 +136,47 @@ const DEFAULT_XRPL_RPC: Record<string, string[]> = {
   "xrpl:2": ["https://s.devnet.rippletest.net:51234/"],
 };
 
+/** Per-seller accumulator for the wallet check (several payTos of one seller fold into one row). */
+interface SellerAcc { row: any; rec: Recipient; entries: any[]; label: string | null; cumulative: boolean }
+
+/**
+ * Fold another payTo of an already-listed seller into its row: payments, dates, amounts and flags are combined; the
+ * row keeps the most recently paid address in pay_to and lists every address in pay_tos.
+ */
+export function mergeSellerRow(acc: SellerAcc, rec: Recipient, entries: any[], cumulative: boolean): void {
+  const r = acc.rec;
+  const newer = rec.last_at > r.last_at;
+  r.payments += rec.payments;
+  r.first_at = Math.min(r.first_at, rec.first_at);
+  if (newer) { r.last_at = rec.last_at; r.last_tx = rec.last_tx; }
+  for (const [k, v] of Object.entries(rec.amounts)) r.amounts[k] = String(Math.round((Number(r.amounts[k] ?? 0) + Number(v)) * 1e6) / 1e6);
+  r.possible_duplicates += rec.possible_duplicates;
+  acc.cumulative = acc.cumulative || cumulative;
+  const seen = new Set(acc.entries.map((e) => e?.resource));
+  for (const e of entries) if (!seen.has(e?.resource)) { acc.entries.push(e); seen.add(e?.resource); }
+  const row = acc.row;
+  row.pay_tos = [...(row.pay_tos ?? [row.pay_to]), rec.to];
+  row.listings = acc.entries.slice(0, 3).map((e) => e?.resource).filter(Boolean);
+  row.payments = acc.cumulative ? null : r.payments;
+  row.last_paid_at = new Date(r.last_at).toISOString();
+  row.paid = acc.cumulative
+    ? `last on ${walletDay(r.last_at)} (Lumi's Base index keeps one total per wallet and seller; this total started before the ${WALLET_RETENTION_DAYS}-day window, so only the last payment date is shown)`
+    : paymentsLine(r);
+  if (r.last_tx) row.last_tx = r.last_tx;
+  const flags = sellerFlags(r, acc.entries, acc.label);
+  for (const f of row.flags) if (!flags.some((g) => g.code === f.code)) flags.push(f);
+  row.flags = acc.cumulative ? flags.filter((f) => f.code !== "repeat_payments") : flags;
+}
+
+/**
+ * True for the one half-hourly cron tick per day that runs the nightly jobs: the 03:00 UTC tick. scheduled() only fires at
+ * :00 and :30, so the window is [03:00, 03:30) UTC, which holds exactly one tick and tolerates late delivery.
+ */
+export function isNightlyTick(ms: number): boolean {
+  const d = new Date(ms);
+  return d.getUTCHours() === 3 && d.getUTCMinutes() < 30;
+}
+
 /** /.well-known/trustline-merchant.txt body: Lumi's XRPL receiving wallet(s), one `xrpl:<r-address>` per line. No signature. */
 export function trustlineMerchantTxt(cfg: { payTo: string }): string {
   return `xrpl:${cfg.payTo}\n`;
@@ -652,6 +693,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     recipients = recipients.filter((x) => !own.has(x.to.toLowerCase()) && x.to.toLowerCase() !== address.toLowerCase());
     const sellers: any[] = [];
+    const bySeller = new Map<string, SellerAcc>();
     let other = 0, more = 0, matched = 0, looked = 0, unchecked = 0;
     for (const rec of recipients) {
       if (matched >= WALLET_MAX_SELLERS) { more++; continue; }
@@ -664,17 +706,20 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       if (doc?.self) continue; // Lumi itself: never shown
       const entries: any[] = doc?.catalog?.entries ?? [];
       if (!entries.length && !(doc?.curated?.length)) { other++; continue; }
+      const first = entries[0] ?? null;
+      let seller: string | null = doc?.curated?.[0]?.id ?? null;
+      if (!seller && first?.resource) { try { seller = new URL(first.resource).hostname.toLowerCase(); } catch { seller = null; } }
+      const cumulative = baseCumulative.has(rec.to);
+      // One row per seller: a seller with several payTos (e.g. blockrun.ai) used to get one row per address.
+      const prev = seller ? bySeller.get(seller) : undefined;
+      if (prev) { mergeSellerRow(prev, rec, entries, cumulative); continue; }
       matched++;
       try { v = await payToVerdict({ payTo: rec.to, network: CHAIN_NETWORK[chain] }, base); } catch { v = null; }
       const label = v?.lab?.label ?? null;
       const sum = summaryFor(doc, null, label);
       const flags = sellerFlags(rec, entries, label);
-      const cumulative = baseCumulative.has(rec.to);
       if (cumulative) for (let i = flags.length - 1; i >= 0; i--) if (flags[i].code === "repeat_payments") flags.splice(i, 1);
-      const first = entries[0] ?? null;
-      let seller: string | null = doc?.curated?.[0]?.id ?? null;
-      if (!seller && first?.resource) { try { seller = new URL(first.resource).hostname.toLowerCase(); } catch { seller = null; } }
-      sellers.push({
+      const row: any = {
         seller,
         pay_to: rec.to,
         listings: entries.slice(0, 3).map((e) => e.resource).filter(Boolean),
@@ -688,7 +733,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         label_text: label ? LABELS[label as keyof typeof LABELS] : null,
         flags,
         trust_check: first?.resource ? `${base}/v1/trust/check?url=${encodeURIComponent(first.resource)}` : `${base}/v1/trust/check?payTo=${encodeURIComponent(rec.to)}`,
-      });
+      };
+      sellers.push(row);
+      if (seller) bySeller.set(seller, { row, rec: { ...rec, amounts: { ...rec.amounts } }, entries: [...entries], label, cumulative });
     }
     const summary = readError && !recipients.length
       ? (readError === "account_not_found" ? "Lumi could not find this account on the ledger, so it has no payments to list." : "Lumi could not read this wallet's payments right now; this is not an all-clear. Try again later.")
@@ -2029,9 +2076,10 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       return r;
     },
     async scheduled() {
-      // Contributor retention purge: once a day (03:07 UTC tick of the per-minute cron).
-      const d = new Date(now());
-      const nightly = d.getUTCHours() === 3 && d.getUTCMinutes() === 7;
+      // Contributor retention purge + check-outcomes nightly rollup: once a day on the 03:00 UTC tick.
+      // scheduled() only runs on the */30 cron (the per-minute cron goes to liveRefresh), so the old "03:07" gate never
+      // matched; see isNightlyTick.
+      const nightly = isNightlyTick(now());
       const contribPurge = nightly ? contributors.purge().catch(() => {}) : Promise.resolve();
       const prune = Promise.all([trafficBuf.flush().catch(trafficErr), (nightly ? outcomes.nightly().then((r) => deps.log?.({ event: "check_outcomes_nightly", ...r, rolled: r.rolled.length, rerolled: r.rerolled.length, purged_days: r.purged_days.length })) : outcomes.flush()).catch(() => {}), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge]);
       const [probes, cat, , com] = await Promise.allSettled([trust.runProbes(), catalog.cron(), prune, commerce.cron(config.publicBaseUrl ?? "https://api.lumitrades.io")]);

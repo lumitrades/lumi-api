@@ -176,7 +176,7 @@ describe("Lumi Check tier 1: nightly rollup (summaries kept forever) + 90-day ra
     expect(await store.list("2026-01-01", 10)).toEqual([]);
   });
 
-  it("the cron runs the rollup only at 03:07 UTC; other minutes just flush", async () => {
+  it("the cron runs the rollup only on the 03:00 UTC half-hourly tick; other ticks just flush", async () => {
     const outcomeStore = new MemoryOutcomeStore();
     let t = T0 - DAY + 60_000;
     const logs: any[] = [];
@@ -184,10 +184,10 @@ describe("Lumi Check tier 1: nightly rollup (summaries kept forever) + 90-day ra
     const post = (b: unknown) => app.fetch(new Request(BASE + "/v1/check/outcome", { method: "POST", body: JSON.stringify(b), headers: { "Content-Type": "application/json", "CF-Connecting-IP": "9.9.9.9" } }));
     expect((await post(ok)).status).toBe(202);
     const run = async (at: number) => { t = at; const w: Promise<unknown>[] = []; await (app as any).scheduled({ scheduledTime: at, cron: "* * * * *" }, ENV, { waitUntil: (p: Promise<unknown>) => w.push(p) }); await Promise.all(w); };
-    await run(T0 - 60_000);
+    await run(T0 - 37 * 60_000); // 02:30 UTC tick
     expect(await outcomeStore.list("2026-01-01", 10)).toHaveLength(1);
     expect(await outcomeStore.summaries("2026-01-01", 10)).toEqual([]);
-    await run(T0);
+    await run(T0 - 7 * 60_000); // 03:00 UTC tick (scheduled() only runs on the */30 cron)
     expect(await outcomeStore.summaries("2026-01-01", 10)).toMatchObject([{ subject: "api.seller.example", reports: 1, delivered: 1 }]);
     expect(logs.find((e) => e.event === "check_outcomes_nightly")).toMatchObject({ rolled: 1 });
     const own: any = await (await app.fetch(new Request(BASE + "/v1/owner/check-outcomes?summary_days=365", { headers: { Authorization: `Bearer ${OWNER}` } }))).json();
