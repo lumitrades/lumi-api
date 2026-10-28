@@ -48,12 +48,13 @@ describe("refused payment attempts are logged (no payer address or signature)", 
       expect(fails.length).toBe(4);
       const reasons = fails.map((f) => f.reason);
       expect(reasons).toContain("invalid_payment_signature_header");
+      expect(reasons).toContain("invalid_x402_version");
       expect(reasons).toContain("payment_requirements_mismatch");
       expect(reasons.some((r) => r.startsWith("verify_failed") || r.includes("insufficient_funds") || r.startsWith("invalid"))).toBe(true);
-      // a v1 payload has no `accepted` block, so the server refuses it as an unusable header; the event still says v1
+      // a v1 payload (no `accepted` block) is refused as the wrong x402 version (2026-10-28; was the misleading invalid_payment_signature_header)
       const v1f = fails.find((f) => f.x402_version === 1)!;
-      expect(v1f).toMatchObject({ route: "/v1/trust/check/high-value", status: 402, reason: "invalid_payment_signature_header", network: "base", scheme: "exact", ua_family: "x402-fetch/0.6" });
-      expect(fails.find((f) => f.network === "undecodable")).toMatchObject({ reason: "invalid_payment_signature_header", x402_version: null });
+      expect(v1f).toMatchObject({ route: "/v1/trust/check/high-value", status: 402, reason: "invalid_x402_version", network: "base", scheme: "exact", ua_family: "x402-fetch/0.6", encoding: "base64", header: "X-PAYMENT" });
+      expect(fails.find((f) => f.network === "undecodable")).toMatchObject({ reason: "invalid_payment_signature_header", x402_version: null, encoding: "invalid" });
       expect(fails.find((f) => f.reason === "payment_requirements_mismatch")).toMatchObject({ network: "xrpl:1", x402_version: 2 });
       for (const f of fails) expect(typeof f.ts).toBe("number");
 
@@ -68,7 +69,9 @@ describe("refused payment attempts are logged (no payer address or signature)", 
       const r = await app.fetch(new Request(BASE + "/v1/owner/traffic?days=2", { headers: { Authorization: "Bearer owner-key-for-tests-0123456789abcdef" } }));
       const s: any = await r.json();
       expect(s.payment_failures.total).toBe(4);
-      expect(s.payment_failures.by_reason.invalid_payment_signature_header).toBe(2);
+      expect(s.payment_failures.by_reason.invalid_payment_signature_header).toBe(1);
+      expect(s.payment_failures.by_reason.invalid_x402_version).toBe(1);
+      expect(s.payment_failures.by_header).toMatchObject({ "X-PAYMENT": 1, "PAYMENT-SIGNATURE": 3 });
       expect(s.payment_failures.by_x402_version).toMatchObject({ v1: 1, v2: 2, unknown: 1 });
       expect(s.payment_failures.by_route["/v1/trust/check/high-value"]).toBe(4);
       expect(s.payment_failures.recent.length).toBe(4);
@@ -96,7 +99,7 @@ describe("refused payment attempts are logged (no payer address or signature)", 
   });
 
   it("header meta and reasons never carry payload fields; no event without a payment header or on success", () => {
-    expect(payHeaderMeta(b64({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", payTo: EVM_PAYER }, payload: { from: EVM_PAYER } }))).toEqual({ x402_version: 2, scheme: "exact", network: "eip155:8453" });
+    expect(payHeaderMeta(b64({ x402Version: 2, accepted: { scheme: "exact", network: "eip155:8453", payTo: EVM_PAYER }, payload: { from: EVM_PAYER } }))).toEqual({ x402_version: 2, scheme: "exact", network: "eip155:8453", encoding: "base64" });
     expect(payHeaderMeta(b64({ x402Version: 2, accepted: { scheme: "exact", network: EVM_PAYER + "<script>" } })).network).toBe("other");
     expect(safeReason(`settle_failed:invalid_exact_evm_payload_authorization_value from ${EVM_PAYER} tx ${"f".repeat(64)} ${PAYER}`)).not.toMatch(/1111111111|ffffffffff|rBCpEB/);
     expect(safeReason("settle_failed:invalid_exact_evm_payload_authorization_value")).toBe("settle_failed:invalid_exact_evm_payload_authorization_value");

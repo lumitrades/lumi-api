@@ -18,6 +18,7 @@
 
 import type { SaleEvent } from "./sales";
 import { clientLabel } from "./traffic";
+import { parsePaymentHeader, paymentHeaderHelp, paymentHeaderProblem, readPaymentHeader } from "./payment_header";
 import type { Config, DurableObjectNamespaceLike, IouOption, KVLike } from "./config";
 import { isPaymentPayloadV2 } from "@x402/core/schemas";
 import { cdpAuthHeaders, decodeExtensionResponses } from "./cdp";
@@ -460,9 +461,10 @@ export function json(status: number, body: unknown, headers: Record<string, stri
   });
 }
 
-export async function paymentRequiredResponse(cfg: Config, quote: Quote, error: string): Promise<Response> {
+export async function paymentRequiredResponse(cfg: Config, quote: Quote, error: string, extra?: Record<string, unknown>): Promise<Response> {
   // Body uses the same canonical (sorted-key) order as the header, so naive string comparisons of the two match.
-  const body = JSON.parse(canonicalJson(await buildPaymentRequired(cfg, quote, error)));
+  const pr = await buildPaymentRequired(cfg, quote, error);
+  const body = JSON.parse(canonicalJson(extra ? { ...pr, ...extra } : pr));
   return json(402, body, {
     [HEADER_PAYMENT_REQUIRED]: encodeHeader(body),
     "Cache-Control": "no-store",
@@ -470,15 +472,15 @@ export async function paymentRequiredResponse(cfg: Config, quote: Quote, error: 
   });
 }
 
+/**
+ * The x402 v2 PaymentPayload in a payment header, or null when the header is not one (see paymentHeaderProblem:
+ * base64 or base64url JSON, x402Version 2, `accepted` object; raw JSON and v1 payloads are refused).
+ * Decoding only: verification and settlement happen later, unchanged.
+ */
 function decodePaymentPayload(header: string): PaymentPayload | null {
   if (header.length > MAX_PAYMENT_HEADER_BYTES) return null;
-  try {
-    const obj = JSON.parse(b64decodeUtf8(header));
-    if (!obj || typeof obj !== "object" || typeof obj.accepted !== "object" || obj.accepted === null) return null;
-    return obj as PaymentPayload;
-  } catch {
-    return null;
-  }
+  if (paymentHeaderProblem(header)) return null;
+  return parsePaymentHeader(header).obj as PaymentPayload | null;
 }
 
 function sameRequirements(a: PaymentRequirements, b: PaymentRequirements): boolean {
@@ -665,8 +667,12 @@ async function requirePaymentOnce(
   const staleNow = staleRefusal(quote);
   if (staleNow) return staleNow;
 
+  // An unusable payment header re-quotes (402 + full accepts + PAYMENT-REQUIRED) so a client SDK can fix it and retry,
+  // plus `payment_help`: what was received, the expected header / encoding / version, and a decoded example.
+  const problem = paymentHeaderProblem(header);
+  const used = readPaymentHeader(request);
+  if (problem) return paymentRequiredResponse(cfg, quote, problem.error, used ? { payment_help: paymentHeaderHelp(problem, used) } : undefined);
   const payload = decodePaymentPayload(header);
-  // An unusable payment header re-quotes (402 + full accepts + PAYMENT-REQUIRED) so a client SDK can fix it and retry.
   if (!payload) return paymentRequiredResponse(cfg, quote, "invalid_payment_signature_header");
   if (payload.x402Version !== 2) return paymentRequiredResponse(cfg, quote, "invalid_x402_version");
 

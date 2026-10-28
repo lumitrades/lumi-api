@@ -5,6 +5,7 @@
  * written as one batch row per flush (TrafficBuffer), not one row per request (D1 write budget).
  */
 import type { D1Like } from "./config";
+import { parsePaymentHeader, payloadVersion, readPaymentHeader, type PaymentHeaderEncoding } from "./payment_header";
 
 export interface TrafficRow {
   ts: number;
@@ -39,6 +40,10 @@ export interface PayFail {
   scheme: string;
   x402_version: number | null;
   ua_family: string;
+  /** Which header carried it (PAYMENT-SIGNATURE / X-PAYMENT). Absent on events recorded before 2026-10-28. */
+  header?: string;
+  /** base64 | base64url | raw_json | invalid. Absent on events recorded before 2026-10-28. */
+  encoding?: PaymentHeaderEncoding;
 }
 
 /** One flushed aggregate: every request counted in one isolate during one flush window (single UTC day). */
@@ -128,24 +133,17 @@ export function paymentHeaderOf(request: Request): string | null {
 }
 
 const SAFE_TOKEN = /^[A-Za-z0-9:_.\-]{1,48}$/;
-/** x402Version / scheme / network from a payment header (v2: accepted.*, v1: top level). Nothing else is read out. */
-export function payHeaderMeta(header: string): { x402_version: number | null; scheme: string; network: string } {
+/** x402Version / scheme / network / encoding from a payment header (v2: accepted.*, v1: top level). Nothing else is read out. */
+export function payHeaderMeta(header: string): { x402_version: number | null; scheme: string; network: string; encoding: PaymentHeaderEncoding } {
   const out = { x402_version: null as number | null, scheme: "unknown", network: "unknown" };
-  if (header.length > 16 * 1024) return { ...out, scheme: "oversize", network: "oversize" };
-  let obj: any;
-  try {
-    const b = atob(header.trim().replace(/-/g, "+").replace(/_/g, "/"));
-    obj = JSON.parse(new TextDecoder().decode(Uint8Array.from(b, (c) => c.charCodeAt(0))));
-  } catch {
-    return { ...out, scheme: "undecodable", network: "undecodable" };
-  }
-  if (!obj || typeof obj !== "object") return { ...out, scheme: "undecodable", network: "undecodable" };
-  const v = Number(obj.x402Version);
-  out.x402_version = Number.isInteger(v) && v >= 0 && v < 100 ? v : null;
+  if (header.length > 16 * 1024) return { ...out, scheme: "oversize", network: "oversize", encoding: "invalid" };
+  const { encoding, obj } = parsePaymentHeader(header);
+  if (!obj) return { ...out, scheme: "undecodable", network: "undecodable", encoding };
+  out.x402_version = payloadVersion(obj);
   const src = obj.accepted && typeof obj.accepted === "object" ? obj.accepted : obj;
   if (typeof src.scheme === "string") out.scheme = SAFE_TOKEN.test(src.scheme) ? src.scheme : "other";
   if (typeof src.network === "string") out.network = SAFE_TOKEN.test(src.network) ? src.network : "other";
-  return out;
+  return { ...out, encoding };
 }
 
 /** Refusal reason safe to store: wallet addresses / hashes / long opaque tokens masked, short charset, 80 chars. */
@@ -176,7 +174,11 @@ export function payFailFrom(request: Request, status: number, body: string | nul
   } catch { /* non-JSON refusal: keep http_<status> */ }
   if (/header is required/i.test(reason)) reason = "payment_header_missing";
   const meta = payHeaderMeta(header);
-  return { ts: now, route: safePath(new URL(request.url).pathname), status, reason: safeReason(reason), ...meta, ua_family: uaFamily(request.headers.get("User-Agent")) };
+  const used = readPaymentHeader(request);
+  return {
+    ts: now, route: safePath(new URL(request.url).pathname), status, reason: safeReason(reason), ...meta,
+    ua_family: uaFamily(request.headers.get("User-Agent")), header: used?.name ?? "unknown",
+  };
 }
 
 /** Build the log row for one request/response pair. `secret` keys the IP hash (no secret = no hash). */
@@ -444,7 +446,7 @@ export async function trafficSummary(store: TrafficStore, now: number, days: num
   };
 }
 
-/** Refused payment attempts by reason / route / network / scheme / x402 version / UA family / day, plus the latest 25. */
+/** Refused payment attempts by reason / route / network / scheme / x402 version / UA family / header / encoding / day, plus the latest 25. */
 export function payFailSummary(fails: PayFail[], dropped = 0) {
   const by = (f: (x: PayFail) => string) => {
     const m = new Map<string, number>();
@@ -462,6 +464,8 @@ export function payFailSummary(fails: PayFail[], dropped = 0) {
     by_scheme: by((x) => x.scheme),
     by_x402_version: by((x) => (x.x402_version === null ? "unknown" : `v${x.x402_version}`)),
     by_ua_family: by((x) => x.ua_family),
+    by_header: by((x) => x.header ?? "not_recorded"),
+    by_encoding: by((x) => x.encoding ?? "not_recorded"),
     daily: by((x) => new Date(x.ts).toISOString().slice(0, 10)),
     daily_by_reason: fails.reduce<Record<string, Record<string, number>>>((o, x) => {
       const d = (o[new Date(x.ts).toISOString().slice(0, 10)] ??= {});
