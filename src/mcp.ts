@@ -117,7 +117,23 @@ export const PAID_TOOLS_NOTE =
 
 function toolList() {
   const ro = { readOnlyHint: true, openWorldHint: true };
+  // The trust check leads the list (2026-10-28): it is the main product and free.
   return [
+    {
+      name: "lumi_trust_check",
+      title: "Lumi: should I pay this x402 URL? (free, rate-limited)",
+      description: TRUST_CHECK_TOOL_DESCRIPTION,
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string", maxLength: 500, description: "The x402 resource URL you are about to pay" },
+          payTo: { type: "string", maxLength: 120, description: "Optional: the payTo address in its 402 quote" },
+          amount: { type: "string", maxLength: 20, description: "Optional: the quoted price in USD, e.g. 0.01" },
+        },
+        required: ["url"],
+      },
+      annotations: ro,
+    },
     {
       name: "lumi_catalog",
       title: "Lumi: endpoints and prices (free)",
@@ -154,21 +170,6 @@ function toolList() {
           payTo: { type: "string", maxLength: 120, description: "payTo address from the seller's 402 quote (0x... or r...)" },
           vendor_id: { type: "string", pattern: "^[a-z0-9-]{1,64}$", description: "Optional curated vendor id, e.g. printmoneylab" },
         },
-      },
-      annotations: ro,
-    },
-    {
-      name: "lumi_trust_check",
-      title: "Lumi: should I pay this x402 URL? (free, rate-limited)",
-      description: TRUST_CHECK_TOOL_DESCRIPTION,
-      inputSchema: {
-        type: "object",
-        properties: {
-          url: { type: "string", maxLength: 500, description: "The x402 resource URL you are about to pay" },
-          payTo: { type: "string", maxLength: 120, description: "Optional: the payTo address in its 402 quote" },
-          amount: { type: "string", maxLength: 20, description: "Optional: the quoted price in USD, e.g. 0.01" },
-        },
-        required: ["url"],
       },
       annotations: ro,
     },

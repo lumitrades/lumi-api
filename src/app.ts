@@ -3,6 +3,7 @@
  * used by the Worker entry (src/index.ts) and the Node server (src/node.ts).
  */
 
+import { exampleResultFor } from "./example_result";
 import { testBuyWalletsDoc } from "./trust/wallets";
 import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCOME_FIELDS, OUTCOME_RETENTION_DAYS, OUTCOME_SUMMARY_RETENTION, type OutcomeStore } from "./trust/outcomes";
 import { createBadges } from "./trust/badge";
@@ -1674,6 +1675,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         resourceUrl: `${base}${path}`,
         bazaar: bazaarExtension(route, undefined, probeQuery, usd),
         service: serviceMeta(route),
+        ...(exampleResultFor(route) ? { exampleResult: exampleResultFor(route) } : {}),
         note: route === "receipts"
           ? `Add ?seller=<domain, resource URL or payTo> and request that URL for a fresh quote before paying: ${example}. A payment sent without seller is refused and not charged.`
           : route === "batch_check"
@@ -1721,6 +1723,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         pf.usd,
       ),
       service: serviceMeta(route),
+      ...(exampleResultFor(route) ? { exampleResult: exampleResultFor(route) } : {}),
       ...(hvPrice ? { note: `High-value check: ${HIGH_VALUE_PRICING_TEXT} The basic check is free: ${base}${FREE_TRUST_CHECK_EXAMPLE}` } : {}),
       // Remaining validity of the data, on the wall clock the paywall uses (the app clock is injectable for tests).
       ...(typeof body.stale_after === "string" ? { staleAfterMs: Date.now() + (Date.parse(body.stale_after) - now()) } : {}),

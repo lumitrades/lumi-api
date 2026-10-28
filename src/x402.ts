@@ -133,6 +133,8 @@ export interface Quote {
   extensions?: Record<string, unknown>;
   /** Optional top-level free-trial status (e.g. why a SIGN-IN-WITH-X trial attempt was not granted). */
   trial?: Record<string, unknown>;
+  /** Trust routes: a short, labelled sample of what the paid answer looks like (top-level `example_result`; see example_result.ts). */
+  exampleResult?: { label: string; result: Record<string, unknown> };
 }
 
 // ---------------------------------------------------------------- encoding
@@ -426,6 +428,7 @@ export async function buildPaymentRequired(cfg: Config, quote: Quote, error: str
     ...(quote.samplesUrl ? { samples: quote.samplesUrl } : {}),
     ...(quote.note ? { note: quote.note } : {}),
     ...(quote.trial ? { trial: quote.trial } : {}),
+    ...(quote.exampleResult ? { example_result: quote.exampleResult } : {}),
   } as PaymentRequired;
 }
 

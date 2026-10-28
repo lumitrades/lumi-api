@@ -53,6 +53,31 @@ const text = (obj) => ({ content: [{ type: "text", text: typeof obj === "string"
 export function buildServer(client, opts = {}) {
   const server = new McpServer({ name: "lumi-trades-mcp", version: VERSION });
   const s = client.settings;
+  // The free trust check is registered first so it leads tools/list (2026-10-28).
+  server.registerTool(
+    "lumi_trust_check",
+    {
+      title: "Lumi: trust check before paying (free)",
+      description:
+        "Free (rate-limited per client). Should I pay this x402 URL? allow / warn / block with coded reasons and next steps, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
+        "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Cached (shows data_age); for a live re-check before a larger payment use lumi_high_value_check. Over the free limit Lumi answers 429 free_limit_reached with the paid route. Observations, not a guarantee.",
+      inputSchema: {
+        url: z.string().describe("The x402 resource URL you are about to pay"),
+        payTo: z.string().optional().describe("Optional: the payTo address in its 402 quote"),
+        amount: z.string().optional().describe("Optional: the quoted price in USD, e.g. 0.01"),
+      },
+    },
+    async ({ url, payTo, amount }) => {
+      const q = new URLSearchParams({ url: String(url ?? "") });
+      if (payTo) q.set("payTo", String(payTo));
+      if (amount !== undefined) q.set("amount", String(amount));
+      const r = await client.free(`/v1/trust/check?${q}`);
+      if (r.status !== 200) return { ...text({ status: r.status, body: r.body }), isError: true };
+      const body = typeof r.body === "object" && r.body ? await checkLumiReceipt(r.body, opts.contrib ?? {}) : r.body;
+      return text(typeof body === "object" && body ? { ...body, note: TRUST_DISCLAIMER } : body);
+    },
+  );
+
   registerContribTools(server, s, opts.contrib);
 
   server.registerTool(
@@ -180,30 +205,6 @@ export function buildServer(client, opts = {}) {
       inputSchema: {},
     },
     async () => text((await client.free("/v1/feed")).body),
-  );
-
-  server.registerTool(
-    "lumi_trust_check",
-    {
-      title: "Lumi: trust check before paying (free)",
-      description:
-        "Free (rate-limited per client). Should I pay this x402 URL? allow / warn / block with coded reasons and next steps, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
-        "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Cached (shows data_age); for a live re-check before a larger payment use lumi_high_value_check. Over the free limit Lumi answers 429 free_limit_reached with the paid route. Observations, not a guarantee.",
-      inputSchema: {
-        url: z.string().describe("The x402 resource URL you are about to pay"),
-        payTo: z.string().optional().describe("Optional: the payTo address in its 402 quote"),
-        amount: z.string().optional().describe("Optional: the quoted price in USD, e.g. 0.01"),
-      },
-    },
-    async ({ url, payTo, amount }) => {
-      const q = new URLSearchParams({ url: String(url ?? "") });
-      if (payTo) q.set("payTo", String(payTo));
-      if (amount !== undefined) q.set("amount", String(amount));
-      const r = await client.free(`/v1/trust/check?${q}`);
-      if (r.status !== 200) return { ...text({ status: r.status, body: r.body }), isError: true };
-      const body = typeof r.body === "object" && r.body ? await checkLumiReceipt(r.body, opts.contrib ?? {}) : r.body;
-      return text(typeof body === "object" && body ? { ...body, note: TRUST_DISCLAIMER } : body);
-    },
   );
 
   for (const t of PAID_TOOLS) {

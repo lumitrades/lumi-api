@@ -159,6 +159,7 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
     freshness: FRESHNESS_FIELDS,
     ...(freeTrialInfo(cfg) ? { free_trial: freeTrialInfo(cfg) } : {}),
     free_endpoints: [
+      { method: "GET", path: "/v1/trust/check?url=", summary: `Free trust check (rate-limited: ${FREE_TRUST_CHECK_LIMITS.perDay}/day and ${FREE_TRUST_CHECK_LIMITS.perMinute}/min per client): allow / warn / block with coded reasons and next steps before you pay an x402 seller. Over the limit: 429 free_limit_reached pointing to the paid /v1/trust/check/high-value. Same verdict and score as the paid check` },
       { method: "GET", path: "/", summary: "This index" },
       { method: "GET", path: "/health", summary: "Liveness + config summary" },
       { method: "GET", path: "/skill.md", summary: "Agent guide: what is offered, prices, how to pay, example code" },
@@ -170,7 +171,6 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       ...(cfg.verdictPaid ? [] : [{ method: "GET", path: "/v1/verdict?url=", summary: "Free (rate-limited) pre-payment check, one signed label from the same data as /v1/check: checks_passed (Delivered in recent checks) / check_first (Check first) / checks_failed (Recent checks failed) / no_data (Not enough data), with dates, evidence window, sample count, reason codes, evidence and appeal links. Paying Lumi never changes a result" }]),
       { method: "GET", path: "/llms.txt", summary: "Short plain-text guide for LLMs" },
       { method: "GET", path: "/v1/check?url=", summary: "Lumi Check: free, signed allow / warn / block before you pay an x402 seller, from Lumi's cached observations (rate-limited per client)" },
-      { method: "GET", path: "/v1/trust/check?url=", summary: `Free trust check (rate-limited: ${FREE_TRUST_CHECK_LIMITS.perDay}/day and ${FREE_TRUST_CHECK_LIMITS.perMinute}/min per client): allow / warn / block with coded reasons and next steps before you pay an x402 seller. Over the limit: 429 free_limit_reached pointing to the paid /v1/trust/check/high-value. Same verdict and score as the paid check` },
       { method: "GET", path: "/v1/check/keys", summary: "Public keys that sign Lumi Check answers and badges (alias /.well-known/lumi-keys.json)" },
       { method: "GET", path: "/v1/check/wallets", summary: "Lumi's test-buy wallets: the only payers of a Lumi receipt (alias /.well-known/lumi-test-buy-wallets.json)" },
       { method: "POST", path: "/v1/check/outcome", summary: "Optional anonymous delivery outcome (seller host + delivered yes/no only; not a scoring input)" },
@@ -213,6 +213,12 @@ export function wellKnownX402(cfg: Config, base: string) {
     x402Version: 2,
     kind: "resource-server",
     name: "Lumi Trades",
+    // Start here (2026-10-28): the trust check leads discovery. The free check is not an x402 resource, so it is named here; resources[0] is its paid upgrade.
+    start_here: {
+      free_trust_check: `${base}${FREE_TRUST_CHECK_EXAMPLE}`,
+      paid_trust_check: `${base}${HIGH_VALUE_EXAMPLE}`,
+      note: "Should I pay this x402 URL? allow / warn / block with coded reasons. Free (rate-limited); the paid high-value check adds a live re-check.",
+    },
     description: `Pay-per-call reads from Lumi Trades (lumitrades.io), settled in ${settledIn(cfg)}, : checks before paying an x402 seller (a pre-payment check, a one-label verdict and seller reputation reports from Lumi's trust observations). Each resource carries product_line. Also: seller monitoring plans (Watch $5, Watch Pro $20 per endpoint per 30d; Audit $99; Re-test pack $6.50 for 30 seller-funded test-buys; Founder pack $5 for 24 seller-funded test-buys, first 10 sellers; free tier and 14-day trial; seller-funded buys never change a public score) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
     resources: paidEndpoints(cfg).map((e) => ({
       name: e.name,
@@ -292,6 +298,14 @@ const IDEMPOTENCY_PARAM = {
   description: "Optional retry key (16-128 characters: letters, digits, - or _). A retry with the same key and the same payment returns the cached response (header Idempotent-Replayed: true) and is never charged twice; the same key with a different payment is refused with 409. The x402 payment-identifier extension id works the same way. Cached for 24 hours.",
   schema: { type: "string", minLength: 16, maxLength: 128, pattern: "^[A-Za-z0-9_-]{16,128}$" },
 };
+
+/** Same object with the given keys first (in that order), the rest in their original order. */
+function leadWith<T>(o: Record<string, T>, lead: string[]): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const k of lead) if (k in o) out[k] = o[k];
+  for (const k of Object.keys(o)) if (!(k in out)) out[k] = o[k];
+  return out;
+}
 
 export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
   const paths: Record<string, unknown> = {
@@ -479,7 +493,8 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
     tags: [...OPENAPI_TAGS, { name: "seller-monitoring", description: "Lumi Trades seller checks: seller monitoring plans." }, { name: "trust-feed", description: "Lumi Trades seller checks: licensed trust data feed." }],
     servers: [{ url: base }],
     externalDocs: { description: "Agent guide", url: `${base}/skill.md` },
-    paths,
+    // The trust check leads discovery (2026-10-28): free check first, then its paid high-value upgrade.
+    paths: leadWith(paths, ["/v1/trust/check", "/v1/trust/check/high-value"]),
     components: {
       securitySchemes: {
         bearer: { type: "http", scheme: "bearer", description: "Owner key, only for owner-only endpoints. Paid endpoints use x402 (see x-payment-info); free endpoints need no auth." },

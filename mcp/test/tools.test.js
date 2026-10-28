@@ -84,3 +84,8 @@ test("0.10.0: lumi_trust_check is free (no payment, no wallet); lumi_high_value_
   assert.equal(body.verdict, "allow");
   assert.match(body.note, /not a rating/);
 });
+
+test("the free trust check leads the tool list (2026-10-28)", async () => {
+  const tools = await listTools();
+  assert.equal(tools[0].name, "lumi_trust_check");
+});
