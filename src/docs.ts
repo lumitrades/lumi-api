@@ -219,7 +219,7 @@ export function wellKnownX402(cfg: Config, base: string) {
       paid_trust_check: `${base}${HIGH_VALUE_EXAMPLE}`,
       note: "Should I pay this x402 URL? allow / warn / block with coded reasons. Free (rate-limited); the paid high-value check adds a live re-check.",
     },
-    description: `Pay-per-call reads from Lumi Trades (lumitrades.io), settled in ${settledIn(cfg)}, : checks before paying an x402 seller (a pre-payment check, a one-label verdict and seller reputation reports from Lumi's trust observations). Each resource carries product_line. Also: seller monitoring plans (Watch $5, Watch Pro $20 per endpoint per 30d; Audit $99; Re-test pack $6.50 for 30 seller-funded test-buys; Founder pack $5 for 24 seller-funded test-buys, first 10 sellers; free tier and 14-day trial; seller-funded buys never change a public score) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
+    description: `Lumi Trades (lumitrades.io), an x402 seller trust service: check an x402 seller before you pay. Start with the free trust check, GET ${base}${FREE_TRUST_CHECK_EXAMPLE} (no payment, rate-limited): allow / warn / block with coded reasons. The resources below are the paid checks, settled in ${settledIn(cfg)}: a high-value pre-payment check, a one-label verdict, seller reputation reports, signed test-buy receipts and batch checks, all from Lumi's trust observations. Each resource carries product_line. Automated observations, not an endorsement or guarantee. Also: seller monitoring plans (Watch $5, Watch Pro $20 per endpoint per 30d; Audit $99; Re-test pack $6.50 for 30 seller-funded test-buys; Founder pack $5 for 24 seller-funded test-buys, first 10 sellers; free tier and 14-day trial; seller-funded buys never change a public score) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
     resources: paidEndpoints(cfg).map((e) => ({
       name: e.name,
       // receipts: the doc example seller may have no test-buy (a 404, never charged), so crawlers get the bare path (402).
@@ -475,8 +475,8 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
       version: VERSION,
       contact: { name: "Lumi Trades", url: "https://lumitrades.io", email: "hello@lumitrades.io" },
       description:
-        `Pay-per-call x402 seller checks from lumitrades.io for AI agents (OpenAPI tag trust): free lookup and signed check; paid pre-payment check, one-label verdict and vendor reports. Paying never changes a score. ` +
-        `No API key: pay a few cents per call in ${settledIn(cfg)} via x402. ` +
+        `Lumi Trades (lumitrades.io), an x402 seller trust service for AI agents (OpenAPI tag trust). Start with the free trust check: GET /v1/trust/check?url=<resource> returns allow / warn / block with coded reasons (rate-limited, no payment). Also: free lookup and signed check; paid pre-payment check, one-label verdict and vendor reports. Paying never changes a score. ` +
+        `No API key: paid checks are a few cents per call in ${settledIn(cfg)} via x402. Automated observations, not an endorsement or guarantee. ` +
         `${TRIAL_SUMMARY} ` +
         `Not charged on bad input or when Lumi cannot answer; every response carries as_of.`,
       "x-guidance":
@@ -725,7 +725,7 @@ export function skillMd(cfg: Config, base: string, coins: CoinRef[]): string {
   const maxDrops = Math.max(...Object.values(cfg.pricesDrops).map(Number));
   return `---
 name: lumi-api
-description: Pay-per-call reads from Lumi Trades, paid in ${settledIn(cfg)} via x402. Lumi Trades seller checks (should I pay this x402 URL?, one-label verdict, vendor reports, signed test-buy receipts).
+description: Lumi Trades, an x402 seller trust service. Check an x402 seller before you pay - start with the free GET /v1/trust/check (allow / warn / block with coded reasons); paid checks in ${settledIn(cfg)} via x402 add a one-label verdict, vendor reports and signed test-buy receipts.
 ---
 
 # Lumi API (agent guide)
@@ -738,7 +738,12 @@ ${cfg.evm ? `Also: \`${cfg.evm.network}\` (${cfg.evm.networkName}). Asset: USDC 
 No API key, no account, no sign-up for the per-call endpoints (the optional trust data feed uses keys, see below).
 A2A agent card: ${base}/.well-known/agent-card.json. MCP: ${base}/mcp.
 
-## What you can buy
+## Start here: the free trust check
+
+\`GET ${base}${FREE_TRUST_CHECK_EXAMPLE}\` (free, no payment, ${FREE_TRUST_CHECK_LIMITS.perDay} a day per IP and per key) returns \`allow\` / \`warn\` / \`block\` with coded reasons.
+Add \`payTo=<address in its quote>\` and \`amount=<USD>\` to compare the quote with the listing. Automated observations, not an endorsement or guarantee.
+
+## Paid checks
 
 **Lumi Trades seller checks** (OpenAPI tag \`trust\`). Paying never changes a score.
 
@@ -764,7 +769,7 @@ Every paid response carries \`as_of\` (when the observations were produced).
 \`{ "error": "data_unavailable", "retry_after_seconds", "note": "Not charged." }\` and **no 402 quote**, so no payment can be signed or settled. The response body is built *before* the payment is settled and is
 served right after a validated \`tesSUCCESS\`: a settled payment always returns the answer you paid for.
 
-Free: \`GET /\`, \`GET /health\`, \`GET /skill.md\`, \`GET /v1/check?url=\`, \`GET /v1/samples\`, \`GET /v1/trust/vendors\` (\`?url=|domain=|payTo=\` lookup), \`GET /v1/trust/catalog\`, \`GET /v1/trust/vendors/{id}\`, \`GET /v1/trust/methodology\`, \`GET /v1/badge/{key}.svg|.json\` (legacy \`/badge\` paths 301 there), \`GET /trust/v/{key}\`, \`GET|POST /v1/trust/receipts/verify\`, \`GET /.well-known/x402\`, \`GET /.well-known/agent-card.json\`, \`GET /.well-known/mcp/server-card.json\`, \`GET /.well-known/agents.json\`, \`GET /openapi.json\`, \`POST /mcp\`, \`POST /a2a\`.
+Free: \`GET /v1/trust/check?url=\` (the trust check, rate-limited), \`GET /\`, \`GET /health\`, \`GET /skill.md\`, \`GET /v1/check?url=\`, \`GET /v1/samples\`, \`GET /v1/trust/vendors\` (\`?url=|domain=|payTo=\` lookup), \`GET /v1/trust/catalog\`, \`GET /v1/trust/vendors/{id}\`, \`GET /v1/trust/methodology\`, \`GET /v1/badge/{key}.svg|.json\` (legacy \`/badge\` paths 301 there), \`GET /trust/v/{key}\`, \`GET|POST /v1/trust/receipts/verify\`, \`GET /.well-known/x402\`, \`GET /.well-known/agent-card.json\`, \`GET /.well-known/mcp/server-card.json\`, \`GET /.well-known/agents.json\`, \`GET /openapi.json\`, \`POST /mcp\`, \`POST /a2a\`.
 
 Every paid response is JSON with \`kind\`, \`timestamp\`, \`source: "${SOURCE}"\`, \`as_of\`, a \`payment\` block (network, tx hash, explorer link) and a \`disclaimer\`. All timestamps are ISO 8601 UTC.
 

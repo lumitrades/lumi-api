@@ -67,7 +67,10 @@ describe("Monitor ($9) and Monitor Plus ($29) retired 2026-10-25", () => {
         const r = await s.req(`/v1/monitor/subscribe/${plan}${q}`);
         expect(r.status, plan + q).toBe(410);
         expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
-        expect(await r.json()).toMatchObject({ error: "plan_retired", plan, note: "Not charged." });
+        expect(await r.json()).toMatchObject({ error: "plan_retired", plan, note: "Not charged.", status: 410, retired_on: "2026-10-25" });
+        expect(r.headers.get("Sunset")).toBe("Sun, 25 Oct 2026 00:00:00 GMT");
+        expect(r.headers.get("Deprecation")).toMatch(/^@\d+$/);
+        expect(r.headers.get("Link")).toContain(`<${BASE}/v1/monitor>; rel="successor-version"`);
       }
       const fake = { scheme: "exact", network: "xrpl:1", asset: "XRP", amount: "9000000", payTo: SELLER, maxTimeoutSeconds: 60, extra: {} };
       const paid = await s.req(`/v1/monitor/subscribe/${plan}?enrollment=${e.enrollment_id}`, { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(fake) } });

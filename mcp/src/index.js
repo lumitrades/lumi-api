@@ -34,7 +34,7 @@ export const PAID_TOOLS = [
     },
     description:
       "Before a larger x402 payment: the same allow / warn / block verdict and score as the free lumi_trust_check, plus a live re-check (Lumi contacts the seller once with an unpaid request; Lumi never pays the seller) comparing its current quote, price, payTo and TLS with Lumi's record, returned as live with signed live_evidence, and a signed receipt bound to the stated amount. " +
-      "Paid: 0.5% of amount, minimum $0.005, maximum $0.25 (e.g. amount 10 costs $0.05), in USDC on Base or XRP/RLUSD/USDC on the XRP Ledger. Paying never changes a verdict or score. Observations, not a guarantee.",
+      "Paid: priced as a small share of the stated amount, with a floor and a cap (exact price in the x402 quote; see lumi_quote), in USDC on Base or XRP/RLUSD/USDC on the XRP Ledger. Paying never changes a verdict or score. Observations, not a guarantee.",
   },
   {
     name: "lumi_vendor_report",
@@ -43,7 +43,7 @@ export const PAID_TOOLS = [
     description:
       "Detailed report on one x402 vendor from Lumi's trust list: full observation history (every free 402-quote check over 90 days, every paid test-buy with tx hash and delivered yes/no), " +
       "latency stats and 7-day trend, uptime % (24h/7d/30d/90d) and daily series, quoted-price history, agent reports, vendor replies, sample sizes and confidence labels. " +
-      "Automated observations, not a rating. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger). The free summary is lumi_vendor_scores.",
+      "Automated observations, not a rating. Paid per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger; price in the x402 quote, see lumi_quote). The free summary is lumi_vendor_scores.",
   },
 ];
 
@@ -159,7 +159,7 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: one-label pre-payment check",
       description:
-        "Before paying an x402 URL or seller domain: one label from the same data and signing key as Lumi's free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. It is the one-word version of the live check: label_live is the label after Lumi contacts the seller at call time (an unpaid request) and compares its quote, price, payTo and TLS with Lumi's record, with signed live_evidence. Costs $0.01 per call, paid with your wallet within the configured caps. Paying Lumi never changes a result. Observations, not a guarantee.",
+        "Before paying an x402 URL or seller domain: one label from the same data and signing key as Lumi's free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. It is the one-word version of the live check: label_live is the label after Lumi contacts the seller at call time (an unpaid request) and compares its quote, price, payTo and TLS with Lumi's record, with signed live_evidence. Paid per call (price in the x402 quote, see lumi_quote), with your wallet within the configured caps. Paying Lumi never changes a result. Observations, not a guarantee.",
       inputSchema: {
         url: z.string().min(1).max(500).describe("The x402 resource URL (or the seller's domain) you are about to pay"),
         payTo: z.string().max(120).optional().describe("Optional: the payTo address in its 402 quote"),
@@ -185,7 +185,7 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: seller monitoring plans and monitored sellers (free)",
       description:
-        "Free. For x402 sellers, priced per endpoint per 30 days: Watch $5 (hourly quote checks, weekly test-buy), Watch Pro $20 (15 min checks, daily buys on up to 3 chains, limited by the test-buy budget, signed monthly report); 10+ endpoints -20% or 3 terms prepaid -10% (not stacked: the larger applies). Audit $99 one-off. Test-buy packs, one-off, valid 12 months, buys capped at $0.10 each: Re-test pack $6.50 for 30 test-buys (\"Fixed something? Get re-tested now\"), Founder pack $5 for 24 test-buys (first 10 sellers, one place per company, rebuy up to 12 times). Free Watch tier (1 endpoint, daily quote check, no test-buys) and a one-per-seller 14-day Watch trial (no card, never converts; on day 14 nothing is charged, checks stop, the badge comes off and history freezes read-only). Monitor, Monitor Plus and Watch Plus are no longer sold; existing terms run to their end. No auto-renew; payTo proven by signature; paying never changes a score. " +
+        "Free. Seller monitoring for x402 sellers: Watch and Watch Pro plans per endpoint per 30 days, a one-off audit, test-buy packs (Re-test pack, Founder pack), a free Watch tier and a one-per-seller 14-day Watch trial (no card, never converts). Prices are returned by this tool and in each 402. No auto-renew; payTo proven by signature; paying never changes a score. " +
         "No args: plans, enrolment steps and safeguards. enrollment_id: that seller's public entry (disclosure, findings, replies) and live badge status. Plans are paid over x402 at the REST URL.",
       inputSchema: { enrollment_id: z.string().regex(/^men_[a-f0-9]{24}$/).optional().describe("Optional enrollment id (men_...)") },
     },
@@ -201,7 +201,7 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: trust data feed plans and licence (free)",
       description:
-        "Free. Licensed trust data feed for facilitators, wallets and frameworks: free key with 1,000 lookups/month (wallet signature), $1.50 per 1,000 extra lookups, Feed $99/30 days, Feed Pro $199/30 days (snapshot export, webhooks). Returns plans, endpoints and licence terms (no resale, attribution).",
+        "Free. Licensed trust data feed for facilitators, wallets and frameworks: a free key with a monthly lookup allowance (wallet signature), metered extra lookups, and Feed and Feed Pro plans (snapshot export, webhooks). Returns plans, prices, endpoints and licence terms (no resale, attribution).",
       inputSchema: {},
     },
     async () => text((await client.free("/v1/feed")).body),

@@ -23,7 +23,6 @@ import { TRUST_DISCLAIMER } from "./lines";
 import { RETIRED_TOOLS, retiredBody } from "./retired";
 import type { Prepared } from "./app";
 import { lookupError, type Trust } from "./trust";
-import { MONITOR_PRICE_TEXT } from "./commerce/plans";
 
 export const MODERN_VERSION = "2026-07-28";
 const LEGACY_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -63,16 +62,16 @@ const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 export const VENDOR_REPORT_TOOL_DESCRIPTION =
   "Detailed report on one x402 vendor from Lumi's trust list: full observation history (every free 402-quote check over 90 days, every paid test-buy with tx hash and delivered yes/no), " +
   "latency stats and 7-day trend, uptime % (24h/7d/30d/90d) and daily series, quoted-price history, agent reports, vendor replies, sample sizes and confidence labels. " +
-  "Automated observations, not a rating. Paid ($0.02: ~0.015 XRP / 0.02 RLUSD / 0.02 USDC). The free summary is lumi_vendor_scores.";
+  "Automated observations, not a rating. Paid (price in the x402 quote; see lumi_quote). The free summary is lumi_vendor_scores.";
 
 export const TRUST_CHECK_TOOL_DESCRIPTION =
   "Free (rate-limited per client and per day). Should I pay this x402 URL? allow / warn / block with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
-  "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Links the free lookup and, for curated vendors, the $0.02 full report. " +
+  "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Links the free lookup and, for curated vendors, the paid full report. " +
   "Observations, not a guarantee. Over the daily limit it names the paid high-value check (lumi_high_value_check).";
 
 export const HIGH_VALUE_CHECK_TOOL_DESCRIPTION =
   "Before a larger x402 payment: the same allow / warn / block verdict and score as the free lumi_trust_check (paying never changes them), plus a live re-check of the seller at call time and a Lumi-signed receipt bound to the stated amount. " +
-  "Pass url and the USD amount you are about to pay (and optionally the payTo in its quote). Paid: 0.5% of the amount, minimum $0.005, maximum $0.25 (USDC/RLUSD, or the XRP equivalent).";
+  "Pass url and the USD amount you are about to pay (and optionally the payTo in its quote). Paid: priced as a small share of the stated amount, with a floor and a cap (exact price in the x402 quote; see lumi_quote).";
 
 export const VENDOR_LOOKUP_DESCRIPTION =
   "Free. Check an x402 seller before you pay it: pass url (the resource you are about to buy), domain, or payTo (the address in its 402 quote, case-insensitive). Lumi ingests the full CDP x402 Bazaar catalog daily and runs free, unpaid 402-quote checks of listings on a rotating schedule (valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response), labelled 'quote-checked, low confidence', plus Lumi's own test-buys confirmed on-chain, labelled 'test-bought' and counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated list, separately). Answer-only: the full coded verdict is in the free lumi_trust_check. Observations, not ratings; no match is not a negative finding. With no arguments: the curated XRPL vendor scores and catalog counts; vendor_id gives one curated vendor's summary (tx evidence is in the paid vendor report).";
@@ -89,7 +88,7 @@ export const PAID_TOOLS: PaidTool[] = [
       type: "object",
       properties: {
         url: { type: "string", description: "The x402 resource URL you are about to pay" },
-        amount: { type: "string", description: "The USD amount you are about to pay, e.g. 10 (sets the price: 0.5%, min $0.005, max $0.25)" },
+        amount: { type: "string", description: "The USD amount you are about to pay, e.g. 10 (sets the price of this check)" },
         payTo: { type: "string", description: "Optional: the payTo address in its 402 quote" },
       },
       required: ["url", "amount"],
@@ -136,7 +135,7 @@ function toolList() {
     },
     {
       name: "lumi_catalog",
-      title: "Lumi: endpoints and prices (free)",
+      title: "Lumi: endpoints and live prices (free)",
       description: "Free. Lists Lumi API endpoints, live prices (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base), payment settings of this MCP server and the caller wallet address.",
       inputSchema: NO_ARGS,
       annotations: ro,
@@ -175,9 +174,9 @@ function toolList() {
     },
     {
       name: "lumi_verdict",
-      title: "Lumi: one-label pre-payment check ($0.01)",
+      title: "Lumi: one-label pre-payment check (paid)",
       description:
-        "GET /v1/verdict costs $0.01 per call over x402 (this tool returns the price terms; the free signed /v1/check has the same data). Before paying an x402 URL or seller domain: one label from the same data and signing key as /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Paying Lumi never changes a result. Observations, not a guarantee.",
+        "Paid per call over x402 at GET /v1/verdict (this tool returns the price terms; the free signed /v1/check has the same data). Before paying an x402 URL or seller domain: one label from the same data and signing key as /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Paying Lumi never changes a result. Observations, not a guarantee.",
       inputSchema: {
         type: "object",
         properties: {
@@ -193,7 +192,7 @@ function toolList() {
       name: "lumi_seller_monitoring",
       title: "Lumi: seller monitoring plans and monitored sellers (free)",
       description:
-        `${MONITOR_PRICE_TEXT.replace(/\.$/, "")}. No auto-renew; payTo proven by signature; paying never changes a score. ` +
+        "Free. Seller monitoring for x402 sellers: Watch and Watch Pro plans per endpoint per 30 days, a one-off audit, test-buy packs, a free Watch tier and a 14-day Watch trial (prices are returned by this tool and in each 402). No auto-renew; payTo proven by signature; paying never changes a score. " +
         "No args: plans, enrolment steps and safeguards. enrollment_id: that seller's public entry (disclosure, findings, replies) and live badge status. Plans are paid over x402 at the REST URL.",
       inputSchema: { type: "object", properties: { enrollment_id: { type: "string", pattern: "^men_[a-f0-9]{24}$", description: "Optional enrollment id (men_...)" } } },
       annotations: ro,
@@ -202,7 +201,7 @@ function toolList() {
       name: "lumi_trust_feed",
       title: "Lumi: trust data feed plans and licence (free)",
       description:
-        "Free. Licensed trust data feed for facilitators, wallets and frameworks: free key with 1,000 lookups/month (wallet signature), $1.50 per 1,000 extra lookups, Feed $99/30 days, Feed Pro $199/30 days (snapshot export, webhooks). Returns plans, endpoints and licence terms (no resale, attribution).",
+        "Free. Licensed trust data feed for facilitators, wallets and frameworks: a free key with a monthly lookup allowance (wallet signature), metered extra lookups, and Feed and Feed Pro plans (snapshot export, webhooks). Returns plans, prices, endpoints and licence terms (no resale, attribution).",
       inputSchema: NO_ARGS,
       annotations: ro,
     },
@@ -217,10 +216,10 @@ function toolList() {
 }
 
 const INSTRUCTIONS =
-  "Lumi Trades (lumitrades.io): x402 seller checks. lumi_verdict (one-label pre-payment check, $0.01 on the API: checks_passed / check_first / checks_failed / no_data), lumi_trust_check (free, rate-limited, full coded reasons), lumi_high_value_check (paid, 0.5% of the amount, adds a live re-check), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
-  "Free: lumi_catalog, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_trust_check (rate-limited), lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (Watch $5, Watch Pro $20 per endpoint per 30d, Audit $99, Re-test pack $6.50 / 30 test-buys, Founder pack $5 / 24 test-buys, free tier and 14-day trial) and lumi_trust_feed (free 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d); lumi_vendor_report is the paid full history for one vendor ($0.02). " +
-  "lumi_verdict is paid ($0.01 per call on /v1/verdict; on this remote server it returns the x402 terms; the free signed GET /v1/check has the same data). Paid tools cost $0.005 to $0.25 per call via x402; paid in XRP, RLUSD or USDC on the XRP Ledger or USDC on Base or Stellar; " + TRIAL_SHORT + "; without access they return the price and how to pay. " +
-  PAID_TOOLS_NOTE + " Information only, not financial advice. Cite 'Lumi Trades (lumitrades.io)'.";
+  "Lumi Trades (lumitrades.io): an x402 seller trust service. Start with lumi_trust_check (free, rate-limited): allow / warn / block with coded reasons before you pay an x402 seller. Then lumi_verdict (paid one-label pre-payment check: checks_passed / check_first / checks_failed / no_data), lumi_high_value_check (paid, priced as a share of the amount, adds a live re-check), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
+  "Free: lumi_catalog, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_trust_check (rate-limited), lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (plans, packs, free tier and 14-day trial) and lumi_trust_feed (free key, Feed and Feed Pro); lumi_vendor_report is the paid full history for one vendor. " +
+  "lumi_verdict is paid (on this remote server it returns the x402 terms; the free signed GET /v1/check has the same data). Paid tools are priced per call via x402 (live prices: lumi_catalog, lumi_quote); paid in XRP, RLUSD or USDC on the XRP Ledger or USDC on Base or Stellar; " + TRIAL_SHORT + "; without access they return the price and how to pay. " +
+  PAID_TOOLS_NOTE + " Automated observations, not an endorsement or guarantee. Cite 'Lumi Trades (lumitrades.io)'.";
 
 // ---------------------------------------------------------------- auth
 

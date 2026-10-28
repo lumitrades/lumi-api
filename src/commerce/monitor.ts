@@ -3,6 +3,7 @@
  * their endpoints (seller-funded, capped per buy) from the operator box, posting results back here. Findings are
  * append-only and alert the seller (HMAC-signed webhook and/or email). Nothing here is read by any trust score.
  */
+import { RETIRED_ON, sunsetDate, retiredPlanHeaders } from "../retired";
 import { canonicalJson, json, requirePayment, assetLabel, paymentRequiredResponse, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, type Settlement, type PaymentRequirements } from "../x402";
 import { verifyXrplSignature, xrplAddressOf } from "../trust/verify";
 import { explorerFor, registrableDomain } from "../trust/catalog";
@@ -432,7 +433,7 @@ export function createMonitor(deps: CommerceDeps) {
 
   async function subscribe(request: Request, url: URL, plan: PlanId, base: string, ctx?: WaitUntil) {
     const def = PLANS[plan];
-    if (def.retired) return json(410, { error: "plan_retired", plan, detail: `${def.name} is no longer sold; existing terms run to their end. ${plan === "watch_plus" || plan === "watch_plus_founder" ? `Watch Plus was replaced by the test-buy packs (Re-test pack, Founder pack) next to Watch $${PLANS.watch.usd}: ${base}/v1/monitor/packs` : `Pick a Watch tier: ${base}/v1/monitor`}`, note: "Not charged." }, NO_STORE);
+    if (def.retired) return json(410, { error: "plan_retired", status: 410, plan, retired_on: RETIRED_ON, sunset: sunsetDate(RETIRED_ON), detail: `${def.name} is no longer sold; existing terms run to their end. ${plan === "watch_plus" || plan === "watch_plus_founder" ? `Watch Plus was replaced by the test-buy packs (Re-test pack, Founder pack) next to Watch $${PLANS.watch.usd}: ${base}/v1/monitor/packs` : `Pick a Watch tier: ${base}/v1/monitor`}`, note: "Not charged." }, { ...NO_STORE, ...retiredPlanHeaders(base) });
     const id = url.searchParams.get("enrollment") ?? "";
     const paid = !!(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT));
     const e = ENROLL_ID_RE.test(id) ? await store.enrollment(id) : null;

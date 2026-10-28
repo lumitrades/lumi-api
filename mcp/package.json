@@ -1,7 +1,7 @@
 {
   "name": "lumi-trades-mcp",
   "version": "0.10.0",
-  "description": "Lumi Trades MCP server: Lumi Check, a free signed allow/warn/block check before your agent pays an x402 seller, backed by Lumi's paid test-buys on XRPL, Base and Stellar.",
+  "description": "Lumi Trades MCP server: a free allow/warn/block trust check before your agent pays an x402 seller, backed by Lumi's own test-buys on XRPL, Base and Stellar.",
   "mcpName": "io.github.cypher-osiris/lumi-trades-mcp",
   "type": "module",
   "bin": {

@@ -1,7 +1,8 @@
 # lumi-trades-mcp
 
-MCP server (stdio) for **[Lumi Trades](https://lumitrades.io)**: **Lumi Check**, a free signed allow/warn/block check before your agent pays an x402 seller,
-backed by Lumi's own paid test-buys on XRPL, Base and Stellar: x402 seller trust you can verify. Works with Claude Desktop, Cursor, Claude Code, Cline, Windsurf and any other MCP client.
+MCP server (stdio) for **[Lumi Trades](https://lumitrades.io)**, an independent x402 seller trust service. Start with the free
+`lumi_trust_check`: pass the x402 URL you are about to pay and get allow / warn / block with coded reasons, backed by Lumi's own
+test-buys on XRPL, Base and Stellar with signed, verifiable evidence. Works with Claude Desktop, Cursor, Claude Code, Cline, Windsurf and any other MCP client.
 Paid tools **pay per call via x402 with your own wallet: USDC on Base (gasless) or XRP / RLUSD / USDC on the XRP Ledger**
 (the API also accepts USDC on Stellar; this package pays only on Base or the XRP Ledger).
 No API key, no account: each paid tool call is one small payment, signed locally on your machine.
@@ -13,41 +14,38 @@ No API key, no account: each paid tool call is one small payment, signed locally
 > bound to the amount, priced at 0.5% of the amount (min $0.005, max $0.25). Paying never changes a verdict or score.
 >
 > **Changed in 0.9.9:** this package is now only about checking x402 sellers. Tools for API routes retired on Oct 25, 2026 were removed;
-> those routes answer 410 Gone and are never charged. Use `lumi_check` / `/v1/check` to check a seller before paying.
+> those routes answer 410 Gone and are never charged. Use `lumi_trust_check` (or the local `lumi_check` / `/v1/check`) to check a seller before paying.
 > zod is now required at the patched range (GHSA-mrhx-c7xc-m3w5) for every dependency.
 
-**No install needed to browse:** the same tools are also served remotely at `https://api.lumitrades.io/mcp` (Streamable HTTP),
-for clients that take a remote MCP server URL. A remote connector has no wallet, so its paid tools return the price and how to pay;
-use this package when you want paid tools to pay automatically from your own wallet.
+**No install needed to browse:** a remote server at `https://api.lumitrades.io/mcp` (Streamable HTTP) serves the same Lumi tools
+except the three local-only ones (`lumi_check`, `lumi_scan_seller`, `lumi_report_receipt`, which verify, fetch or sign on your machine).
+A remote connector has no wallet, so its paid tools return the price and how to pay; use this package when you want paid tools
+to pay automatically from your own wallet.
 
 ## Tools
 
-**General (free)**
+Listed in `tools/list` order. "Remote too" means the tool is also on `https://api.lumitrades.io/mcp`. Prices are not listed here:
+they are read live from each 402 quote (see `lumi_catalog` or `lumi_quote`).
 
-| Tool | Paid? | Price (USD) | What you get |
-|---|---|---|---|
-| `lumi_catalog` | free | – | Endpoints, live prices, this server's wallet + spend caps |
-| `lumi_samples` | free | `route?` | Truncated, labelled samples of every paid product with USD price and full URL |
-| `lumi_quote` | free | – | The x402 quote for any paid path, without paying |
-
-**Lumi Trades seller checks (x402)**
-
-| Tool | Paid? | Price (USD) | What you get |
-|---|---|---|---|
-| `lumi_verdict` | $0.01 | `url` `payTo?` `amount?` | One label before paying, same data and signing as `/v1/check`: `checks_passed` (Delivered in recent checks) / `check_first` (Check first) / `checks_failed` (Recent checks failed) / `no_data` (Not enough data), with dates, evidence window, sample count, reason codes, evidence and appeal links. Paying Lumi never changes a result |
-| `lumi_vendor_scores` | free | `url?` `domain?` `payTo?` `vendor_id?` | Look up any x402 seller before paying: tier (catalogued / quote-checked, low confidence / test-bought), last free 402-quote check, price and payTo vs its Bazaar listing, on-chain test-buy evidence. No args: Lumi's curated vendor scores |
-| `lumi_seller_monitoring` | free | `enrollment_id?` | Seller monitoring plans (per endpoint per 30d: Watch $5, Watch Pro $20; 10+ endpoints -20% or 3 terms prepaid -10%, not stacked; Audit $99 one-off; test-buy packs: Re-test $6.50 for 30 test-buys, Founder $5.00 for 24 test-buys, first 10 sellers; free Watch tier; 14-day Watch trial), enrolment steps; with an id, that seller's public entry and badge. Paying never changes a score |
-| `lumi_trust_feed` | free | – | Trust data feed plans (free key 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d) and licence terms |
-| `lumi_check` | free | `url?` `pay_to?` `amount_usd?` `network?` | **Lumi Check** before you pay any x402 seller: allow / warn / block with reasons, the seller's score and a link to its live report. Signed by Lumi and verified locally. Only origin + path of the URL is sent. Fail-open: warn if Lumi is unreachable within 2.5 s |
-| `lumi_scan_seller` | free | `url` | Fetch an x402 seller's 402 quote without paying, plus a dry-run test-buy plan against local caps |
-| `lumi_report_receipt` | free | `endpoint` `network` `tx_hash` … | Sign a receipt for a purchase you already made. `submit: true` is tier 2 sharing: off by default, needs `LUMI_SHARE_RECEIPTS=1` or `lumi-scan sharing on`. Shares the payment's chain and transaction ID, which is public on-chain and linkable to the paying wallet. Verified receipts earn a public badge only |
-| `lumi_trust_check` | free | `url` `payTo?` `amount?` | Pre-payment check of any x402 URL you are about to pay: allow / warn / block with coded reasons, payTo/price mismatches vs listings and Lumi's observations. Rate-limited per client (429 `free_limit_reached` points to the paid route) |
-| `lumi_high_value_check` | 0.5% of `amount` (min $0.005, max $0.25) | `url` `amount` `payTo?` | Before a larger payment: the same verdict and score as `lumi_trust_check`, plus a live re-check of the seller and a signed receipt bound to the amount (e.g. `amount` 10 costs $0.05) |
-| `lumi_vendor_report` | paid | $0.02 | Full observation history for one x402 vendor on Lumi's trust list: every quote check (90 days) and paid test-buy with tx hash and delivered yes/no, latency stats and trend, uptime %, agent reports, vendor replies, confidence labels. `vendor_id` required |
+| Tool | Free / paid | Remote too | Arguments | What you get |
+|---|---|---|---|---|
+| `lumi_trust_check` | free (rate-limited) | yes | `url` `payTo?` `amount?` | **Start here.** Should I pay this x402 URL? allow / warn / block with coded reasons, payTo/price mismatches vs listings and Lumi's observations. Over the limit, 429 `free_limit_reached` points to `lumi_high_value_check` |
+| `lumi_check` | free | no (local) | `url?` `pay_to?` `amount_usd?` `network?` | Signed `/v1/check` answer verified locally on your machine: allow / warn / block with reasons, the seller's score and a link to its live report. Only origin + path of the URL is sent. Fail-open: warn if Lumi is unreachable within 2.5 s. Remote equivalent: `lumi_trust_check` |
+| `lumi_scan_seller` | free | no (local) | `url` | Fetch an x402 seller's 402 quote without paying, plus a dry-run test-buy plan against local caps |
+| `lumi_report_receipt` | free | no (local) | `endpoint` `network` `tx_hash` … | Sign a receipt for a purchase you already made. `submit: true` is tier 2 sharing: off by default, needs `LUMI_SHARE_RECEIPTS=1` or `lumi-scan sharing on`. Shares the payment's chain and transaction ID, which is public on-chain and linkable to the paying wallet. Verified receipts earn a public badge only |
+| `lumi_catalog` | free | yes | – | Endpoints, live prices, this server's wallet + spend caps |
+| `lumi_samples` | free | yes | `route?` | Truncated, labelled samples of every paid product |
+| `lumi_quote` | free | yes | `path` | The x402 quote for any paid path, without paying |
+| `lumi_vendor_scores` | free | yes | `url?` `domain?` `payTo?` `vendor_id?` | Look up any x402 seller: tier (catalogued / quote-checked, low confidence / test-bought), last free 402-quote check, price and payTo vs its Bazaar listing, on-chain test-buy evidence. No args: Lumi's curated vendor scores |
+| `lumi_verdict` | paid | yes (returns the price terms) | `url` `payTo?` `amount?` | One label before paying, same data and signing as `/v1/check`: `checks_passed` / `check_first` / `checks_failed` / `no_data`, with dates, evidence window, sample count, reason codes, evidence and appeal links. Paying Lumi never changes a result |
+| `lumi_seller_monitoring` | free | yes | `enrollment_id?` | Seller monitoring plans, test-buy packs, free Watch tier and 14-day trial, enrolment steps; with an id, that seller's public entry and badge. Paying never changes a score |
+| `lumi_trust_feed` | free | yes | – | Trust data feed plans and licence terms |
+| `lumi_high_value_check` | paid (share of `amount`) | yes (returns the price terms) | `url` `amount` `payTo?` | Before a larger payment: the same verdict and score as `lumi_trust_check`, plus a live re-check of the seller and a signed receipt bound to the amount |
+| `lumi_vendor_report` | paid | yes (returns the price terms) | `vendor_id` | Full observation history for one x402 vendor on Lumi's trust list: every quote check (90 days) and paid test-buy with tx hash and delivered yes/no, latency stats and trend, uptime %, agent reports, vendor replies, confidence labels |
 
 How to pay, in order of preference: **1. USDC on Base** (gasless, `EVM_PRIVATE_KEY`), **2. the XRP Ledger** (`XRPL_SEED`):
 RLUSD or USDC at the same USD price, or XRP at the live XRP/USD rate (quoted per call, rounded up to 0.0001 XRP).
-Prices are read live from each 402 quote; the table is for orientation. **You only pay when you get an answer**: the API checks
+Prices are read live from each 402 quote. **You only pay when you get an answer**: the API checks
 your input before quoting (4xx, nothing charged) and answers 503 "Not charged." when it cannot answer, so a payment is never settled without an answer.
 
 ## Install

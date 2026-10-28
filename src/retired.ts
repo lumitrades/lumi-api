@@ -34,12 +34,54 @@ export function isRetiredPath(path: string): boolean {
   return RETIRED_PATH_RE.test(path) || isRetiredVendorReport(path);
 }
 
+/** RFC 8594 Sunset value (IMF-fixdate, always in the past) for a retirement day "YYYY-MM-DD". */
+export function sunsetDate(day: string): string {
+  return new Date(`${day}T00:00:00Z`).toUTCString();
+}
+
+/** The retirement day of a retired path: the vendor-report day for retired vendor reports, else RETIRED_ON. */
+export function retiredOn(path: string): string {
+  return isRetiredVendorReport(path) ? RETIRED_VENDOR_REPORTS_ON : RETIRED_ON;
+}
+
+/**
+ * Headers on every 410 of a retired route, so crawlers and uptime monitors read a declared retirement, not downtime:
+ * Sunset (RFC 8594, a date already past), Deprecation (RFC 9745, same moment) and Link to the current routes
+ * (successor-version = the free trust check; service-desc = OpenAPI; sunset = the retirement notice in the docs).
+ */
+export function retiredHeaders(path: string, base = ""): Record<string, string> {
+  const day = retiredOn(path);
+  return {
+    Sunset: sunsetDate(day),
+    Deprecation: `@${Math.floor(Date.parse(`${day}T00:00:00Z`) / 1000)}`,
+    Link: [
+      `<${base}${RETIRED_USE_LINK}>; rel="successor-version"; title="Free x402 seller trust check"`,
+      `<${base}/openapi.json>; rel="service-desc"; type="application/json"`,
+      `<${base}/skill.md>; rel="sunset"; type="text/markdown"`,
+    ].join(", "),
+  };
+}
+
+/** Sunset, Deprecation and Link headers for a retired monitoring plan's 410 (all retired on RETIRED_ON). */
+export function retiredPlanHeaders(base = ""): Record<string, string> {
+  return {
+    Sunset: sunsetDate(RETIRED_ON),
+    Deprecation: `@${Math.floor(Date.parse(`${RETIRED_ON}T00:00:00Z`) / 1000)}`,
+    Link: [`<${base}/v1/monitor>; rel="successor-version"; title="Current seller monitoring plans"`, `<${base}/v1/monitor/packs>; rel="alternate"; title="Test-buy packs"`, `<${base}/openapi.json>; rel="service-desc"; type="application/json"`].join(", "),
+  };
+}
+
+/** Link target of the successor route (the free basic trust check). */
+export const RETIRED_USE_LINK = "/v1/trust/check";
+
 export function retiredBody(path: string, base = "") {
   const vendorReport = isRetiredVendorReport(path);
   return {
     error: "gone",
     status: 410,
     path,
+    retired_on: retiredOn(path),
+    sunset: sunsetDate(retiredOn(path)),
     detail: vendorReport
       ? `This vendor report was retired on ${RETIRED_VENDOR_REPORTS_ON}. Nothing is sold or charged here.`
       : `This endpoint was retired on ${RETIRED_ON}. Lumi now offers x402 seller checks only. Nothing is sold or charged here.`,
@@ -69,6 +111,6 @@ export function currentTrustRoutes(base = "") {
 export function retiredResponse(path: string, base = "", headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(retiredBody(path, base), null, 2), {
     status: 410,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600", ...headers },
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "public, max-age=3600", ...retiredHeaders(path, base), ...headers },
   });
 }

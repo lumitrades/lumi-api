@@ -17,10 +17,10 @@ export function mcpServerCard(base: string) {
     title: "Lumi Trades",
     version: VERSION,
     description:
-      "Lumi Trades seller checks (should I pay this x402 URL? allow / warn / block, with signed test-buy receipts). " +
+      "Lumi Trades, an x402 seller trust service. Start with the free lumi_trust_check: should I pay this x402 URL? allow / warn / block with coded reasons, backed by signed test-buy receipts. " +
       "Free tools answer directly; paid tools return the x402 price (USDC on Base, XRP / RLUSD / USDC on the XRP Ledger, or USDC on Stellar).",
-    websiteUrl: `${base}/skill.md`,
-    repository: { url: "https://github.com/cypher-osiris/lumi-api", source: "github", subfolder: "mcp" },
+    websiteUrl: "https://lumitrades.io",
+    repository: { url: "https://github.com/lumitrades/lumi-api", source: "github", subfolder: "mcp" },
     icons: [{ src: SERVICE_ICON, sizes: ["512x512"], mimeType: "image/png" }],
     remotes: [{ type: "streamable-http", url: `${base}/mcp`, supportedProtocolVersions: SUPPORTED_VERSIONS }],
     _meta: {
@@ -51,7 +51,7 @@ export function agentsJson(base: string) {
       title: "Lumi Trades API",
       version: VERSION,
       description:
-        "Check an x402 seller before paying it (Lumi Trades seller checks). Paid operations use x402 v2 (HTTP 402 + PAYMENT-SIGNATURE), no API key; " +
+        "Check an x402 seller before paying it (Lumi Trades, an x402 seller trust service). Start with the free trust_check flow. Paid operations use x402 v2 (HTTP 402 + PAYMENT-SIGNATURE), no API key; " +
         `prices and payment options are in each 402 and in ${base}/.well-known/x402. Never charged when Lumi cannot answer.`,
     },
     sources: [{ id: "lumi", path: `${base}/openapi.json` }],
