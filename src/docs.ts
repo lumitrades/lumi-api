@@ -3,7 +3,7 @@
 import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPriceTable, planResources } from "./commerce/discovery";
 import { PLATFORM_LICENCE, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
-import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, highValuePriceUsd } from "./config";
+import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, PAID_PRICE_SUMMARY, highValuePriceUsd } from "./config";
 import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable } from "./catalog";
 import { BAZAAR_ROUTES, TRUST_ROUTES, VENDOR_ID_PATTERN, errorDocs, serviceNameFor } from "./bazaar";
 import { DISCLAIMER, SOURCE, type CoinRef } from "./views";
@@ -493,7 +493,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
       contact: { name: "Lumi Trades", url: "https://lumitrades.io", email: "hello@lumitrades.io" },
       description:
         `Lumi Trades (lumitrades.io), an x402 seller trust service for AI agents (OpenAPI tag trust). Start with the free trust check: GET /v1/trust/check?url=<resource> returns allow / warn / block with coded reasons (rate-limited, no payment). Also: free lookup and signed check; paid pre-payment check, one-label verdict and vendor reports. Paying never changes a score. ` +
-        `No API key: paid checks are a few cents per call in ${settledIn(cfg)} via x402. Automated observations, not an endorsement or guarantee. ` +
+        `No API key: ${PAID_PRICE_SUMMARY.replace(/^P/, "p")}, settled in ${settledIn(cfg)} via x402. Automated observations, not an endorsement or guarantee. ` +
         `${TRIAL_SUMMARY} ` +
         `Not charged on bad input or when Lumi cannot answer; every response carries as_of.`,
       "x-guidance":
@@ -1042,7 +1042,7 @@ const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
 export function indexHtml(cfg: Config, base: string, coins: CoinRef[]): string {
   const title = "Lumi API: x402 seller trust you can verify (pay on XRPL, Base or Stellar)";
   const desc =
-    "x402 seller trust you can verify: free x402 vendor trust observations, a live pre-payment check, a one-label verdict and seller test-buys with signed receipts, for AI agents. No API key: paid checks cost $0.01-$0.02 with x402 in USDC on Base, XRP/RLUSD/USDC on the XRP Ledger or USDC on Stellar, and new wallets get 3 free trial calls in total, not per endpoint (a Base wallet holding at least 0.01 USDC or an activated XRP Ledger account; one trial per wallet).";
+    "x402 seller trust you can verify: free x402 vendor trust observations, a live pre-payment check, a one-label verdict and seller test-buys with signed receipts, for AI agents. No API key: " + PAID_PRICE_SUMMARY.replace(/^P/, "p") + ", paid with x402 in USDC on Base, XRP/RLUSD/USDC on the XRP Ledger or USDC on Stellar, and new wallets get 3 free trial calls in total, not per endpoint (a Base wallet holding at least 0.01 USDC or an activated XRP Ledger account; one trial per wallet).";
   const rowOf = (p: ReturnType<typeof priceTable>[number]) => {
     const usd = p.price_base_usdc ?? p.price_rlusd ?? p.price_usdc;
     return `<tr><td><code>${esc(`${p.method} ${p.path}`)}</code></td><td>${usd ? `$${esc(String(usd))}` : ""}</td><td>${esc(p.price_xrp)} XRP</td><td>${esc(p.summary)}</td></tr>`;
@@ -1176,7 +1176,7 @@ footer{margin:48px 0 0;padding:22px 0 40px;border-top:1px solid var(--line);colo
 <section class="hero">
 <span class="eyebrow">x402 &middot; USDC on Base &middot; XRP / RLUSD / USDC on XRPL</span>
 <h1>Lumi API: <span>x402 seller trust you can verify</span></h1>
-<p class="pitch">Check an x402 seller before your agent pays: no API key, no signup, paid checks from $0.01 per call over x402.</p>
+<p class="pitch">Check an x402 seller before your agent pays: no API key, no signup. ${esc(PAID_PRICE_SUMMARY)}, over x402.</p>
 <p class="lead">${esc(desc)}</p>
 <div class="cta"><a class="btn p" href="${esc(base)}/skill.md">Agent quickstart (skill.md)</a><a class="btn" href="${esc(base)}/v1/samples">Free samples</a><a class="btn" href="${esc(base)}/v1/trust/vendors">x402 vendor trust (free)</a></div>
 </section>

@@ -5,8 +5,8 @@
  *   EVM_PRIVATE_KEY=0x... npx tsx examples/base-x402-fetch.ts /v1/fear-greed
  *
  * The client sees Lumi's 402, skips the XRPL options, picks eip155:8453 USDC, signs an
- * EIP-3009 authorization (gasless: no ETH needed) and retries. Prices: $0.01-$0.03 per read,
- * $0.10 for the Institutional Brief. Free first: GET /v1/trust/vendors, /v1/check, /openapi.json.
+ * EIP-3009 authorization (gasless: no ETH needed) and retries. Paid routes from $0.005 per call (most $0.005 to $0.02;
+ * the high-value check is 0.5% of the payment, capped at $0.25). Free first: GET /v1/trust/vendors, /v1/check, /openapi.json.
  */
 import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";

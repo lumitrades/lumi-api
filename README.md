@@ -1,6 +1,6 @@
 # Lumi API
 
-**x402 seller trust you can verify.** Lumi Trades ([lumitrades.io](https://lumitrades.io)) checks x402 sellers before an agent pays them: a live pre-payment check of the seller's 402 quote, Lumi's own paid test-buys with signed receipts, and a one-line verdict. Paid checks cost $0.01 to $0.02 and settle through [x402](https://xrpl.org/docs/agents/agentic-payments-x402) v2 in XRP, RLUSD or USDC on the XRP Ledger, or in USDC on Base or Stellar. Discoverable over x402, OpenAPI, MCP and A2A.
+**x402 seller trust you can verify.** Lumi Trades ([lumitrades.io](https://lumitrades.io)) checks x402 sellers before an agent pays them: a live pre-payment check of the seller's 402 quote, Lumi's own paid test-buys with signed receipts, and a one-line verdict. Paid routes from $0.005 per call (most $0.005 to $0.02; the high-value check is 0.5% of the payment, capped at $0.25), settled through [x402](https://xrpl.org/docs/agents/agentic-payments-x402) v2 in XRP, RLUSD or USDC on the XRP Ledger, or in USDC on Base or Stellar. Discoverable over x402, OpenAPI, MCP and A2A.
 
 > Automated observations by Lumi, not a rating, endorsement or guarantee. Information only, not financial advice. Paying never changes a score: seller-funded test-buys go into the seller's private monitoring history, not their public result.
 
@@ -77,7 +77,10 @@ console.log(paid.data);
 | free | `GET /.well-known/agent-card.json` | – | A2A agent card |
 | free | `POST /a2a` | – | A2A JSON-RPC |
 | **paid** | `GET /v1/verdict?url=…` | **$0.01** | One-line verdict for an x402 URL, with the evidence behind it |
-| **paid** | `GET /v1/trust/check?url=…` | **$0.02** | Live pre-payment check: Lumi fetches the seller's 402 now and returns it with Lumi's test-buy history (tx hashes, delivered yes/no, signed receipts) |
+| free | `GET /v1/trust/check?url=…` | – | Pre-payment check: allow / warn / block with coded reasons (rate-limited) |
+| **paid** | `GET /v1/trust/check/high-value?url=…&amount=…` | **0.5% of the payment** (min $0.005, max $0.25) | Same verdict plus a live re-check of the seller at call time and a signed receipt bound to the amount |
+| **paid** | `GET /v1/trust/receipts?…` | **$0.005** | Lumi's signed test-buy receipts for one seller |
+| **paid** | `GET /v1/check/batch?…` | **$0.008** | Up to 10 record-based labels in one signed answer |
 | **paid** | `GET /v1/trust/vendors/{id}/report` | **$0.02** | Full observation history for one curated seller |
 
 Every USD price is payable as RLUSD or USDC on the XRP Ledger, USDC on Base or USDC on Stellar (same amount), or the XRP equivalent.

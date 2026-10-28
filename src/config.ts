@@ -634,4 +634,10 @@ export const EXAMPLE_SELLER_DOMAIN = "api.agentweather.io";
 export const FREE_TRUST_CHECK_EXAMPLE = `/v1/trust/check?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}`;
 export const HIGH_VALUE_EXAMPLE = `/v1/trust/check/high-value?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}&amount=10`;
 export const HIGH_VALUE_PRICING_TEXT = `${HIGH_VALUE.rate * 100}% of the stated payment amount (amount, USD), minimum $${HIGH_VALUE.minUsd}, maximum $${HIGH_VALUE.maxUsd}; e.g. amount=10 costs $${highValuePriceUsd(10)}.`;
+/**
+ * One short, public price line used everywhere a single summary is shown (docs home page, OpenAPI info, README, site).
+ * Derived from DEFAULT_PRICES (fixed-price routes) and HIGH_VALUE (amount-based route), so it cannot drift from the quotes.
+ */
+const FIXED_PRICES_USD = (Object.keys(DEFAULT_PRICES) as PaidRoute[]).filter((r) => r !== "high_value_check").map((r) => Number(DEFAULT_PRICES[r].usd));
+export const PAID_PRICE_SUMMARY = `Paid routes from $${Math.min(HIGH_VALUE.minUsd, ...FIXED_PRICES_USD)} per call (most $${Math.min(...FIXED_PRICES_USD)} to $${Math.max(...FIXED_PRICES_USD)}; the high-value check is ${HIGH_VALUE.rate * 100}% of the payment, capped at $${HIGH_VALUE.maxUsd})`;
 export const HIGH_VALUE_ADDS = "Same verdict, label and score as the free check (paying never changes them), plus a live re-check of the seller at call time and a Lumi-signed receipt bound to the stated amount (paid: true).";
