@@ -178,7 +178,7 @@ export interface KVLike {
  * Paid routes: x402 seller checks only. Every non-trust data route was retired on 2026-10-25 (v1.2.0 retired the last
  * three): they answer 410 Gone (see src/retired.ts) and are never quoted.
  */
-export type PaidRoute = "vendor_report" | "trust_check" | "verdict" | "receipts" | "batch_check";
+export type PaidRoute = "vendor_report" | "high_value_check" | "verdict" | "receipts" | "batch_check";
 
 /**
  * Default prices per route: XRP and USD-stablecoin (RLUSD/USDC). Override with PRICE_<ROUTE>_XRP / _RLUSD / _USDC
@@ -188,8 +188,11 @@ export const DEFAULT_PRICES: Record<PaidRoute, { xrp: string; usd: string }> = {
   // Paid detailed x402 vendor report (trust layer): $0.02. Stablecoins exactly 0.02; XRP fixed from XRP ~= $1.32 on
   // Oct 22 2026 (0.02 / 1.32 = 0.0152 -> 0.015 XRP), not live-repriced unless XRP_PRICING=live.
   vendor_report: { xrp: "0.015", usd: "0.02" },
-  // Full pay-check: $0.02 (owner approved 2026-10-25: "Raise the full trust check to $0.02"; was $0.004).
-  trust_check: { xrp: "0.015", usd: "0.02" },
+  // GET /v1/trust/check/high-value: the paid high-value check (owner approved building 2026-10-28 8:34 AM CT, branch
+  // pricing-free-paid-2026-10-28). Priced per call at HIGH_VALUE.rate of the stated payment amount, between HIGH_VALUE.minUsd
+  // and HIGH_VALUE.maxUsd (highValuePriceUsd). This entry is the floor, used where one static price is listed ("from $0.005").
+  // The basic GET /v1/trust/check is free and rate-limited (FREE_TRUST_CHECK_LIMITS); it was a $0.02 paid route until then.
+  high_value_check: { xrp: "0.0038", usd: "0.005" },
   // GET /v1/verdict: $0.01 per call (owner approved 2026-10-25: "Ship the verdict at $0.01 a call").
   // VERDICT_MAX_USD caps env overrides; test/verdict.test.ts checks it.
   verdict: { xrp: "0.0075", usd: "0.01" },
@@ -208,6 +211,30 @@ export const VERDICT_PRICING: "free" | "paid" = "paid";
 export const VERDICT_MAX_USD = 0.01;
 export const verdictPaid = (env: { VERDICT_PRICING?: string } = {}) => ((env.VERDICT_PRICING ?? "").trim().toLowerCase() || VERDICT_PRICING) === "paid";
 export const PAID_ROUTES = Object.keys(DEFAULT_PRICES) as PaidRoute[];
+
+/**
+ * High-value check pricing: a small share of the payment being protected, with a floor and a cap.
+ * 0.5% of the stated amount, at least $0.005, at most $0.25 (reached at a $50 payment). Prices are rounded UP to $0.0001.
+ * Paying (any amount) never changes a score, label or verdict: the check core is the same as the free check.
+ */
+export const HIGH_VALUE = { rate: 0.005, minUsd: 0.005, maxUsd: 0.25, maxAmountUsd: 1_000_000 } as const;
+
+/** Decimal USD price string for a high-value check of a payment of amountUsd (assumed validated: finite, > 0). */
+export function highValuePriceUsd(amountUsd: number): string {
+  // Integer units of $0.0001, no float drift in the string: 0.5% of $3.33 = $0.01665 -> 167 units -> "0.0167".
+  const units = Math.ceil(amountUsd * HIGH_VALUE.rate * 10_000 - 1e-9);
+  const clamped = Math.min(Math.round(HIGH_VALUE.maxUsd * 10_000), Math.max(Math.round(HIGH_VALUE.minUsd * 10_000), units));
+  const whole = Math.floor(clamped / 10_000);
+  const frac = String(clamped % 10_000).padStart(4, "0").replace(/0+$/, "");
+  return frac ? `${whole}.${frac}` : String(whole);
+}
+
+/**
+ * Free basic trust check (GET /v1/trust/check): per hashed IP and per hashed client key/wallet header, per UTC day, plus a
+ * short burst limit. Counted in the InvoiceGuard Durable Object (src/invoice-guard.ts /quota), never in D1, so the free
+ * check adds no D1 writes. globalPerDay is a whole-service ceiling (split across the DO shards).
+ */
+export const FREE_TRUST_CHECK_LIMITS = { perDay: 100, perMinute: 20, globalPerDay: 20_000 } as const;
 
 export interface Config {
   network: XrplNetwork;
@@ -566,3 +593,16 @@ function iouConfig(
   }
   return { symbol, currency, issuer, prices };
 }
+
+/**
+ * Real, working example values for discovery metadata (/.well-known/x402, OpenAPI, Bazaar extensions, A2A card, 402 notes).
+ * Never a literal placeholder such as {id} or {coin}: crawlers and agents request example URLs verbatim.
+ * printmoneylab is a curated vendor Lumi test-buys (src/vendors.ts); the URL is its test-bought endpoint.
+ */
+export const EXAMPLE_VENDOR_ID = "printmoneylab";
+export const EXAMPLE_SELLER_URL = "https://api.agentweather.io/v1/pulse/facilitator";
+export const EXAMPLE_SELLER_DOMAIN = "api.agentweather.io";
+export const FREE_TRUST_CHECK_EXAMPLE = `/v1/trust/check?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}`;
+export const HIGH_VALUE_EXAMPLE = `/v1/trust/check/high-value?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}&amount=10`;
+export const HIGH_VALUE_PRICING_TEXT = `${HIGH_VALUE.rate * 100}% of the stated payment amount (amount, USD), minimum $${HIGH_VALUE.minUsd}, maximum $${HIGH_VALUE.maxUsd}; e.g. amount=10 costs $${highValuePriceUsd(10)}.`;
+export const HIGH_VALUE_ADDS = "Same verdict, label and score as the free check (paying never changes them), plus a live re-check of the seller at call time and a Lumi-signed receipt bound to the stated amount (paid: true).";

@@ -27,15 +27,15 @@ describe("idempotent retries on paid routes", () => {
 
   it("same Idempotency-Key + same payment: settled once, the retry gets the cached response", async () => {
     const { get, fac } = setup();
-    const req = await quote(get, "/v1/trust/check?url=https://a.example/x");
+    const req = await quote(get, "/v1/trust/check/high-value?url=https://a.example/x&amount=4");
     const h = { "PAYMENT-SIGNATURE": paymentHeaderFor(req), "Idempotency-Key": KEY };
-    const first = await get("/v1/trust/check?url=https://a.example/x", h);
+    const first = await get("/v1/trust/check/high-value?url=https://a.example/x&amount=4", h);
     expect(first.status).toBe(200);
     const firstBody = await first.text();
     const receipt = first.headers.get("PAYMENT-RESPONSE");
     expect(fac.calls.map((c) => c.path)).toEqual(["/verify", "/settle"]);
     for (let i = 0; i < 2; i++) {
-      const again = await get("/v1/trust/check?url=https://a.example/x", h);
+      const again = await get("/v1/trust/check/high-value?url=https://a.example/x&amount=4", h);
       expect(again.status).toBe(200);
       expect(again.headers.get("Idempotent-Replayed")).toBe("true");
       expect(again.headers.get("PAYMENT-RESPONSE")).toBe(receipt);

@@ -312,7 +312,7 @@ describe("Founder pack: first 10 sellers, one place per company, 12 purchases", 
   it("a different payTo on a shared domain is the same company (one place)", async () => {
     const store = new MemoryCommerceStore();
     await fill(store, 9);
-    const sd = en("sameDomain", "rSomeOtherWalletxxxxxxxxxxxxxxx", null, `${BASE}/v1/trust/check?url=https://a.example/x`);
+    const sd = en("sameDomain", "rSomeOtherWalletxxxxxxxxxxxxxxx", null, `${BASE}/v1/trust/check/high-value?url=https://a.example/x&amount=4`);
     await store.addEnrollment(sd);
     await seedBuy(store, 0, sd);
     const s = setup({}, store);

@@ -28,7 +28,7 @@ describe("samples", () => {
     expect(j.is_sample).toBe(true);
     expect(j.label).toMatch(/^SAMPLE/);
     const routes = j.products.map((p: any) => p.route);
-    expect(routes).toEqual(expect.arrayContaining(["trust_check", "vendor_report"]));
+    expect(routes).toEqual(expect.arrayContaining(["high_value_check", "vendor_report"]));
     for (const gone of ["signal", "levels", "lite", "scan", "slate", "brief", "coins", "market", "yen", "sentiment", "events", "events_48h", "funding", "fear_greed", "institutional"]) expect(routes).not.toContain(gone);
     for (const p of j.products) {
       expect(p.full_url).toMatch(/^http:\/\/lumi\.test\/v1\//);

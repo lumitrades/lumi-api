@@ -7,7 +7,9 @@ import { testBuyWalletsDoc } from "./trust/wallets";
 import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCOME_FIELDS, OUTCOME_RETENTION_DAYS, OUTCOME_SUMMARY_RETENTION, type OutcomeStore } from "./trust/outcomes";
 import { createBadges } from "./trust/badge";
 import { setPrivateNames } from "./sanitize";
-import { loadConfig, verdictPaid, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, type Config, type Env, type PaidRoute } from "./config";
+import { loadConfig, verdictPaid, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, usdcToAtomic, usdcToStroops, HIGH_VALUE, highValuePriceUsd, HIGH_VALUE_EXAMPLE, FREE_TRUST_CHECK_EXAMPLE, HIGH_VALUE_PRICING_TEXT, HIGH_VALUE_ADDS, EXAMPLE_VENDOR_ID, EXAMPLE_SELLER_URL, EXAMPLE_SELLER_DOMAIN, type Config, type Env, type PaidRoute } from "./config";
+import { createFreeQuota, DurableObjectQuotaCounter, MemoryQuotaCounter, rateLimitHeaders, type QuotaCounter } from "./free_quota";
+import { usdToDrops } from "./pricing";
 import { STELLAR_HORIZON } from "./trust/verify";
 import { DataSource, type DataFile } from "./data";
 import { D1TrialStore, MemoryTrialStore, SIWX_HEADER, SIWX_KEY, TRIAL_LIMITS, trialHint, wantsTrial, decodeSiwx, siwxChallenge, trialEligible, trialIpHash, usdcBalance, verifySiwx, trialChains, xrplTrialAccount, type TrialStore } from "./trial";
@@ -75,6 +77,8 @@ export interface AppOptions {
   log?: (event: Record<string, unknown>) => void;
   /** Clock (ms), injectable for tests. */
   now?: () => number;
+  /** Free trust-check quota counter override (tests). Default: InvoiceGuard DO when bound, else in-memory. */
+  quotaCounter?: QuotaCounter;
   /** Tier-1 check outcome store override (tests). */
   outcomeStore?: OutcomeStore;
   /** Trust-layer store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory seeded store. */
@@ -150,7 +154,7 @@ export function priorityCap(v: string | undefined): number {
 }
 
 export type Prepared =
-  | { ok: true; route: PaidRoute; coin?: CoinRef; body: Record<string, unknown>; onServed?: () => Promise<unknown>; /** Runs only once the call is paid (or a trial/owner call is granted): adds fields such as the live check. Never before payment. */ enrich?: () => Promise<Record<string, unknown>> }
+  | { ok: true; route: PaidRoute | "trust_check"; coin?: CoinRef; body: Record<string, unknown>; onServed?: () => Promise<unknown>; /** Runs only once the call is paid (or a trial/owner call is granted): adds fields such as the live check. Never before payment. */ enrich?: () => Promise<Record<string, unknown>> }
   | { ok: false; status: number; error: Record<string, unknown>; headers?: Record<string, string> };
 
 export interface App {
@@ -187,7 +191,7 @@ export const XRP_MEMO_MS = 30 * 60_000;
 
 const NEEDS: Record<PaidRoute, DataFile[]> = {
   vendor_report: [], // trust-layer data (D1), checked in prepare()
-  trust_check: [], // trust catalog (D1)
+  high_value_check: [], // trust catalog (D1), same check core as the free /v1/trust/check
   verdict: [], // trust catalog + seller_activity (D1), same lookup as /v1/check
   receipts: [], // trust catalog purchases + signed receipt store (D1)
   batch_check: [], // trust catalog (D1), same check core as /v1/check
@@ -196,13 +200,14 @@ const NEEDS: Record<PaidRoute, DataFile[]> = {
 const OPTIONAL: Partial<Record<PaidRoute, DataFile[]>> = {};
 /** Paid paths without a path parameter. Every non-trust data route was retired on 2026-10-25: 410 Gone, see src/retired.ts. */
 const FIXED: Record<string, PaidRoute> = {
-  "/v1/trust/check": "trust_check",
+  // The basic GET /v1/trust/check is free and rate-limited (freeTrustCheck); only the high-value check is paid.
+  "/v1/trust/check/high-value": "high_value_check",
   "/v1/verdict": "verdict",
   "/v1/trust/receipts": "receipts",
   "/v1/check/batch": "batch_check",
 };
 /** Paid routes whose input is the query string (validated in prepare(), refused with 400 and never charged when malformed). */
-const QUERY_ROUTES: PaidRoute[] = ["trust_check", "verdict", "receipts", "batch_check"];
+const QUERY_ROUTES: PaidRoute[] = ["high_value_check", "verdict", "receipts", "batch_check"];
 /** GET /v1/check/batch: at most this many URLs or domains per call. */
 export const BATCH_MAX = 10;
 /** GET /v1/trust/receipts: at most this many receipts per answer (newest first). */
@@ -216,6 +221,13 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   setPrivateNames(env.PRIVATE_NAMES);
   const doFetch = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const now = opts.now ?? (() => Date.now());
+  // Free basic trust check quota: DO-backed (no D1 writes), fail-open. See src/free_quota.ts.
+  const freeQuota = createFreeQuota({
+    counter: opts.quotaCounter ?? (env.INVOICE_GUARD ? new DurableObjectQuotaCounter(env.INVOICE_GUARD) : new MemoryQuotaCounter(now)),
+    secret: config.invoiceSecret,
+    now,
+    log: (e) => opts.log?.(e),
+  });
   const data = new DataSource(config.dataBaseUrl, config.dataTtlMs, doFetch);
   const deps: PaywallDeps = {
     fetch: doFetch,
@@ -537,7 +549,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   const dataAge = (ts: (number | null)[], t: number) => {
     const xs = ts.filter((x): x is number => typeof x === "number" && Number.isFinite(x));
     const at = xs.length ? Math.max(...xs) : null;
-    return { cached: true, as_of: at == null ? null : new Date(at).toISOString(), age_seconds: at == null ? null : Math.max(0, Math.round((t - at) / 1000)), live_check: "/v1/trust/check (x402, $0.02) contacts the seller now and returns signed fresh evidence" };
+    return { cached: true, as_of: at == null ? null : new Date(at).toISOString(), age_seconds: at == null ? null : Math.max(0, Math.round((t - at) / 1000)), live_check: "/v1/trust/check/high-value (x402, 0.5% of the stated amount, min $0.005) contacts the seller now and returns signed fresh evidence" };
   };
 
   async function finishCheck(v: Record<string, any>, exact: any, dom: any, host: string | null) {
@@ -583,6 +595,119 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     return finishCheck(verdict, doc, null, host);
   }
 
+  /**
+   * The amounts of a paid quote. Fixed routes: the configured prices. high_value_check: a dynamic price (highValuePriceUsd of
+   * the stated amount) in every rail: XRP drops at the live rate (carried inside the invoice, like the commerce plans),
+   * XRPL IOUs as decimal strings, Base USDC 6-dec atomic, Stellar USDC 7-dec atomic. routeKey binds the price (in $0.0001 units).
+   */
+  function priceFields(route: PaidRoute, usdOverride?: string) {
+    if (route === "high_value_check" && usdOverride) {
+      const rate = config.xrpRate?.usd ?? config.xrpUsdFallback;
+      return {
+        routeKeySuffix: `u${Math.round(Number(usdOverride) * 10_000)}`,
+        amountDrops: usdToDrops(usdOverride, rate),
+        liveDrops: true as const,
+        xrpUsd: rate,
+        amountsIou: Object.fromEntries(config.ious.map((o) => [o.symbol, usdOverride])),
+        amountEvm: config.evm ? usdcToAtomic(usdOverride) : undefined,
+        amountStellar: config.stellar ? usdcToStroops(usdOverride) : undefined,
+        usd: usdOverride,
+      };
+    }
+    return {
+      routeKeySuffix: undefined as string | undefined,
+      amountDrops: config.pricesDrops[route],
+      ...(config.xrpPricing === "live" ? { liveDrops: true as const } : {}),
+      xrpUsd: config.xrpRate?.usd ?? config.xrpUsdFallback,
+      amountsIou: Object.fromEntries(config.ious.map((o) => [o.symbol, o.prices[route]])),
+      amountEvm: config.evm?.amounts[route],
+      amountStellar: config.stellar?.amounts[route],
+      usd: config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route],
+    };
+  }
+
+  /**
+   * Headers for an internal (MCP / A2A) GET: the caller's IP and wallet/key headers ride along so the free trust-check quota
+   * counts the real caller, not one shared internal bucket. Authorization is never forwarded (owner access stays explicit).
+   */
+  function innerHeaders(request: Request): Record<string, string> {
+    const h: Record<string, string> = { Accept: "application/json" };
+    for (const k of ["CF-Connecting-IP", "X-Forwarded-For", "X-Lumi-Key", "X-Wallet", "X-Lumi-Wallet"]) {
+      const v = request.headers.get(k);
+      if (v) h[k] = v.slice(0, 300);
+    }
+    return h;
+  }
+
+  /** The paid high-value check URL for a query (the stated amount, else an example amount of $10). */
+  function highValueUrl(base: string, q: { url?: string; payTo?: string; amountUsd?: number }): string {
+    if (!q.url) return `${base}${HIGH_VALUE_EXAMPLE}`;
+    const clean = originPath(q.url) ?? q.url;
+    return `${base}/v1/trust/check/high-value?${new URLSearchParams({ url: clean, ...(q.payTo ? { payTo: q.payTo } : {}), amount: q.amountUsd && q.amountUsd > 0 ? String(q.amountUsd) : "10" })}`;
+  }
+
+  /**
+   * GET /v1/trust/check: the free basic buyer trust check. Same verdict body as the paid high-value check (same check core,
+   * signed lumi_receipt with paid:false), without the live re-check. FREE_TRUST_CHECK_LIMITS per hashed IP and per hashed
+   * key/wallet, counted in the InvoiceGuard DO (no D1 writes). Over the limit: 429 that names the paid route, with the
+   * safety findings that are never withheld. RateLimit-* headers on every counted answer.
+   */
+  async function freeTrustCheck(request: Request, url: URL, base: string, ctx?: WaitUntil): Promise<Response> {
+    const noStore = { "Cache-Control": "no-store" };
+    const L = freeQuota.limits;
+    if (!url.search.replace(/^\?/, "")) {
+      // Bare probe (discovery crawlers): how to call it, not counted.
+      return json(400, {
+        error: "invalid_query",
+        detail: "url is required: the x402 resource URL you are about to pay (optional payTo, amount in USD).",
+        example: `${base}${FREE_TRUST_CHECK_EXAMPLE}`,
+        pricing: { free: `${L.perDay} checks a day per IP and per API key or wallet (${L.perMinute} a minute)`, high_value_check: { url: `${base}${HIGH_VALUE_EXAMPLE}`, pricing: HIGH_VALUE_PRICING_TEXT } },
+      }, noStore);
+    }
+    let rl: Record<string, string> = {};
+    const prep = await prepareTrustCheck(url.search, base, "free", async (q) => {
+      const r = await freeQuota.take(request);
+      const t = now();
+      rl = r.failOpen ? {} : rateLimitHeaders(r, t);
+      if (r.allowed) return null;
+      const hvUrl = highValueUrl(base, q);
+      const retry = String(Math.max(1, Math.ceil((r.resetAt - t) / 1000)));
+      return {
+        ok: false, status: 429,
+        headers: { ...rl, "Retry-After": retry, Link: `<${hvUrl}>; rel="payment"`, "X-Lumi-Paid-Route": hvUrl },
+        error: {
+          error: "free_limit_reached",
+          detail: r.reason === "minute"
+            ? `The free trust check allows ${L.perMinute} calls a minute per IP. Wait ${retry} s, or use the paid high-value check.`
+            : r.reason === "global"
+            ? "The free trust check has reached its service-wide daily ceiling. It resets at 00:00 UTC; the paid high-value check is not limited."
+            : `The free trust check allows ${L.perDay} calls a day per IP and per API key or wallet. It resets at 00:00 UTC; the paid high-value check is not limited.`,
+          limit: { per_day: L.perDay, per_minute: L.perMinute, scope: "per IP and per X-Lumi-Key / X-Wallet / Bearer key", window: r.reason },
+          resets_at: new Date(r.resetAt).toISOString(),
+          retry_after_seconds: Number(retry),
+          paid_route: { name: "high_value_check", method: "GET", url: hvUrl, pricing: HIGH_VALUE_PRICING_TEXT, price_usd: highValuePriceUsd(q.amountUsd && q.amountUsd > 0 ? q.amountUsd : 10), adds: HIGH_VALUE_ADDS, payment: "x402 v2: USDC on Base, XRP / RLUSD / USDC on the XRP Ledger, USDC on Stellar; no account" },
+          other_paid_routes: { batch_check: `${base}/v1/check/batch?urls=${encodeURIComponent(EXAMPLE_SELLER_URL)}`, receipts: `${base}/v1/trust/receipts?seller=${encodeURIComponent(EXAMPLE_SELLER_DOMAIN)}`, vendor_report: `${base}/v1/trust/vendors/${EXAMPLE_VENDOR_ID}/report` },
+          note: "Not charged. Safety findings for this URL are still included below.",
+        },
+      };
+    });
+    if (!prep.ok) {
+      const res = json(prep.status, prep.error, { ...noStore, ...(prep.headers ?? {}) });
+      if (prep.status !== 429) return res;
+      const sp = url.searchParams;
+      const amt = Number((sp.get("amount") ?? "").replace(/^\$/, ""));
+      return withSafety(res, await safetyFindings({ url: sp.get("url")?.trim() || undefined, payTo: sp.get("payTo")?.trim() || sp.get("pay_to")?.trim() || undefined, amountUsd: sp.get("amount") && Number.isFinite(amt) ? amt : undefined, network: sp.get("network")?.slice(0, 40) || undefined }, base));
+    }
+    if (prep.onServed) {
+      const p = prep.onServed().catch((e) => { deps.log?.({ event: "buy_queue_error", source: "trust_check", error: String(e) }); return null; });
+      if (ctx) ctx.waitUntil(p); else await p;
+    }
+    const body = ensureFreshness(prep.body, now());
+    const hv = (body as any).high_value_check?.url as string | undefined;
+    const remaining = rl["RateLimit-Remaining"];
+    return json(200, { ...body, access: { mode: "free", charged: false, ...(remaining !== undefined ? { free_calls_remaining_today: Number(remaining) } : {}), free_limit_per_day: L.perDay } }, { ...noStore, ...rl, ...(hv ? { Link: `<${hv}>; rel="payment"` } : {}) });
+  }
+
   async function freeCheck(request: Request, url: URL, base: string, ctx?: WaitUntil): Promise<Response> {
     const noStore = { "Cache-Control": "no-store" };
     const sp = url.searchParams;
@@ -621,7 +746,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const receipt = await signResponse("lumi_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
     return json(200, {
       kind: "lumi_check", ...payload, receipt,
-      detail: clean ? `${base}/v1/trust/check?url=${encodeURIComponent(clean)} (x402, adds reason details and next steps)` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(payTo!)}`,
+      detail: clean ? `${base}/v1/trust/check?url=${encodeURIComponent(clean)} (free, rate-limited; adds reason details and next steps)` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(payTo!)}`,
       note: CHECK_NOTE,
     }, noStore);
   }
@@ -734,7 +859,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
 
   async function prepareRaw(route: PaidRoute, coinArg?: string, base = config.publicBaseUrl ?? "https://api.lumitrades.io"): Promise<Prepared> {
     if (route === "vendor_report") return prepareVendorReport(coinArg ?? "", base);
-    if (route === "trust_check") return prepareTrustCheck(coinArg ?? "", base);
+    if (route === "high_value_check") return prepareTrustCheck(coinArg ?? "", base, "high_value");
     if (route === "verdict") return prepareVerdict(coinArg ?? "", base);
     if (route === "receipts") return prepareReceipts(coinArg ?? "", base);
     if (route === "batch_check") return prepareBatch(coinArg ?? "", base);
@@ -759,7 +884,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     };
   }
 
-  /** The paid live part of /v1/trust/check: one unpaid request to the seller now, compared with the record, signed. */
+  /** The paid live part of /v1/trust/check/high-value: one unpaid request to the seller now, compared with the record, signed. */
   async function liveCheck(url: string, host: string, exact: any, dom: any, query: Record<string, unknown>): Promise<Record<string, unknown>> {
     const baseline = await liveBaseline(exact, dom, host, url);
     const live = await liveProbe((u, init) => (ownHosts.has(host) ? handle(new Request(u as string, init)) : doFetch(u as any, init)), url, baseline, now);
@@ -777,35 +902,48 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   }
 
   /** "Should I pay this x402 URL?" Validated before any quote; the verdict reads the trust catalog (same data as the free lookup). */
-  async function prepareTrustCheck(qs: string, base: string): Promise<Prepared> {
+  /**
+   * mode "free": the free, rate-limited GET /v1/trust/check (same verdict body, signed lumi_receipt with paid:false, no live
+   * re-check). mode "high_value": the paid GET /v1/trust/check/high-value (amount required; adds the live re-check at call
+   * time and a lumi_receipt signed with paid:true). The verdict, label and score come from the same check core in both modes:
+   * paying never changes them.
+   */
+  async function prepareTrustCheck(qs: string, base: string, mode: "free" | "high_value" = "free", gate?: (q: { url: string; payTo?: string; amountUsd?: number }) => Promise<Prepared | null>): Promise<Prepared> {
+    const hv = mode === "high_value";
     const sp = new URLSearchParams(qs);
     const url = sp.get("url")?.trim() ?? "";
     const payTo = sp.get("payTo")?.trim() || sp.get("pay_to")?.trim() || undefined;
     const amountRaw = sp.get("amount")?.trim();
     const amountUsd = amountRaw ? Number(amountRaw.replace(/^\$/, "")) : undefined;
-    const bad = (detail: string) => ({ ok: false as const, status: 400, error: { error: "invalid_query", detail, example: `${base}/v1/trust/check?url=https://api.example.com/v1/data&payTo=0x...&amount=0.01`, note: "Not charged." } });
+    const example = hv ? `${base}${HIGH_VALUE_EXAMPLE}` : `${base}${FREE_TRUST_CHECK_EXAMPLE}`;
+    const bad = (detail: string) => ({ ok: false as const, status: 400, error: { error: "invalid_query", detail, example, ...(hv ? { note: "Not charged." } : {}) } });
     if (!url) return bad("url is required: the x402 resource URL you are about to pay.");
     const err = lookupError({ url, ...(payTo ? { payTo } : {}) }, { url: true, payTo: payTo !== undefined }, "check");
-    if (err) return { ok: false, status: 400, error: { ...err, note: "Not charged." } };
-    if (amountRaw && !(amountUsd !== undefined && Number.isFinite(amountUsd) && amountUsd >= 0 && amountUsd < 1e6)) return bad("amount must be a USD number, e.g. 0.01.");
+    if (err) return { ok: false, status: 400, error: { ...err, ...(hv ? { note: "Not charged." } : {}) } };
+    if (amountRaw && !(amountUsd !== undefined && Number.isFinite(amountUsd) && amountUsd >= 0 && amountUsd < HIGH_VALUE.maxAmountUsd)) return bad("amount must be a USD number, e.g. 0.01.");
+    if (hv && !(amountUsd !== undefined && amountUsd > 0)) return bad(`amount is required for the high-value check: the USD amount you are about to pay (the price is ${HIGH_VALUE.rate * 100}% of it, min $${HIGH_VALUE.minUsd}, max $${HIGH_VALUE.maxUsd}). For a free check use ${base}${FREE_TRUST_CHECK_EXAMPLE}.`);
     let host = "";
     try { host = new URL(url).hostname.toLowerCase(); } catch { return bad("url must be an absolute http(s) URL."); }
+    // Free mode: the rate limit is taken only for a well-formed query (a malformed one is refused above, uncounted).
+    if (gate) { const g = await gate({ url, payTo, amountUsd }); if (g) return g; }
     try {
       const clean = originPath(url) ?? url;
       const network = sp.get("network") ?? undefined;
       const { verdict: body, exact, dom } = await checkVerdict({ url: clean, payTo, amountUsd, network }, base, false);
       if ((body as any)?.verdict === "block" && (body as any)?.reasons?.[0]?.code === "sanctioned_address") {
         const hit = sanctions.check(payTo) ?? sanctions.checkAny(((exact?.catalog?.entries?.[0]?.pay_to ?? dom?.catalog?.entries?.[0]?.pay_to ?? []) as any[]).map((p) => String(p?.pay_to ?? "")));
-        if (hit) sanctions.refuse("trust_check", hit, { url_host: host });
+        if (hit) sanctions.refuse(hv ? "high_value_check" : "trust_check", hit, { url_host: host });
       }
       const t = now();
-      const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: body, score: scoreView(await liveScore(host), (body as any).matched?.tier, notScoredFor(exact, dom)), link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: true });
+      const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: body, score: scoreView(await liveScore(host), (body as any).matched?.tier, notScoredFor(exact, dom)), link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: hv });
       (body as any).lumi_receipt = await signResponse("trust_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
+      if (hv) (body as any).high_value = { amount_usd: amountUsd, price_usd: highValuePriceUsd(amountUsd!), pricing: HIGH_VALUE_PRICING_TEXT, adds: HIGH_VALUE_ADDS };
+      else (body as any).high_value_check = { url: `${base}/v1/trust/check/high-value?${new URLSearchParams({ url: clean, ...(payTo ? { payTo } : {}), amount: amountRaw && amountUsd! > 0 ? String(amountUsd) : "10" })}`, pricing: HIGH_VALUE_PRICING_TEXT, adds: HIGH_VALUE_ADDS };
       const meta = metaFrom(t, t + 86_400_000, t + 30 * 60_000, t);
-      // Runs once the check is served, paid or free trial: the same priority signal either way.
+      // Runs once the check is served, free, paid or free trial: the same priority signal either way.
       return {
-        ok: true, route: "trust_check", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)), onServed: () => prioritySignal(body, exact, "trust_check"),
-        enrich: () => liveCheck(clean, host, exact, dom, { url: clean, payTo, amountUsd, network }),
+        ok: true, route: hv ? "high_value_check" : "trust_check", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)), onServed: () => prioritySignal(body, exact, hv ? "high_value_check" : "trust_check"),
+        ...(hv ? { enrich: () => liveCheck(clean, host, exact, dom, { url: clean, payTo, amountUsd, network }) } : {}),
       };
     } catch (e) {
       return notForSale("data_unavailable", "the trust catalog is unavailable right now", 60, null);
@@ -1187,7 +1325,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       return handleMcp(request, base, path === "/mcp" ? undefined : path.slice(5), {
         ...mcpDeps,
         quote: async (p: string) => {
-          const r = await handle(new Request(url.origin + p, { headers: { Accept: "application/json" } }));
+          const r = await handle(new Request(url.origin + p, { headers: innerHeaders(request) }));
           const t = await r.text();
           let body: unknown = t;
           try { body = JSON.parse(t); } catch { /* text */ }
@@ -1203,7 +1341,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         trust,
         samples: () => samplesDoc(base),
         quote: async (p: string) => {
-          const r = await handle(new Request(url.origin + p, { headers: { Accept: "application/json" } }));
+          const r = await handle(new Request(url.origin + p, { headers: innerHeaders(request) }));
           const t = await r.text();
           let body: unknown = t;
           try { body = JSON.parse(t); } catch { /* text */ }
@@ -1242,6 +1380,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     // Lumi Check v0: free signed pre-pay check, signing keys, earned-only signed badge.
     if (request.method === "GET" || request.method === "HEAD") {
       if (path === "/v1/check") return freeCheck(request, url, base, ctx);
+      if (path === "/v1/trust/check") return freeTrustCheck(request, url, base, ctx);
       if (path === "/v1/verdict/rules") return json(200, { kind: "lumi_verdict_rules", pricing: verdictIsPaid ? "paid" : "free", ...thresholdsDoc(verdictTh) }, { "Cache-Control": "public, max-age=3600" });
       // VERDICT_PRICING = "free" (default): a free alias of /v1/check with the shared label. "paid": falls through to x402.
       if (path === "/v1/verdict" && !verdictIsPaid) return freeVerdict(request, url, base, ctx);
@@ -1479,7 +1618,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     if (rawArg !== undefined && PATH_TEMPLATE_RE.test(rawArg)) {
       const isReport = route === "vendor_report";
-      const example = isReport ? `${base}/v1/trust/vendors/<vendor-id>/report` : `${base}/v1/${route}/xrp`;
+      const example = isReport ? `${base}/v1/trust/vendors/${EXAMPLE_VENDOR_ID}/report` : `${base}/v1/${route}/xrp`;
       const hasPayment = !!(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT));
       if (!hasPayment && rawArg === (isReport ? "{id}" : "{coin}")) {
         const endpoint = endpointFor(route);
@@ -1494,7 +1633,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           amountStellar: config.stellar?.amounts[route],
           description: resourceDescription(route, `Lumi API ${endpoint.template}: ${endpoint.summary}`, { usd: config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route] }),
           resourceUrl: `${base}${path}`,
-          bazaar: bazaarExtension(route, isReport ? "example-vendor" : "xrp", undefined, config.evm?.prices[route]),
+          bazaar: bazaarExtension(route, isReport ? EXAMPLE_VENDOR_ID : "xrp", undefined, config.evm?.prices[route]),
           service: serviceMeta(route),
           note: `Replace ${rawArg} with ${isReport ? "a vendor id from GET /v1/trust/vendors (free)" : "a real value"} and request that URL for a fresh quote before paying: ${example}. A payment sent to this placeholder URL is refused and not charged.`,
         }, "PAYMENT-SIGNATURE header is required");
@@ -1508,26 +1647,29 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       });
     }
 
-    // /v1/trust/check probed bare (no query string at all, as x402scan and other discovery crawlers do): the normal 402 price
+    // A paid query route (e.g. /v1/trust/check/high-value) probed bare (no query string at all, as x402scan and other discovery crawlers do): the normal 402 price
     // quote, so the paywall is visible. A query without a usable url, or any request with a payment header and no url, is
     // refused below (400, nothing verified or settled).
     if (QUERY_ROUTES.includes(route) && !url.search.replace(/^\?/, "") && !(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT))) {
       const endpoint = endpointFor(route);
-      const usd = config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route];
-      const example = route === "verdict" ? `${base}/v1/verdict?url=https://api.example.com/v1/data`
-        : route === "receipts" ? `${base}/v1/trust/receipts?seller=api.example.com`
-        : route === "batch_check" ? `${base}/v1/check/batch?urls=https://api.example.com/v1/data,data.example.org`
-        : `${base}/v1/trust/check?url=https://api.example.com/v1/data&payTo=0x...&amount=0.01`;
-      const probeQuery: Record<string, string> = route === "receipts" ? { seller: "api.example.com" } : route === "batch_check" ? { urls: "https://api.example.com/v1/data,data.example.org" } : { url: "https://api.example.com/v1/data" };
+      // The high-value check is quoted at its floor (the price of any amount up to $1); the real quote follows the amount.
+      const pf = priceFields(route, route === "high_value_check" ? highValuePriceUsd(1) : undefined);
+      const usd = pf.usd;
+      const enc = encodeURIComponent(EXAMPLE_SELLER_URL);
+      const example = route === "verdict" ? `${base}/v1/verdict?url=${enc}`
+        : route === "receipts" ? `${base}/v1/trust/receipts?seller=${EXAMPLE_SELLER_DOMAIN}`
+        : route === "batch_check" ? `${base}/v1/check/batch?urls=${enc},${EXAMPLE_SELLER_DOMAIN}`
+        : `${base}${HIGH_VALUE_EXAMPLE}`;
+      const probeQuery: Record<string, string> = route === "receipts" ? { seller: EXAMPLE_SELLER_DOMAIN } : route === "batch_check" ? { urls: `${EXAMPLE_SELLER_URL},${EXAMPLE_SELLER_DOMAIN}` } : route === "high_value_check" ? { url: EXAMPLE_SELLER_URL, amount: "1" } : { url: EXAMPLE_SELLER_URL };
       return paymentRequiredResponse(config, {
         routeKey: `${route}:probe`,
-        amountDrops: config.pricesDrops[route],
-        ...(config.xrpPricing === "live" ? { liveDrops: true } : {}),
-        xrpUsd: config.xrpRate?.usd ?? config.xrpUsdFallback,
+        amountDrops: pf.amountDrops,
+        ...(pf.liveDrops ? { liveDrops: true } : {}),
+        xrpUsd: pf.xrpUsd,
         samplesUrl: `${base}/v1/samples`,
-        amountsIou: Object.fromEntries(config.ious.map((o) => [o.symbol, o.prices[route]])),
-        amountEvm: config.evm?.amounts[route],
-          amountStellar: config.stellar?.amounts[route],
+        amountsIou: pf.amountsIou,
+        amountEvm: pf.amountEvm,
+        amountStellar: pf.amountStellar,
         description: resourceDescription(route, `Lumi API ${endpoint.template}: ${endpoint.summary}`, { usd }),
         resourceUrl: `${base}${path}`,
         bazaar: bazaarExtension(route, undefined, probeQuery, usd),
@@ -1536,6 +1678,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           ? `Add ?seller=<domain, resource URL or payTo> and request that URL for a fresh quote before paying: ${example}. A payment sent without seller is refused and not charged.`
           : route === "batch_check"
           ? `Add ?urls=<1 to ${BATCH_MAX} comma-separated resource URLs or domains> and request that URL for a fresh quote before paying: ${example}. A payment sent without urls is refused and not charged.`
+          : route === "high_value_check"
+          ? `Add ?url=<the x402 resource URL you are about to pay>&amount=<that payment in USD> (optional payTo) and request that URL for a fresh quote before paying: ${example}. Price: ${HIGH_VALUE_PRICING_TEXT} This probe is quoted at the floor. The basic check is free: ${base}${FREE_TRUST_CHECK_EXAMPLE}. A payment sent without url and amount is refused and not charged.`
           : `Add ?url=<the x402 resource URL you are about to pay> (optional payTo, amount) and request that URL for a fresh quote before paying: ${example}. A payment sent without url is refused and not charged.`,
       }, "PAYMENT-SIGNATURE header is required");
     }
@@ -1553,28 +1697,31 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     const vendorId = route === "vendor_report" ? String(body.id) : undefined;
     const endpoint = endpointFor(route);
+    const hvPrice = route === "high_value_check" ? String((body as any).high_value?.price_usd ?? "") || undefined : undefined;
+    const pf = priceFields(route, hvPrice);
     const quote: Quote = {
-      routeKey: coin ? `${route}:${coin.symbol}` : vendorId ? `${route}:${vendorId}` : route,
-      amountDrops: config.pricesDrops[route],
-      ...(config.xrpPricing === "live" ? { liveDrops: true } : {}),
-      xrpUsd: config.xrpRate?.usd ?? config.xrpUsdFallback,
+      routeKey: coin ? `${route}:${coin.symbol}` : vendorId ? `${route}:${vendorId}` : pf.routeKeySuffix ? `${route}:${pf.routeKeySuffix}` : route,
+      amountDrops: pf.amountDrops,
+      ...(pf.liveDrops ? { liveDrops: true } : {}),
+      xrpUsd: pf.xrpUsd,
       samplesUrl: `${base}/v1/samples`,
-      amountsIou: Object.fromEntries(config.ious.map((o) => [o.symbol, o.prices[route]])),
-      amountEvm: config.evm?.amounts[route],
-          amountStellar: config.stellar?.amounts[route],
+      amountsIou: pf.amountsIou,
+      amountEvm: pf.amountEvm,
+      amountStellar: pf.amountStellar,
       description: resourceDescription(
         route,
         `Lumi API ${endpoint.template}: ${endpoint.summary}`,
-        { subject: coin?.symbol ?? vendorId, usd: config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route] },
+        { subject: coin?.symbol ?? vendorId, usd: pf.usd },
       ),
       resourceUrl: `${base}${path}`,
       bazaar: bazaarExtension(
         route,
         coin?.symbol ?? vendorId,
         QUERY_ROUTES.includes(route) ? Object.fromEntries(url.searchParams) : undefined,
-        config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route],
+        pf.usd,
       ),
       service: serviceMeta(route),
+      ...(hvPrice ? { note: `High-value check: ${HIGH_VALUE_PRICING_TEXT} The basic check is free: ${base}${FREE_TRUST_CHECK_EXAMPLE}` } : {}),
       // Remaining validity of the data, on the wall clock the paywall uses (the app clock is injectable for tests).
       ...(typeof body.stale_after === "string" ? { staleAfterMs: Date.now() + (Date.parse(body.stale_after) - now()) } : {}),
       ...(typeof body.as_of === "string" && Number.isFinite(Date.parse(body.as_of)) ? { asOfMs: Date.now() + (Date.parse(body.as_of) - now()) } : {}),
@@ -1582,7 +1729,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
 
     // Free trial (x402 sign-in-with-x): eligible 402s carry a one-time challenge; a valid SIGN-IN-WITH-X retry (and no payment
     // header, which always wins) is served free within the caps. See src/trial.ts.
-    const usdPrice = Number(config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route]);
+    const usdPrice = Number(pf.usd);
     if (trialsOn && trialEligible(route, usdPrice)) {
       const trialUri = `${url.origin}${path}${url.search}`;
       const siwxHeader = request.headers.get(SIWX_HEADER);

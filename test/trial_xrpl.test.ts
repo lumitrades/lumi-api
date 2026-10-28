@@ -139,7 +139,7 @@ describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
       expect((await appFetch(BASE + "/v1/verdict?url=https://a.example/x", { headers: { "SIGN-IN-WITH-X": h } })).status).toBe(200);
       const replay = await (await appFetch(BASE + "/v1/verdict?url=https://a.example/x", { headers: { "SIGN-IN-WITH-X": h } })).json();
       expect(replay.trial.reason).toBe("nonce_used");
-      return (await appFetch(BASE + "/v1/trust/check?url=https://a.example/x", { headers: { "SIGN-IN-WITH-X": h } })).json();
+      return (await appFetch(BASE + "/v1/trust/check/high-value?url=https://a.example/x&amount=4", { headers: { "SIGN-IN-WITH-X": h } })).json();
     })();
     expect(otherUrl.trial.reason).toBe("challenge_not_for_this_url");
   });
@@ -174,10 +174,10 @@ describe("free trial for XRPL wallets (sign-in-with-x, type xrpl)", () => {
     const x1 = key();
     const x2 = key();
     const { appFetch, trialStore, setIp } = setup({ accounts: { [x1.address]: {}, [x2.address]: {} } });
-    expect((await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/trust/check?url=https://a.example/x", TRIAL)).status).toBe(200);
-    expect((await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/trust/check?url=https://a.example/x", TRIAL)).status).toBe(200);
-    expect((await xrplTry(appFetch, "/v1/trust/check?url=https://a.example/x", x1, x1.address)).status).toBe(200);
-    expect((await (await xrplTry(appFetch, "/v1/trust/check?url=https://a.example/x", x2, x2.address)).json()).trial.reason).toBe("ip_daily_cap");
+    expect((await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/trust/check/high-value?url=https://a.example/x&amount=4", TRIAL)).status).toBe(200);
+    expect((await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/trust/check/high-value?url=https://a.example/x&amount=4", TRIAL)).status).toBe(200);
+    expect((await xrplTry(appFetch, "/v1/trust/check/high-value?url=https://a.example/x&amount=4", x1, x1.address)).status).toBe(200);
+    expect((await (await xrplTry(appFetch, "/v1/trust/check/high-value?url=https://a.example/x&amount=4", x2, x2.address)).json()).trial.reason).toBe("ip_daily_cap");
     // the XRPL wallet's lifetime allowance follows the wallet, not the IP or chain
     setIp("198.51.100.9");
     expect((await xrplTry(appFetch, "/v1/verdict?url=https://a.example/x", x1, x1.address)).status).toBe(200);

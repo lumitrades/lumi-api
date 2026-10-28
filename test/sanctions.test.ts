@@ -164,13 +164,13 @@ describe("sanctions: app hooks", () => {
   });
   it("/v1/trust/check blocks a listed payTo with sanctioned_address, logs it, and queues no test-buy", async () => {
     const { ev, logs, buy } = await setup();
-    const r = await buy("/v1/trust/check?url=" + encodeURIComponent(BAD) + "&pay_to=" + SDN_EVM);
+    const r = await buy("/v1/trust/check/high-value?amount=4&url=" + encodeURIComponent(BAD) + "&pay_to=" + SDN_EVM);
     expect(r.status).toBe(200);
     expect(r.body.verdict).toBe("block");
     expect(r.body.reasons[0].code).toBe(SANCTIONS_REASON);
     await new Promise((s) => setTimeout(s, 0));
     expect([...ev.queue.keys()]).not.toContain(BAD);
-    expect(refusals(logs)[0]).toMatchObject({ where: "trust_check", address: SDN_EVM.toLowerCase() });
+    expect(refusals(logs)[0]).toMatchObject({ where: "high_value_check", address: SDN_EVM.toLowerCase() });
   });
   it("the owner buy-queue withholds a listed payTo from the runner and reports it as refused", async () => {
     const { ev, logs, get } = await setup();

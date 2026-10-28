@@ -35,7 +35,7 @@ describe("no trading content: market-data routes are retired, trust routes carry
       }
     });
   }
-  for (const p of ["/v1/trust/check?url=https%3A%2F%2Fa.example%2Fx", "/v1/verdict?url=https%3A%2F%2Fa.example%2Fx"]) {
+  for (const p of ["/v1/trust/check/high-value?url=https%3A%2F%2Fa.example%2Fx&amount=4", "/v1/verdict?url=https%3A%2F%2Fa.example%2Fx"]) {
     it(`${p}: no targets, stops, entries, leverage, scenarios, Strong Buy/Sell or bull/bear; no SOL`, async () => {
       const b = await paid(p);
       const s = JSON.stringify(b, (k, v) => (k === "url" ? undefined : v));

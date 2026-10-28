@@ -65,7 +65,7 @@ async function setup(env: Record<string, string> = {}) {
   };
   const free = async (u: string) => { const r = await req("/v1/trust/vendors?url=" + enc(u)); expect(r.status).toBe(200); };
   const paid = async (u: string) => {
-    const p = "/v1/trust/check?url=" + enc(u);
+    const p = "/v1/trust/check/high-value?amount=4&url=" + enc(u);
     const q: any = await (await req(p)).json();
     const r = await req(p, { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts.find((a: any) => a.network.startsWith("xrpl:"))) } });
     expect(r.status).toBe(200);
@@ -78,7 +78,7 @@ async function setup(env: Record<string, string> = {}) {
       return app.fetch(new Request(r, { headers: h }));
     }) as typeof fetch;
     const f = wrapFetchWithSIWx(via, privateKeyToAccount(generatePrivateKey()));
-    const r = await f("http://lumi.test/v1/trust/check?url=" + enc(u), { headers: { "X-Lumi-Trial": "1" } });
+    const r = await f("http://lumi.test/v1/trust/check/high-value?amount=4&url=" + enc(u), { headers: { "X-Lumi-Trial": "1" } });
     expect(r.status).toBe(200);
     expect(((await r.json()) as any).access).toMatchObject({ mode: "trial", charged: false });
   };

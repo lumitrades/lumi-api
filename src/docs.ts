@@ -3,7 +3,7 @@
 import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPriceTable, planResources } from "./commerce/discovery";
 import { PLATFORM_LICENCE, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
-import { EXPLORERS, dropsToXrp } from "./config";
+import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, highValuePriceUsd } from "./config";
 import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable } from "./catalog";
 import { BAZAAR_ROUTES, TRUST_ROUTES, VENDOR_ID_PATTERN, errorDocs, serviceNameFor } from "./bazaar";
 import { DISCLAIMER, SOURCE, type CoinRef } from "./views";
@@ -62,7 +62,7 @@ import { Wallet } from "xrpl";
 import { sign } from "ripple-keypairs";
 
 const wallet = Wallet.fromSeed(process.env.XRPL_SEED);
-const url = "${base}/v1/trust/check?url=https://api.example.com/v1/data";
+const url = "${base}${HIGH_VALUE_EXAMPLE}";
 const quote = await (await fetch(url, { headers: { "X-Lumi-Trial": "1" } })).json();
 const ext = quote.extensions["sign-in-with-x"], i = ext.info;
 const chain = ext.supportedChains.find((c) => c.type === "xrpl"); // { chainId: "${network}", type: "xrpl" }
@@ -170,6 +170,7 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       ...(cfg.verdictPaid ? [] : [{ method: "GET", path: "/v1/verdict?url=", summary: "Free (rate-limited) pre-payment check, one signed label from the same data as /v1/check: checks_passed (Delivered in recent checks) / check_first (Check first) / checks_failed (Recent checks failed) / no_data (Not enough data), with dates, evidence window, sample count, reason codes, evidence and appeal links. Paying Lumi never changes a result" }]),
       { method: "GET", path: "/llms.txt", summary: "Short plain-text guide for LLMs" },
       { method: "GET", path: "/v1/check?url=", summary: "Lumi Check: free, signed allow / warn / block before you pay an x402 seller, from Lumi's cached observations (rate-limited per client)" },
+      { method: "GET", path: "/v1/trust/check?url=", summary: `Free trust check (rate-limited: ${FREE_TRUST_CHECK_LIMITS.perDay}/day and ${FREE_TRUST_CHECK_LIMITS.perMinute}/min per client): allow / warn / block with coded reasons and next steps before you pay an x402 seller. Over the limit: 429 free_limit_reached pointing to the paid /v1/trust/check/high-value. Same verdict and score as the paid check` },
       { method: "GET", path: "/v1/check/keys", summary: "Public keys that sign Lumi Check answers and badges (alias /.well-known/lumi-keys.json)" },
       { method: "GET", path: "/v1/check/wallets", summary: "Lumi's test-buy wallets: the only payers of a Lumi receipt (alias /.well-known/lumi-test-buy-wallets.json)" },
       { method: "POST", path: "/v1/check/outcome", summary: "Optional anonymous delivery outcome (seller host + delivered yes/no only; not a scoring input)" },
@@ -215,9 +216,9 @@ export function wellKnownX402(cfg: Config, base: string) {
     description: `Pay-per-call reads from Lumi Trades (lumitrades.io), settled in ${settledIn(cfg)}, : checks before paying an x402 seller (a pre-payment check, a one-label verdict and seller reputation reports from Lumi's trust observations). Each resource carries product_line. Also: seller monitoring plans (Watch $5, Watch Pro $20 per endpoint per 30d; Audit $99; Re-test pack $6.50 for 30 seller-funded test-buys; Founder pack $5 for 24 seller-funded test-buys, first 10 sellers; free tier and 14-day trial; seller-funded buys never change a public score) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
     resources: paidEndpoints(cfg).map((e) => ({
       name: e.name,
-      // receipts and vendor_report: the doc examples (api.example.com, example-vendor) are not real sellers (a 404, never charged),
-      // so crawlers get the bare path or the literal {id} template, both of which answer 402.
-      url: `${base}${e.route === "receipts" || e.route === "vendor_report" ? e.path : e.example}`,
+      // receipts: the doc example seller may have no test-buy (a 404, never charged), so crawlers get the bare path (402).
+      // vendor_report: a real curated vendor id (EXAMPLE_VENDOR_ID), never the literal {id} template (2026-10-28).
+      url: `${base}${e.route === "receipts" ? e.path : e.example}`,
       template: `${base}${e.template}`,
       mimeType: "application/json",
       method: e.method,
@@ -300,7 +301,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
     ...commerceOpenApiPaths(cfg, base),
   };
   const verdictParams = [
-    { name: "url", in: "query", required: true, description: "The x402 resource URL, or the seller's bare domain, you are about to pay", schema: { type: "string", maxLength: 500 }, example: "https://api.example.com/v1/data" },
+    { name: "url", in: "query", required: true, description: "The x402 resource URL, or the seller's bare domain, you are about to pay", schema: { type: "string", maxLength: 500 }, example: EXAMPLE_SELLER_URL },
     { name: "payTo", in: "query", required: false, description: "The payTo address in its 402 quote (EVM 0x... or XRPL r...)", schema: { type: "string", maxLength: 120 } },
     { name: "amount", in: "query", required: false, description: "The quoted price in USD (decimal)", schema: { type: "string", maxLength: 20 } },
   ];
@@ -310,9 +311,33 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
       tags: ["trust"],
       security: [],
       summary: "Lumi Check (free): signed allow / warn / block before you pay an x402 seller, from Lumi's cached observations",
-      description: "Answer-only and rate-limited per client. Signed with the keys at /v1/check/keys; carries the data age of the observations it is based on and, for a catalogued listing, its reachability (answering, down when checked, or listing looks dead after 3 failed checks on separate occasions; plus no-paywall, quote-payTo-differs and needs-a-different-request notes, each with last_checked_at; a listing that looks dead adds the check_first reason listing_looks_dead, the other notes are disclosure only). " + notScoredDoc() + " The paid /v1/trust/check returns the full evidence.",
+      description: "Answer-only and rate-limited per client. Signed with the keys at /v1/check/keys; carries the data age of the observations it is based on and, for a catalogued listing, its reachability (answering, down when checked, or listing looks dead after 3 failed checks on separate occasions; plus no-paywall, quote-payTo-differs and needs-a-different-request notes, each with last_checked_at; a listing that looks dead adds the check_first reason listing_looks_dead, the other notes are disclosure only). " + notScoredDoc() + " The free /v1/trust/check returns the full coded reasons; the paid /v1/trust/check/high-value adds a live re-check.",
       parameters: [...verdictParams.map((p) => ({ ...p, required: false })), { name: "network", in: "query", required: false, description: "CAIP-2 network of the quote, e.g. eip155:8453 or xrpl:0", schema: { type: "string", maxLength: 40 } }],
       responses: { "200": { description: "Signed decision" }, "400": { description: "Bad or missing url (never charged)" }, "429": { description: "Free rate limit" } },
+    },
+  };
+  paths["/v1/trust/check"] = {
+    get: {
+      operationId: "trust_check",
+      tags: ["trust"],
+      security: [],
+      summary: "Should I pay this x402 URL? allow / warn / block with coded reasons (free, rate-limited)",
+      description: `The basic buyer trust check, free: allow / warn / block with coded reasons, confidence, evidence links and a Lumi-signed receipt (lumi_receipt, paid: false), from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys. Optional payTo and amount catch address or price mismatches. Limits: ${FREE_TRUST_CHECK_LIMITS.perDay} calls a day per IP and per API key or wallet (X-Lumi-Key, X-Wallet or Bearer), ${FREE_TRUST_CHECK_LIMITS.perMinute} a minute per IP; every answer carries RateLimit-Limit / RateLimit-Remaining / RateLimit-Reset. Over the limit: 429 free_limit_reached with Retry-After, a Link rel=payment header and paid_route naming the high-value check (GET /v1/trust/check/high-value: ${HIGH_VALUE_PRICING_TEXT}), which gives the same verdict plus a live re-check of the seller. Paying never changes a verdict or score. Observations, not a guarantee.`,
+      parameters: [
+        { name: "url", in: "query", required: true, description: "The x402 resource URL you are about to pay (http/https)", schema: { type: "string", maxLength: 500 }, example: EXAMPLE_SELLER_URL },
+        { name: "payTo", in: "query", required: false, description: "The payTo address in its 402 quote (EVM 0x... or XRPL r...), to check against the listing", schema: { type: "string" } },
+        { name: "amount", in: "query", required: false, description: "The quoted price in USD (decimal), to check against the listing", schema: { type: "string", pattern: "^[0-9]+(\\.[0-9]+)?$" }, example: "0.01" },
+      ],
+      "x-example-url": `${base}${FREE_TRUST_CHECK_EXAMPLE}`,
+      "x-rate-limit": { per_day: FREE_TRUST_CHECK_LIMITS.perDay, per_minute: FREE_TRUST_CHECK_LIMITS.perMinute, scope: "per IP and per API key / wallet", paid_route: `${base}${HIGH_VALUE_EXAMPLE}` },
+      responses: {
+        "200": { description: "Verdict (JSON) with as_of, lumi_receipt and high_value_check (the paid upgrade URL). RateLimit-* headers.", content: { "application/json": { example: { ...BAZAAR_ROUTES.high_value_check.example, high_value: undefined, payment: undefined, access: { mode: "free", charged: false, free_calls_remaining_today: 99, free_limit_per_day: FREE_TRUST_CHECK_LIMITS.perDay } } } } },
+        "400": { description: "url missing or not an absolute http(s) URL, or payTo/amount malformed. Not counted against the limit." },
+        "429": {
+          description: "free_limit_reached: over the free limit. Retry-After, RateLimit-*, Link rel=payment and X-Lumi-Paid-Route headers; the body names the paid route and still carries the safety findings for the URL.",
+          content: { "application/json": { example: { error: "free_limit_reached", limit: { per_day: FREE_TRUST_CHECK_LIMITS.perDay, per_minute: FREE_TRUST_CHECK_LIMITS.perMinute }, resets_at: "2026-10-29T00:00:00.000Z", paid_route: { name: "high_value_check", method: "GET", url: `${base}${HIGH_VALUE_EXAMPLE}`, pricing: HIGH_VALUE_PRICING_TEXT }, note: "Not charged." } } },
+        },
+      },
     },
   };
   paths["/v1/check/wallets"] = { get: { tags: ["trust"], security: [], summary: "Lumi's test-buy wallets, the only payers of a Lumi receipt (free; alias /.well-known/lumi-test-buy-wallets.json)", responses: { "200": { description: "OK" } } } };
@@ -335,7 +360,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
         summary: "Pre-payment check, one label (free, rate-limited alias of /v1/check)",
         description: VERDICT_ENDPOINT.summary + " Signed (Ed25519, kind lumi_verdict, embedded lumi_check receipt). Labels and the allow/warn/block mapping: GET /v1/verdict/rules.",
         parameters: verdictParams,
-        "x-example-url": `${base}/v1/verdict?url=${encodeURIComponent("https://api.example.com/v1/data")}`,
+        "x-example-url": `${base}/v1/verdict?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}`,
         responses: { "200": { description: "OK" }, "400": { description: "Missing or invalid url" }, "429": { description: "Rate limited" } },
       },
     };
@@ -350,32 +375,34 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
         "x-product-line": LINE_LABEL[productLine(e.route)],
         "x-service-name": serviceNameFor(e.route),
         parameters: [...(e.template.includes("{id}")
-          ? [{ name: "id", in: "path", required: true, description: "Vendor id from GET /v1/trust/vendors (free)", schema: { type: "string", pattern: VENDOR_ID_PATTERN }, example: "example-vendor", examples: { "example-vendor": { value: "example-vendor" } } }]
+          ? [{ name: "id", in: "path", required: true, description: "Vendor id from GET /v1/trust/vendors (free)", schema: { type: "string", pattern: VENDOR_ID_PATTERN }, example: EXAMPLE_VENDOR_ID, examples: { [EXAMPLE_VENDOR_ID]: { value: EXAMPLE_VENDOR_ID } } }]
           : e.route === "verdict"
           ? verdictParams
-          : e.route === "trust_check"
+          : e.route === "high_value_check"
           ? [
-              { name: "url", in: "query", required: true, description: "The x402 resource URL you are about to pay (http/https)", schema: { type: "string", maxLength: 500 }, example: "https://api.example.com/v1/data" },
+              { name: "url", in: "query", required: true, description: "The x402 resource URL you are about to pay (http/https)", schema: { type: "string", maxLength: 500 }, example: EXAMPLE_SELLER_URL },
+              { name: "amount", in: "query", required: true, description: `The USD amount you are about to pay (decimal, > 0). Sets the price: ${HIGH_VALUE_PRICING_TEXT}`, schema: { type: "string", pattern: "^[0-9]+(\\.[0-9]+)?$" }, example: "10" },
               { name: "payTo", in: "query", required: false, description: "The payTo address in its 402 quote (EVM 0x... or XRPL r...), to check against the listing", schema: { type: "string" } },
-              { name: "amount", in: "query", required: false, description: "The quoted price in USD (decimal), to check against the listing", schema: { type: "string", pattern: "^[0-9]+(\\.[0-9]+)?$" }, example: "0.01" },
             ]
           : e.route === "receipts"
-          ? [{ name: "seller", in: "query", required: true, description: "The seller: a domain (api.example.com), an x402 resource URL or a payTo address", schema: { type: "string", maxLength: 500 }, example: "api.example.com" }]
+          ? [{ name: "seller", in: "query", required: true, description: "The seller: a domain (api.example.com), an x402 resource URL or a payTo address", schema: { type: "string", maxLength: 500 }, example: EXAMPLE_SELLER_DOMAIN }]
           : e.route === "batch_check"
-          ? [{ name: "urls", in: "query", required: true, description: "1 to 10 comma-separated x402 resource URLs or seller domains", schema: { type: "string", maxLength: 5000 }, example: "https://api.example.com/v1/data,data.example.org" }]
+          ? [{ name: "urls", in: "query", required: true, description: "1 to 10 comma-separated x402 resource URLs or seller domains", schema: { type: "string", maxLength: 5000 }, example: `${EXAMPLE_SELLER_URL},${EXAMPLE_SELLER_DOMAIN}` }]
           : []), IDEMPOTENCY_PARAM],
         ...(e.template.includes("{id}")
-          ? { "x-example-url": `${base}${e.template.replace("{id}", "example-vendor")}` }
-          : e.route === "trust_check" || e.route === "verdict"
-          ? { "x-example-url": `${base}${e.template}?url=${encodeURIComponent("https://api.example.com/v1/data")}` }
-          : e.route === "receipts" || e.route === "batch_check"
+          ? { "x-example-url": `${base}${e.template.replace("{id}", EXAMPLE_VENDOR_ID)}` }
+          : e.route === "verdict"
+          ? { "x-example-url": `${base}${e.template}?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}` }
+          : e.route === "receipts" || e.route === "batch_check" || e.route === "high_value_check"
           ? { "x-example-url": `${base}${e.example}` }
           : {}),
         "x-free-trial": trialEligible(e.route, Number(usdPrice(cfg, e.route))) ? { eligible: true, free_calls_per_wallet: TRIAL_LIMITS.perWallet, opt_in_header: `${TRIAL_OPT_IN_HEADER}: 1`, header: SIWX_HEADER, extension: SIWX_KEY } : { eligible: false },
         "x-payment-info": {
           // x402scan discovery spec: protocols as objects, price in decimal USD (the per-asset terms follow).
           protocols: [{ x402: {} }],
-          price: { mode: "fixed", currency: "USD", amount: usdPrice(cfg, e.route) },
+          price: e.route === "high_value_check"
+            ? { mode: "dynamic", currency: "USD", amount: usdPrice(cfg, e.route), min: String(HIGH_VALUE.minUsd), max: String(HIGH_VALUE.maxUsd), formula: HIGH_VALUE_PRICING_TEXT, note: "amount and every per-asset amount below are the floor; the 402 for a given amount is binding" }
+            : { mode: "fixed", currency: "USD", amount: usdPrice(cfg, e.route) },
           xrp_price: cfg.xrpPricing === "live"
             ? { mode: "live", currency: "XRP", amount: dropsToXrp(cfg.pricesDrops[e.route]), ...(cfg.xrpRate ? { xrp_usd: cfg.xrpRate.usd, as_of: cfg.xrpRate.as_of } : {}), note: "XRP amount = USD price / live XRP-USD rate (5-minute cache), rounded up to 0.0001 XRP; the 402 quote is binding" }
             : { mode: "fixed", currency: "XRP", amount: dropsToXrp(cfg.pricesDrops[e.route]) },
@@ -405,8 +432,8 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
           "402": { description: "Payment required. x402 v2 PaymentRequired in the body and the PAYMENT-REQUIRED header. accepts[] order: Base USDC, XRP, then XRPL IOUs." },
           ...(e.template.includes("{")
             ? { "400": { description: "Path template not filled in (e.g. :id, <id>, ${id}), or any unfilled path sent with a payment header; the body gives an example URL (never charged). Without a payment header, the literal OpenAPI template path ({id}, as discovery crawlers request it) returns the route's normal 402 quote with a note to fill the placeholder; a payment sent to it is refused with this 400." } }
-            : e.route === "trust_check" || e.route === "verdict"
-            ? { "400": { description: "url missing, empty or not an absolute http(s) URL, or payTo/amount malformed (never charged). A request with no query string at all, as discovery crawlers send it, returns the normal 402 quote; a payment sent without url is refused with this 400.", content: { "application/json": { example: { error: "invalid_query", detail: "url is required: the x402 resource URL (or the seller's domain) you are about to pay.", example: `${base}/v1/${e.route === "verdict" ? "verdict" : "trust/check"}?url=https://api.example.com/v1/data`, note: "Not charged." } } } } }
+            : e.route === "high_value_check" || e.route === "verdict"
+            ? { "400": { description: `url missing, empty or not an absolute http(s) URL, or payTo/amount malformed${e.route === "high_value_check" ? " or amount missing" : ""} (never charged). A request with no query string at all, as discovery crawlers send it, returns the normal 402 quote${e.route === "high_value_check" ? " (at the floor price)" : ""}; a payment sent without url is refused with this 400.`, content: { "application/json": { example: { error: "invalid_query", detail: "url is required: the x402 resource URL (or the seller's domain) you are about to pay.", example: e.route === "verdict" ? `${base}/v1/verdict?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}` : `${base}${HIGH_VALUE_EXAMPLE}`, note: "Not charged." } } } } }
             : e.route === "receipts" || e.route === "batch_check"
             ? { "400": { description: e.route === "receipts" ? "seller missing, or not a domain, an absolute http(s) URL or a payTo address (never charged). A request with no query string at all returns the normal 402 quote." : "urls missing, more than 10 entries, or an entry that is not an absolute http(s) URL or a domain (never charged). A request with no query string at all returns the normal 402 quote." } }
             : {}),
@@ -416,7 +443,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
             : {}),
           "403": { description: "verifiable_intent_denied: the payment's signed intent does not allow this purchase (never charged)." },
           "409": { description: "Idempotency-Key (or payment-identifier id) already used with a different payment (never charged), or settlement_status_unknown: the facilitator did not confirm settlement; check the transaction before paying again." },
-          "429": { description: "Not returned on paid calls. The free lookups (/v1/check, /v1/trust/vendors, /v1/trust/catalog) return 429 rate_limited with Retry-After over their limits; a facilitator 429 surfaces as a retryable 503 facilitator_unavailable." },
+          "429": { description: "Not returned on paid calls. The free lookups (/v1/check, /v1/trust/check, /v1/trust/vendors, /v1/trust/catalog) return 429 rate_limited with Retry-After over their limits; a facilitator 429 surfaces as a retryable 503 facilitator_unavailable." },
           "500": { description: "internal_error: unexpected server error; retry later." },
           "502": { description: "invalid_verify_response or settle_http_error: the payment facilitator returned an unusable answer; not retryable as-is (nothing is settled on invalid_verify_response)." },
           "503": {
@@ -440,7 +467,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
         `Not charged on bad input or when Lumi cannot answer; every response carries as_of.`,
       "x-guidance":
         "GET /v1/check?url= (free) is the signed pre-payment seller check; GET /v1/samples (free) previews every paid product, truncated. " +
-        "Trust (Lumi Trades seller checks): GET /v1/trust/check?url= answers 'should I pay this x402 URL?' with allow/warn/block and reasons; GET /v1/trust/vendors/{id}/report gives a vendor's full observation history. " +
+        "Trust (Lumi Trades seller checks): GET /v1/trust/check?url= (free, rate-limited) answers 'should I pay this x402 URL?' with allow/warn/block and reasons; GET /v1/trust/check/high-value?url=&amount= (paid, 0.5% of the amount) adds a live re-check; GET /v1/trust/vendors/{id}/report gives a vendor's full observation history. " +
         "GET /v1/verdict?url= gives one label (checks_passed / check_first / checks_failed / no_data). " +
         `Each paid call is one x402 v2 'exact' payment: ${acceptsOrder(cfg)}` +
         (cfg.evm ? ` (Base: ${cfg.evm.network}, token ${cfg.evm.asset}; XRPL: ${cfg.network}${cfg.stellar ? `; Stellar: ${cfg.stellar.network}, token ${cfg.stellar.asset}` : ""})` : ` (${cfg.network})`) +
@@ -474,12 +501,12 @@ function trustPaths(): Record<string, unknown> {
   const r = (codes: Record<string, string>) => Object.fromEntries(Object.entries(codes).map(([k, v]) => [k, { description: v }]));
   const tag = ["trust"];
   return {
-    "/v1/trust/vendors": { get: { tags: tag, security: [], summary: "x402 seller lookup and vendor observations (free)", description: "With url, domain or payTo (case-insensitive): matches across the full CDP x402 Bazaar catalog, answer-only (tier, last quote check, test-buy count; up to 5 entries; no tx hashes or check history, those are in the paid /v1/trust/check); rate-limited per client (ingested daily; listings get free, unpaid 402-quote checks on a rotating schedule: valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys, counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated vendor list, separately; see catalog.purchase_verified_by_chain). Tiers: 'catalogued, not yet checked', 'quote-checked, low confidence', 'quote-checked: no valid x402 quote at the last check', 'test-bought'. Each entry carries reachability {status: answering | down_when_checked | listing_looks_dead (3 failed checks in a row on separate occasions), flag: listing_looks_dead | no_paywall | pay_to_differs | needs_different_request | null, note, last_checked_at, last_result, failed_checks_in_a_row, failing_since}, or null before the first check; flags clear on a later answer and never change a score. No match returns {observed:false, note}; that is not a negative finding. Without parameters: the curated XRPL vendor list (allowlist order, not ranked) plus catalog counts; each vendor's last_paid_observation includes the tx_hash and explorer link of its latest paid test-buy only (free; null when Lumi has no paid test-buy of that vendor). For a few vendors where Lumi has confirmed the cause is not on its side, and only while Lumi has no paid test-buy of them, payment_attempts gives {status:'test_payment_not_accepted_yet', label:'Test payment not accepted yet on XRPL', network:'xrpl:0', network_name:'XRPL', count, first_attempt, last_attempt}: signed XRPL test payments the seller's endpoint did not accept (none reached the ledger, nothing was paid). Informational only, never part of the score; absent for every other vendor. Each catalog entry with a USD-priced option carries price_vs_market {cheapest_price_usd, asset_family, market_median_usd, median_basis, multiple_of_median, priced_well_above_market} (true when the cheapest price is above $0.05 per call and at least " + PRICE_LABEL_MULTIPLE + "x the catalog median; disclosure only, never a score input). Older tx hashes, signed receipts and the full history are in the paid /v1/trust/vendors/{id}/report ($0.02). Observations, not ratings.", parameters: [
+    "/v1/trust/vendors": { get: { tags: tag, security: [], summary: "x402 seller lookup and vendor observations (free)", description: "With url, domain or payTo (case-insensitive): matches across the full CDP x402 Bazaar catalog, answer-only (tier, last quote check, test-buy count; up to 5 entries; no tx hashes or check history; verdicts are in the free /v1/trust/check); rate-limited per client (ingested daily; listings get free, unpaid 402-quote checks on a rotating schedule: valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys, counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated vendor list, separately; see catalog.purchase_verified_by_chain). Tiers: 'catalogued, not yet checked', 'quote-checked, low confidence', 'quote-checked: no valid x402 quote at the last check', 'test-bought'. Each entry carries reachability {status: answering | down_when_checked | listing_looks_dead (3 failed checks in a row on separate occasions), flag: listing_looks_dead | no_paywall | pay_to_differs | needs_different_request | null, note, last_checked_at, last_result, failed_checks_in_a_row, failing_since}, or null before the first check; flags clear on a later answer and never change a score. No match returns {observed:false, note}; that is not a negative finding. Without parameters: the curated XRPL vendor list (allowlist order, not ranked) plus catalog counts; each vendor's last_paid_observation includes the tx_hash and explorer link of its latest paid test-buy only (free; null when Lumi has no paid test-buy of that vendor). For a few vendors where Lumi has confirmed the cause is not on its side, and only while Lumi has no paid test-buy of them, payment_attempts gives {status:'test_payment_not_accepted_yet', label:'Test payment not accepted yet on XRPL', network:'xrpl:0', network_name:'XRPL', count, first_attempt, last_attempt}: signed XRPL test payments the seller's endpoint did not accept (none reached the ledger, nothing was paid). Informational only, never part of the score; absent for every other vendor. Each catalog entry with a USD-priced option carries price_vs_market {cheapest_price_usd, asset_family, market_median_usd, median_basis, multiple_of_median, priced_well_above_market} (true when the cheapest price is above $0.05 per call and at least " + PRICE_LABEL_MULTIPLE + "x the catalog median; disclosure only, never a score input). Older tx hashes, signed receipts and the full history are in the paid /v1/trust/vendors/{id}/report ($0.02). Observations, not ratings.", parameters: [
       { name: "url", in: "query", required: false, description: "Resource URL you are about to pay", schema: { type: "string", maxLength: 500 } },
       { name: "domain", in: "query", required: false, description: "Seller host or registrable domain", schema: { type: "string", maxLength: 253 } },
       { name: "payTo", in: "query", required: false, description: "payTo address from the seller's 402 quote (case-insensitive)", schema: { type: "string", maxLength: 120 } },
     ], responses: r({ "200": "OK" }) } },
-    "/v1/trust/catalog": { get: { tags: tag, security: [], summary: "Free teaser of the ingested x402 catalog", description: "The 100 most-used Bazaar listings (25 per page, pages 1-4) with live counts by tier. Answer-only: tier, listed price, last quote check and test-buy count; no tx hashes, receipts or check history (tx evidence is in the paid /v1/trust/check; full history and signed receipts in the paid /v1/trust/vendors/{id}/report and Feed lookups). Not a full export: after= is ignored and pages past 4 are empty. Rate-limited per hashed client IP (10/min, 40/day); use ?url=|domain=|payTo= on /v1/trust/vendors to look up any listing.", parameters: [
+    "/v1/trust/catalog": { get: { tags: tag, security: [], summary: "Free teaser of the ingested x402 catalog", description: "The 100 most-used Bazaar listings (25 per page, pages 1-4) with live counts by tier. Answer-only: tier, listed price, last quote check and test-buy count; no tx hashes, receipts or check history (verdicts in the free /v1/trust/check; full history and signed receipts in the paid /v1/trust/vendors/{id}/report and Feed lookups). Not a full export: after= is ignored and pages past 4 are empty. Rate-limited per hashed client IP (10/min, 40/day); use ?url=|domain=|payTo= on /v1/trust/vendors to look up any listing.", parameters: [
       { name: "page", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 4 } },
       { name: "limit", in: "query", required: false, schema: { type: "integer", minimum: 1, maximum: 25 } },
       { name: "popular", in: "query", required: false, description: "1 = most-used Bazaar listings first", schema: { type: "string", enum: ["1"] } },
@@ -550,8 +577,8 @@ function mcpInfo(base: string, cfg: Config) {
     stdio: { package: "lumi-trades-mcp", command: "npx -y lumi-trades-mcp", pays_with: "your own wallet, signed locally: XRP, RLUSD or USDC on the XRP Ledger (XRPL_SEED) or USDC on Base, gasless (EVM_PRIVATE_KEY), within per-call caps and a session budget" },
     registry: "io.github.cypher-osiris/lumi-trades-mcp",
     tools: {
-      free: ["lumi_catalog", "lumi_samples", "lumi_quote", ...(cfg.verdictPaid ? [] : ["lumi_verdict"]), "lumi_vendor_scores"],
-      paid: ["lumi_trust_check", "lumi_vendor_report", ...(cfg.verdictPaid ? ["lumi_verdict"] : [])],
+      free: ["lumi_catalog", "lumi_samples", "lumi_quote", "lumi_trust_check", ...(cfg.verdictPaid ? [] : ["lumi_verdict"]), "lumi_vendor_scores"],
+      paid: ["lumi_high_value_check", "lumi_vendor_report", ...(cfg.verdictPaid ? ["lumi_verdict"] : [])],
     },
     note: `On the remote server, paid tools return the price and how to pay: x402 at the REST endpoint (settled in ${settledIn(cfg)}), or the npm package with your wallet. Never charged when Lumi cannot answer.`,
   };
@@ -703,12 +730,13 @@ A2A agent card: ${base}/.well-known/agent-card.json. MCP: ${base}/mcp.
 ${rows}
 
 Which one to call (Lumi Trades seller checks):
-- About to pay some x402 URL? \`GET /v1/trust/check?url=<resource>&payTo=<address in its quote>&amount=<USD>\` returns \`allow\` / \`warn\` / \`block\`
+- About to pay some x402 URL? \`GET /v1/trust/check?url=<resource>&payTo=<address in its quote>&amount=<USD>\` (free, ${FREE_TRUST_CHECK_LIMITS.perDay} a day per IP and per key) returns \`allow\` / \`warn\` / \`block\`
   with coded reasons (payTo or price mismatch vs the listing, never observed, failed quotes, slow, young domain, paid but no data).
+- About to make a larger payment? \`GET /v1/trust/check/high-value?url=<resource>&amount=<USD>\` (paid: ${HIGH_VALUE_PRICING_TEXT}) adds a live re-check of the seller and a receipt bound to the amount.
 - Checking any x402 seller before you pay it? See the lookup and vendor report below.
 
 Lumi Trades seller checks lookups:
-- Checking any x402 seller before you pay it? \`GET /v1/trust/vendors?url=<resource>\` (or \`?domain=\`, \`?payTo=\`) is free and covers the whole CDP Bazaar catalog (answer-only; tx evidence is in the paid \`/v1/trust/check\`, $0.02). For curated vendors, \`GET /v1/trust/vendors/{id}\` is the free summary; \`GET /v1/trust/vendors/{id}/report\` ($0.02)
+- Checking any x402 seller before you pay it? \`GET /v1/trust/vendors?url=<resource>\` (or \`?domain=\`, \`?payTo=\`) is free and covers the whole CDP Bazaar catalog (answer-only; the free \`/v1/trust/check\` gives the allow / warn / block verdict). For curated vendors, \`GET /v1/trust/vendors/{id}\` is the free summary; \`GET /v1/trust/vendors/{id}/report\` ($0.02)
   is the full observation history (every quote check and paid test-buy with tx hashes, latency stats and trend, uptime %, agent reports, replies).
   Unknown vendor: 404; no observation in the last 48 h: 503. Both before any 402, never charged.
 
@@ -749,7 +777,7 @@ Base, with the official client:
 import { wrapFetchWithSIWx } from "@x402/extensions/sign-in-with-x";
 import { privateKeyToAccount } from "viem/accounts";
 const tryFree = wrapFetchWithSIWx(fetch, privateKeyToAccount(process.env.EVM_PRIVATE_KEY as \`0x\${string}\`));
-const r = await tryFree("${base}/v1/trust/check?url=https://api.example.com/v1/data", { headers: { "${TRIAL_OPT_IN_HEADER}": "1" } }); // 200 with access.mode "trial" (first ${TRIAL_LIMITS.perWallet} calls), else the 402 to pay
+const r = await tryFree("${base}${HIGH_VALUE_EXAMPLE}", { headers: { "${TRIAL_OPT_IN_HEADER}": "1" } }); // 200 with access.mode "trial" (first ${TRIAL_LIMITS.perWallet} calls), else the 402 to pay
 \`\`\`
 ` : ""}
 XRP Ledger:
@@ -764,7 +792,7 @@ ${xrplTrialSnippet(base, cfg.network)}
 **Pay address:** always take Lumi's pay address (\`payTo\`) from the live 402 payment response or \`${base}/.well-known/x402\`, never from transaction history or a past transfer.
 ${cfg.evm ? `Most x402 clients (\`@x402/fetch\` + \`@x402/evm\`) simply take \`accepts[0]\`, USDC on ${cfg.evm.networkName}: see "Paying with USDC" below. The XRPL flow:
 ` : ""}
-1. \`GET ${base}/v1/trust/check?url=<resource>\` with no payment -> **HTTP 402**. The body (and the base64 \`PAYMENT-REQUIRED\` header) is an x402 v2 \`PaymentRequired\`:
+1. \`GET ${base}/v1/trust/check/high-value?url=<resource>&amount=<USD>\` with no payment -> **HTTP 402**. The body (and the base64 \`PAYMENT-REQUIRED\` header) is an x402 v2 \`PaymentRequired\`:
    \`accepts[${acceptsIndex(cfg).xrp}] = { scheme: "exact", network: "${net}", asset: "XRP", amount: "<drops>", payTo: "${cfg.payTo}", maxTimeoutSeconds: ${cfg.invoiceTtlSeconds}, extra: { invoiceId, sourceTag: ${cfg.sourceTag} } }\`
 ${iouNote(cfg)}2. Sign (do not submit) an XRPL \`Payment\` for exactly \`amount\` drops to \`payTo\`, with \`SourceTag\`, a \`LastLedgerSequence\`,
    and the invoice bound via a Memo (\`MemoData = hex(utf8(invoiceId))\`) and/or \`InvoiceID = SHA-256(invoiceId)\`.
@@ -808,7 +836,7 @@ const fetchPaid = x402Fetch({
   maxValue: "${maxDrops}",                            // spend cap per call, in drops
 });
 
-const res = await fetchPaid("${base}/v1/trust/check?url=https://api.example.com/v1/data");
+const res = await fetchPaid("${base}${HIGH_VALUE_EXAMPLE}");
 console.log(res.status, await res.json());
 const receipt = res.headers.get("PAYMENT-RESPONSE");
 if (receipt) console.log(decodePaymentResponseHeader(receipt)); // { success, transaction, ... }
@@ -845,7 +873,7 @@ const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.EVM_PRIVATE_KEY as \`0x\${string}\`) });
 const fetchPaid = wrapFetchWithPayment(fetch, client);   // picks the ${cfg.evm.network} USDC option
 
-const res = await fetchPaid("${base}/v1/trust/check?url=https://api.example.com/v1/data");
+const res = await fetchPaid("${base}${HIGH_VALUE_EXAMPLE}");
 console.log(res.status, await res.json());
 console.log(decodePaymentResponseHeader(res.headers.get("PAYMENT-RESPONSE")!)); // { success, transaction, network, payer }
 \`\`\`
@@ -868,7 +896,7 @@ const walletProvider = new ViemWalletProvider(createWalletClient({
 const agentkit = await AgentKit.from({ walletProvider, actionProviders: [x402ActionProvider()] });
 const act = (n: string) => agentkit.getActions().find((a) => a.name.endsWith(n))!;
 
-const url = "${base}/v1/trust/check?url=https://api.example.com/v1/data";
+const url = "${base}${HIGH_VALUE_EXAMPLE}";
 const quote = JSON.parse(await act("make_http_request").invoke({ url }));        // status: error_402_payment_required
 const o = quote.acceptablePaymentOptions.find((x: any) => x.network === "${cfg.evm.network}"); // amount "20000" = $0.02
 const paid = JSON.parse(await act("retry_http_request_with_x402").invoke({
@@ -877,7 +905,7 @@ const paid = JSON.parse(await act("retry_http_request_with_x402").invoke({
 }));
 console.log(paid.data, paid.details?.paymentProof);
 \`\`\`
-In an LLM agent with AgentKit tools, the prompt "call ${base}/v1/trust/check?url=https://api.example.com/v1/data and pay the Base USDC option" does the same.
+In an LLM agent with AgentKit tools, the prompt "call ${base}${HIGH_VALUE_EXAMPLE} and pay the Base USDC option" does the same.
 Full runnable version: https://github.com/lumitrades/lumi-api/blob/main/examples/agentkit-direct-url.ts
 
 ` : ""}## Example: Python (PyPI \`x402-xrpl\`)
@@ -893,7 +921,7 @@ session = x402_requests(
     network_filter="${net}",
     scheme_filter="exact",
 )
-r = session.get("${base}/v1/trust/check?url=https://api.example.com/v1/data", timeout=180)
+r = session.get("${base}${HIGH_VALUE_EXAMPLE}", timeout=180)
 print(r.status_code, r.json()["verdict"])
 print(decode_payment_response(r.headers["PAYMENT-RESPONSE"]))
 \`\`\`
@@ -901,9 +929,9 @@ print(decode_payment_response(r.headers["PAYMENT-RESPONSE"]))
 ## MCP
 
 - **Remote MCP server:** \`${base}/mcp\` (Streamable HTTP, stateless; protocol 2026-07-28 and 2025-03-26 .. 2025-11-25).
-  Add it as a remote MCP connector URL. Free tools: \`lumi_catalog\`, \`lumi_samples\`, \`lumi_quote\`${cfg.verdictPaid ? "" : ", `lumi_verdict`"}, \`lumi_vendor_scores\`. Paid tools
+  Add it as a remote MCP connector URL. Free tools: \`lumi_catalog\`, \`lumi_samples\`, \`lumi_quote\`, \`lumi_trust_check\` (rate-limited)${cfg.verdictPaid ? "" : ", `lumi_verdict`"}, \`lumi_vendor_scores\`. Paid tools
   return the price and how to pay (x402 at the REST endpoint, settled in ${settledIn(cfg)}), since a remote connector has no wallet:
-  Lumi Trades seller checks ${cfg.verdictPaid ? "`lumi_verdict` ($0.01), " : ""}\`lumi_trust_check\`, \`lumi_vendor_report\`.
+  Lumi Trades seller checks ${cfg.verdictPaid ? "`lumi_verdict` ($0.01), " : ""}\`lumi_high_value_check\`, \`lumi_vendor_report\`.
 - **Local MCP server that pays for you:** \`npx -y lumi-trades-mcp\` with \`XRPL_SEED\` (XRP/RLUSD/USDC on the XRP Ledger) and/or
   \`EVM_PRIVATE_KEY\` (USDC on Base, gasless) set (npm \`lumi-trades-mcp\`, MCP Registry \`io.github.cypher-osiris/lumi-trades-mcp\`).
   Same tools; each paid call is an x402 payment from your wallet within a per-call cap (\`LUMI_MAX_USD_PER_CALL\`, default 0.30, which covers every endpoint) and a session budget.
@@ -926,21 +954,22 @@ and small paid test-buys from Lumi's own wallets, each with the amount, ledger t
 Test-buys are capped and disclosed: test-buys share a hard cap of about $0.50 a day (0.30 RLUSD + 0.10 XRP for curated XRPL vendors, plus up to 0.15 USDC for Stellar sellers) (not every vendor is bought every day), Base catalog re-buys are capped at $0.10 per day, and no listing priced above $0.05 is bought. The real cadence per vendor is in the coverage figures of /v1/trust/vendors.
 Scores are observations with sample sizes, not ratings; few samples are marked low confidence; vendors are listed in allowlist order, not ranked.
 
-- Lookup before you pay: \`GET ${base}/v1/trust/vendors?url=<resource>\` | \`?domain=\` | \`?payTo=\` (full CDP Bazaar catalog, free quote checks on a rotating schedule = "quote-checked, low confidence"; not every listing is checked yet, the response's \`coverage\` line says "N resources across M domains indexed, X quote-checked, Y test-bought on Base (USDC); separately, Z XRPL endpoints from curated vendors test-bought"; on-chain test-buys = "test-bought", counted per chain: Base USDC buys of Bazaar listings vs XRPL buys of a small curated list (\`purchase_verified_by_chain\`); no match = \`{observed:false}\`, not a negative finding). Free lookups are answer-only (tier, last quote check, test-buy count; no tx hashes) and rate-limited per client; evidence is in the paid \`/v1/trust/check\` ($0.02) and \`/v1/trust/vendors/{id}/report\` ($0.02). Browse a teaser (top 100 most-used, 25 per page, 40 requests/day): \`GET ${base}/v1/trust/catalog?page=1\`.
+- Lookup before you pay: \`GET ${base}/v1/trust/vendors?url=<resource>\` | \`?domain=\` | \`?payTo=\` (full CDP Bazaar catalog, free quote checks on a rotating schedule = "quote-checked, low confidence"; not every listing is checked yet, the response's \`coverage\` line says "N resources across M domains indexed, X quote-checked, Y test-bought on Base (USDC); separately, Z XRPL endpoints from curated vendors test-bought"; on-chain test-buys = "test-bought", counted per chain: Base USDC buys of Bazaar listings vs XRPL buys of a small curated list (\`purchase_verified_by_chain\`); no match = \`{observed:false}\`, not a negative finding). Free lookups are answer-only (tier, last quote check, test-buy count; no tx hashes) and rate-limited per client; verdicts are in the free \`/v1/trust/check\` and evidence in the paid \`/v1/trust/vendors/{id}/report\` ($0.02). Browse a teaser (top 100 most-used, 25 per page, 40 requests/day): \`GET ${base}/v1/trust/catalog?page=1\`.
 - **Listing reachability (free, in every catalog entry and in Lumi Check as \`reachability\`):** \`{status, flag, note, last_checked_at, last_result, failed_checks_in_a_row, failing_since}\`,
   from Lumi's unpaid quote checks (its rotating free check and its test-buyer's quote step). \`status\`: \`answering\`, \`down_when_checked\` (404, 410, no answer, 5xx or a timeout at the last check; one failure is never a flag) or
   \`listing_looks_dead\` (3 failed checks in a row on separate occasions, at least 12 hours apart). \`flag\`: \`listing_looks_dead\`, \`no_paywall\` (returned data without asking for payment; not a penalty),
   \`pay_to_differs\` (payment address in the quote does not match the listing; Lumi does not pay these), \`needs_different_request\` (400/401/405 and similar: needs a different request or its own key; neutral) or null.
   Every flag carries \`last_checked_at\` and clears automatically when a later check gets an answer. Never an input to a score. Only \`listing_looks_dead\` affects the answer: it adds the check_first reason \`listing_looks_dead\` ("listing looks dead: do not pay until it answers again") to Lumi Check and the verdict; the other flags are disclosure only. \`null\` = not checked this way yet.
-- \`GET ${base}/v1/trust/vendors\`, \`GET ${base}/v1/trust/vendors/{id}\`, method: \`GET ${base}/v1/trust/methodology\`. MCP: \`lumi_vendor_scores\`. A2A: \`vendor_trust\`.
+- \`GET ${base}/v1/trust/vendors\`, \`GET ${base}/v1/trust/vendors/${EXAMPLE_VENDOR_ID}\` (any vendor id from the list), method: \`GET ${base}/v1/trust/methodology\`. MCP: \`lumi_vendor_scores\`. A2A: \`vendor_trust\`.
 - **"Tested by Lumi" badge (free, for sellers, earned only):** \`GET ${base}/v1/badge/{key}.svg\` (and \`.json\`, a Lumi-signed verdict), key = your Lumi vendor id or the exact host of your curated x402 service. Rules: ${testedBadgeSummary()}. The badge shows the date of Lumi's latest conclusive test-buy, not the render date. The separate \`Monitored by Lumi\` badge (\`GET ${base}/v1/monitor/badge/{enrollment_id}.svg\`, for monitoring plans and test-buy packs) counts ${MONITORED_BADGE_SUMMARY}. Links to the public result page \`${base}/trust/v/{key}\` (dated tests, how Lumi tests, right to reply via hello@lumitrades.io). Embed (Markdown/README): \`[![Lumi test-buy badge: live status](${base}/v1/badge/{key}.svg)](${base}/trust/v/{key})\`; HTML: \`<a href="${base}/trust/v/{key}"><img src="${base}/v1/badge/{key}.svg" alt="Lumi test-buy badge: live status" height="20"></a>\`. Docs: \`GET ${base}/v1/badge\`. The old \`/badge\` paths still work and answer 301 to \`/v1/badge\` (query kept); use \`/v1/badge\` in new embeds.
-- **Paid detailed report ($0.02 per call, x402 on every rail):** \`GET ${base}/v1/trust/vendors/{id}/report\`: full observation history (every free quote
+- **Paid detailed report ($0.02 per call, x402 on every rail):** \`GET ${base}/v1/trust/vendors/${EXAMPLE_VENDOR_ID}/report\` (any vendor id from \`/v1/trust/vendors\`): full observation history (every free quote
   check over 90 days, every paid test-buy with tx hash and delivered yes/no), latency min/p50/p90/p95/max and 7-day trend, uptime % for 24h/7d/30d/90d and a
   daily series, quoted-price history, agent reports, vendor replies, sample sizes and confidence labels. Not sold (503, not charged) if Lumi has no
   observation of the vendor in the last 48 h. MCP: \`lumi_vendor_report\`. A2A: \`vendor_report\`.
-- **Paid pay-check ($0.02 per call):** \`GET ${base}/v1/trust/check?url=<resource>[&payTo=<address>][&amount=<USD>]\`: one verdict, \`allow\`, \`warn\` or \`block\`,
+- **Pay-check (free, ${FREE_TRUST_CHECK_LIMITS.perDay} calls a day per IP and per API key or wallet, ${FREE_TRUST_CHECK_LIMITS.perMinute} a minute):** \`GET ${base}/v1/trust/check?url=<resource>[&payTo=<address>][&amount=<USD>]\`: one verdict, \`allow\`, \`warn\` or \`block\`,
   with coded reasons (\`pay_to_mismatch\`, \`price_above_listing\`, \`paid_no_data\`, \`not_observed\`, \`unreliable_quotes\`, \`slow\`, \`young_domain\` ...), a confidence label,
-  and links to the free lookup and (for curated vendors) the $0.02 report. A bad or missing \`url\` gets 400 before any quote. MCP: \`lumi_trust_check\`. A2A: \`trust_check\`.
+  a Lumi-signed receipt and links to the free lookup and (for curated vendors) the $0.02 report. RateLimit-* headers on every answer; over the limit, 429 \`free_limit_reached\` names the paid route. A bad or missing \`url\` gets 400 (not counted). MCP: \`lumi_trust_check\`. A2A: \`trust_check\`.
+- **High-value check (paid: ${HIGH_VALUE_PRICING_TEXT}):** \`GET ${base}/v1/trust/check/high-value?url=<resource>&amount=<USD>[&payTo=<address>]\`: the same verdict and score (paying never changes them) plus a live re-check of the seller at call time (signed \`live_evidence\`) and a receipt bound to the stated amount. MCP: \`lumi_high_value_check\`. A2A: \`high_value_check\`.
   A null score (\`score.status: "not_scored"\`) carries \`score.not_scored_reason\` (\`priced_well_above_market\` | \`not_yet_test_bought\` |
   \`scores_for_curated_vendors_only\`) and \`score.not_scored_note\`; \`/v1/check\` and \`/v1/verdict\` carry the same. Disclosure only, never a score input.
 - **Pre-payment check, one label (${cfg.verdictPaid ? "paid, $0.01 per call" : "free, rate-limited"}):** \`GET ${base}/v1/verdict?url=<resource or seller domain>[&payTo=<address>][&amount=<USD>]\`.
@@ -992,14 +1021,14 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.EVM_PRIVATE_KEY) });
-const res = await wrapFetchWithPayment(fetch, client)("${base}/v1/trust/check?url=https://api.example.com/v1/data"); // $${usdPrice(cfg, "trust_check")} USDC on Base, gasless
+const res = await wrapFetchWithPayment(fetch, client)("${base}${HIGH_VALUE_EXAMPLE}"); // $10 payment -> $${highValuePriceUsd(10)} USDC on Base, gasless
 console.log(await res.json());`
     : "";
   const agentkitSnippet = evm
     ? `// npm i @coinbase/agentkit viem   (call the URL directly; discover_x402_services hides v2 sellers in 0.10.4)
-const quote = JSON.parse(await act("make_http_request").invoke({ url: "${base}/v1/trust/check?url=https://api.example.com/v1/data" }));
+const quote = JSON.parse(await act("make_http_request").invoke({ url: "${base}${HIGH_VALUE_EXAMPLE}" }));
 const o = quote.acceptablePaymentOptions.find((x) => x.network === "${evm.network}");
-const paid = await act("retry_http_request_with_x402").invoke({ url: "${base}/v1/trust/check?url=https://api.example.com/v1/data", method: "GET",
+const paid = await act("retry_http_request_with_x402").invoke({ url: "${base}${HIGH_VALUE_EXAMPLE}", method: "GET",
   selectedPaymentOption: { scheme: o.scheme, network: o.network, asset: o.asset, amount: o.amount, payTo: o.payTo } });`
     : "";
   const trialSnippet = evm
@@ -1008,7 +1037,7 @@ import { wrapFetchWithSIWx } from "@x402/extensions/sign-in-with-x";
 import { privateKeyToAccount } from "viem/accounts";
 
 const tryFree = wrapFetchWithSIWx(fetch, privateKeyToAccount(process.env.EVM_PRIVATE_KEY));
-const res = await tryFree("${base}/v1/trust/check?url=https://api.example.com/v1/data", { headers: { "${TRIAL_OPT_IN_HEADER}": "1" } });
+const res = await tryFree("${base}${HIGH_VALUE_EXAMPLE}", { headers: { "${TRIAL_OPT_IN_HEADER}": "1" } });
 const body = await res.json(); // body.access = { mode: "trial", charged: false, trial_calls_remaining, ... }`
     : "";
   const xrplSnippet = `// npm i xrpl x402-xrpl
@@ -1017,7 +1046,7 @@ import { x402Fetch } from "x402-xrpl";
 
 const fetchPaid = x402Fetch({ wallet: Wallet.fromSeed(process.env.XRPL_SEED), network: "${cfg.network}",
   wsUrl: "wss://xrplcluster.com", maxValue: "100000" }); // cap: 0.1 XRP per call
-const res = await fetchPaid("${base}/v1/trust/check?url=https://api.example.com/v1/data");
+const res = await fetchPaid("${base}${HIGH_VALUE_EXAMPLE}");
 console.log(await res.json());`;
   const mcpSnippet = `{ "mcpServers": {
   "lumi-remote": { "url": "${base}/mcp" },
@@ -1117,8 +1146,9 @@ footer{margin:48px 0 0;padding:22px 0 40px;border-top:1px solid var(--line);colo
 <a href="${esc(base)}/llms.txt">llms.txt</a> &middot; <a href="${esc(base)}/openapi.json">OpenAPI</a> &middot;
 <a href="${esc(base)}/.well-known/agent-card.json">A2A card</a> &middot; MCP <code>${esc(base)}/mcp</code><br>
 <strong>Free trial:</strong> ${TRIAL_LIMITS.perWallet} free calls per new wallet in total (not per endpoint), usable on any paid endpoint: send <code>X-Lumi-Trial: 1</code> and sign the 402's <code>sign-in-with-x</code> challenge with ${cfg.evm ? "a Base wallet holding at least 0.01 USDC or " : ""}an activated XRP Ledger account (no payment, nothing moves; one trial per wallet). <a href="#trial">How</a>.<br>
-<strong>New:</strong> <a href="${esc(base)}/v1/trust/check?url=https%3A%2F%2Fapi.example.com%2Fv1%2Fdata">/v1/trust/check</a> (should I pay this x402 URL? allow / warn / block, $${usdPrice(cfg, "trust_check")}) &middot;
-<a href="${esc(base)}/v1/verdict?url=https%3A%2F%2Fapi.example.com%2Fv1%2Fdata">/v1/verdict</a> (one label, $${usdPrice(cfg, "verdict")})<br>
+<strong>New:</strong> <a href="${esc(base + FREE_TRUST_CHECK_EXAMPLE)}">/v1/trust/check</a> (should I pay this x402 URL? allow / warn / block, free, ${FREE_TRUST_CHECK_LIMITS.perDay}/day) &middot;
+<a href="${esc(base + HIGH_VALUE_EXAMPLE)}">/v1/trust/check/high-value</a> (larger payments, ${HIGH_VALUE.rate * 100}% of the amount, min $${HIGH_VALUE.minUsd}) &middot;
+<a href="${esc(base)}/v1/verdict?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}">/v1/verdict</a> (one label, $${usdPrice(cfg, "verdict")})<br>
 <strong>Pay address:</strong> always take Lumi's pay address (<code>payTo</code>) from the live 402 payment response or <a href="${esc(base)}/.well-known/x402">/.well-known/x402</a>, never from transaction history or a past transfer.</p></div>
 <h2>For agents</h2>
 <div class="qls">

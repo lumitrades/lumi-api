@@ -153,7 +153,7 @@ describe("worker: free pages through the edge cache, paid 402s untouched", () =>
     expect(b.headers.get(EDGE_STATUS)).toBe("hit");
     expect(await b.text()).toBe(await a.text());
     const before = store.size;
-    const paid = await worker.fetch(new Request("https://api.lumitrades.io/v1/trust/check?url=https://api.example.com/x"), ENV as any, ctx);
+    const paid = await worker.fetch(new Request("https://api.lumitrades.io/v1/trust/check/high-value?url=https://api.example.com/x&amount=4"), ENV as any, ctx);
     await Promise.allSettled(waits);
     expect(paid.status).toBe(402);
     expect(paid.headers.get("PAYMENT-REQUIRED")).toBeTruthy();

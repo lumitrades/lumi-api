@@ -14,7 +14,8 @@
 
 import { TRIAL_SHORT } from "./trial";
 import type { Config, PaidRoute } from "./config";
-import { atomicToUsdc, dropsToXrp } from "./config";
+import { atomicToUsdc, dropsToXrp, HIGH_VALUE, highValuePriceUsd } from "./config";
+import { usdToDrops } from "./pricing";
 import { PAID_ENDPOINTS, endpointFor } from "./catalog";
 import { indexDoc, VERSION } from "./docs";
 import { DISCLAIMER, type CoinRef } from "./views";
@@ -65,31 +66,35 @@ export const VENDOR_REPORT_TOOL_DESCRIPTION =
   "Automated observations, not a rating. Paid ($0.02: ~0.015 XRP / 0.02 RLUSD / 0.02 USDC). The free summary is lumi_vendor_scores.";
 
 export const TRUST_CHECK_TOOL_DESCRIPTION =
-  "Should I pay this x402 URL? allow / warn / block with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
+  "Free (rate-limited per client and per day). Should I pay this x402 URL? allow / warn / block with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
   "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Links the free lookup and, for curated vendors, the $0.02 full report. " +
-  "Observations, not a guarantee. Paid: $0.02 per call (USDC/RLUSD, or the XRP equivalent).";
+  "Observations, not a guarantee. Over the daily limit it names the paid high-value check (lumi_high_value_check).";
+
+export const HIGH_VALUE_CHECK_TOOL_DESCRIPTION =
+  "Before a larger x402 payment: the same allow / warn / block verdict and score as the free lumi_trust_check (paying never changes them), plus a live re-check of the seller at call time and a Lumi-signed receipt bound to the stated amount. " +
+  "Pass url and the USD amount you are about to pay (and optionally the payTo in its quote). Paid: 0.5% of the amount, minimum $0.005, maximum $0.25 (USDC/RLUSD, or the XRP equivalent).";
 
 export const VENDOR_LOOKUP_DESCRIPTION =
-  "Free. Check an x402 seller before you pay it: pass url (the resource you are about to buy), domain, or payTo (the address in its 402 quote, case-insensitive). Lumi ingests the full CDP x402 Bazaar catalog daily and runs free, unpaid 402-quote checks of listings on a rotating schedule (valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response), labelled 'quote-checked, low confidence', plus Lumi's own test-buys confirmed on-chain, labelled 'test-bought' and counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated list, separately). Answer-only: tx evidence is in the paid trust check. Observations, not ratings; no match is not a negative finding. With no arguments: the curated XRPL vendor scores and catalog counts; vendor_id gives one curated vendor's summary (tx evidence is in the paid vendor report).";
+  "Free. Check an x402 seller before you pay it: pass url (the resource you are about to buy), domain, or payTo (the address in its 402 quote, case-insensitive). Lumi ingests the full CDP x402 Bazaar catalog daily and runs free, unpaid 402-quote checks of listings on a rotating schedule (valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response), labelled 'quote-checked, low confidence', plus Lumi's own test-buys confirmed on-chain, labelled 'test-bought' and counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated list, separately). Answer-only: the full coded verdict is in the free lumi_trust_check. Observations, not ratings; no match is not a negative finding. With no arguments: the curated XRPL vendor scores and catalog counts; vendor_id gives one curated vendor's summary (tx evidence is in the paid vendor report).";
 
 /** Same names and descriptions as mcp/src/index.js (PAID_TOOLS). */
 export const PAID_TOOLS: PaidTool[] = [
   {
-    name: "lumi_trust_check",
-    route: "trust_check",
+    name: "lumi_high_value_check",
+    route: "high_value_check",
     argName: "url",
-    coin: (a) => (str(a.url)?.trim() ? new URLSearchParams(Object.entries({ url: str(a.url)!.trim(), payTo: str(a.payTo), amount: a.amount === undefined ? undefined : String(a.amount) }).filter(([, v]) => v) as [string, string][]).toString() : undefined),
-    path: (a) => `/v1/trust/check?${String(a.coin ?? "")}`,
+    coin: (a) => (str(a.url)?.trim() && a.amount !== undefined && String(a.amount).trim() ? new URLSearchParams(Object.entries({ url: str(a.url)!.trim(), payTo: str(a.payTo), amount: String(a.amount).trim() }).filter(([, v]) => v) as [string, string][]).toString() : undefined),
+    path: (a) => `/v1/trust/check/high-value?${String(a.coin ?? "")}`,
     inputSchema: {
       type: "object",
       properties: {
         url: { type: "string", description: "The x402 resource URL you are about to pay" },
+        amount: { type: "string", description: "The USD amount you are about to pay, e.g. 10 (sets the price: 0.5%, min $0.005, max $0.25)" },
         payTo: { type: "string", description: "Optional: the payTo address in its 402 quote" },
-        amount: { type: "string", description: "Optional: the quoted price in USD, e.g. 0.01" },
       },
-      required: ["url"],
+      required: ["url", "amount"],
     },
-    description: TRUST_CHECK_TOOL_DESCRIPTION,
+    description: HIGH_VALUE_CHECK_TOOL_DESCRIPTION,
   },
   {
     name: "lumi_vendor_report",
@@ -124,16 +129,16 @@ function toolList() {
       name: "lumi_samples",
       title: "Lumi: free samples of every paid product",
       description:
-        "Free. A truncated, clearly labelled SAMPLE of each paid product (trust_check, vendor report) with its USD price and full URL, so you can see the shape and quality before paying. Lists are cut to 2 entries; up to 10 minutes old. Pass route to get one product.",
-      inputSchema: { type: "object", properties: { route: { type: "string", pattern: "^[a-z_]{1,32}$", description: "Optional product route, e.g. trust_check or vendor_report" } } },
+        "Free. A truncated, clearly labelled SAMPLE of each paid product (high_value_check, vendor report) with its USD price and full URL, so you can see the shape and quality before paying. Lists are cut to 2 entries; up to 10 minutes old. Pass route to get one product.",
+      inputSchema: { type: "object", properties: { route: { type: "string", pattern: "^[a-z_]{1,32}$", description: "Optional product route, e.g. high_value_check or vendor_report" } } },
       annotations: ro,
     },
     {
       name: "lumi_quote",
       title: "Lumi: price check without paying (free)",
       description:
-        "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base) for any Lumi paid path, e.g. /v1/trust/check?url=..., without paying. A 503 means the data is not fresh right now and the call would not be sold.",
-      inputSchema: { type: "object", properties: { path: { type: "string", pattern: "^/v1/", description: "Paid API path, e.g. /v1/trust/check?url=... or /v1/verdict?url=..." } }, required: ["path"] },
+        "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base) for any Lumi paid path, e.g. /v1/trust/check/high-value?url=...&amount=10, without paying. A 503 means the data is not fresh right now and the call would not be sold.",
+      inputSchema: { type: "object", properties: { path: { type: "string", pattern: "^/v1/", description: "Paid API path, e.g. /v1/trust/check/high-value?url=...&amount=10 or /v1/trust/vendors/printmoneylab/report" } }, required: ["path"] },
       annotations: ro,
     },
     {
@@ -149,6 +154,21 @@ function toolList() {
           payTo: { type: "string", maxLength: 120, description: "payTo address from the seller's 402 quote (0x... or r...)" },
           vendor_id: { type: "string", pattern: "^[a-z0-9-]{1,64}$", description: "Optional curated vendor id, e.g. printmoneylab" },
         },
+      },
+      annotations: ro,
+    },
+    {
+      name: "lumi_trust_check",
+      title: "Lumi: should I pay this x402 URL? (free, rate-limited)",
+      description: TRUST_CHECK_TOOL_DESCRIPTION,
+      inputSchema: {
+        type: "object",
+        properties: {
+          url: { type: "string", maxLength: 500, description: "The x402 resource URL you are about to pay" },
+          payTo: { type: "string", maxLength: 120, description: "Optional: the payTo address in its 402 quote" },
+          amount: { type: "string", maxLength: 20, description: "Optional: the quoted price in USD, e.g. 0.01" },
+        },
+        required: ["url"],
       },
       annotations: ro,
     },
@@ -196,9 +216,9 @@ function toolList() {
 }
 
 const INSTRUCTIONS =
-  "Lumi Trades (lumitrades.io): x402 seller checks. lumi_verdict (one-label pre-payment check, $0.01 on the API: checks_passed / check_first / checks_failed / no_data), lumi_trust_check (paid, full coded reasons), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
-  "Free: lumi_catalog, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (Watch $5, Watch Pro $20 per endpoint per 30d, Audit $99, Re-test pack $6.50 / 30 test-buys, Founder pack $5 / 24 test-buys, free tier and 14-day trial) and lumi_trust_feed (free 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d); lumi_vendor_report is the paid full history for one vendor ($0.02). " +
-  "lumi_verdict is paid ($0.01 per call on /v1/verdict; on this remote server it returns the x402 terms; the free signed GET /v1/check has the same data). Paid tools cost $0.01 to $0.02 per call via x402; paid in XRP, RLUSD or USDC on the XRP Ledger or USDC on Base or Stellar; " + TRIAL_SHORT + "; without access they return the price and how to pay. " +
+  "Lumi Trades (lumitrades.io): x402 seller checks. lumi_verdict (one-label pre-payment check, $0.01 on the API: checks_passed / check_first / checks_failed / no_data), lumi_trust_check (free, rate-limited, full coded reasons), lumi_high_value_check (paid, 0.5% of the amount, adds a live re-check), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
+  "Free: lumi_catalog, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_trust_check (rate-limited), lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (Watch $5, Watch Pro $20 per endpoint per 30d, Audit $99, Re-test pack $6.50 / 30 test-buys, Founder pack $5 / 24 test-buys, free tier and 14-day trial) and lumi_trust_feed (free 1,000 lookups/month, Feed $99/30d, Feed Pro $199/30d); lumi_vendor_report is the paid full history for one vendor ($0.02). " +
+  "lumi_verdict is paid ($0.01 per call on /v1/verdict; on this remote server it returns the x402 terms; the free signed GET /v1/check has the same data). Paid tools cost $0.005 to $0.25 per call via x402; paid in XRP, RLUSD or USDC on the XRP Ledger or USDC on Base or Stellar; " + TRIAL_SHORT + "; without access they return the price and how to pay. " +
   PAID_TOOLS_NOTE + " Information only, not financial advice. Cite 'Lumi Trades (lumitrades.io)'.";
 
 // ---------------------------------------------------------------- auth
@@ -450,7 +470,7 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
   const { deps, base, owner } = ctx;
   const cfg = deps.config;
   const access = owner ? "owner" : "public";
-  if (RETIRED_TOOLS.includes(name)) return text({ ...retiredBody(name, base), tool: name, use_tool: "lumi_vendor_scores (free) or lumi_trust_check" }, true);
+  if (RETIRED_TOOLS.includes(name)) return text({ ...retiredBody(name, base), tool: name, use_tool: "lumi_vendor_scores or lumi_trust_check (both free)" }, true);
   try {
     switch (name) {
       case "lumi_catalog": {
@@ -484,6 +504,14 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
         if (entry.status !== 200) return text({ status: entry.status, body: entry.body }, true);
         return text({ ...entry.body, badge: badge.body });
       }
+      case "lumi_trust_check": {
+        const u = str(args.url)?.trim();
+        if (!u) return text({ error: "missing required argument: url (the x402 resource URL you are about to pay)" }, true);
+        const qs = new URLSearchParams(Object.entries({ url: u, payTo: str(args.payTo), amount: args.amount === undefined ? undefined : String(args.amount) }).filter(([, v]) => v) as [string, string][]);
+        // Free and rate-limited; 429 carries the paid high-value route.
+        const r = await deps.quote(`/v1/trust/check?${qs}`);
+        return text(r.status === 200 ? { ...r.body, note: TRUST_DISCLAIMER } : r.body, r.status !== 200);
+      }
       case "lumi_verdict": {
         const u = str(args.url)?.trim();
         if (!u) return text({ error: "missing required argument: url (the x402 resource URL or seller domain you are about to pay)" }, true);
@@ -514,7 +542,7 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
       }
       case "lumi_quote": {
         const path = str(args.path);
-        if (!path || !/^\/v1\/[A-Za-z0-9/_.?=&%-]*$/.test(path)) return text({ error: "path must be a Lumi paid path such as /v1/trust/check?url=... or /v1/verdict?url=..." }, true);
+        if (!path || !/^\/v1\/[A-Za-z0-9/_.?=&%-]*$/.test(path)) return text({ error: "path must be a Lumi paid path such as /v1/trust/check/high-value?url=...&amount=10 or /v1/trust/vendors/printmoneylab/report" }, true);
         const r = await deps.quote(path);
         if (r.status !== 402) return text({ status: r.status, body: r.body });
         return text({
@@ -540,6 +568,12 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
         return text({ error: tool.argName === "vendor_id" ? "missing required argument: vendor_id (e.g. printmoneylab; list with lumi_vendor_scores)" : tool.argName === "url" ? "missing required argument: url (the x402 resource URL you are about to pay)" : "missing required argument" }, true);
       }
     }
+    if (tool.route === "high_value_check") {
+      const amt = Number(String(args.amount ?? "").trim());
+      if (!Number.isFinite(amt) || amt <= 0 || amt > HIGH_VALUE.maxAmountUsd) {
+        return text({ error: `amount must be the USD amount you are about to pay: a number > 0 and <= ${HIGH_VALUE.maxAmountUsd} (e.g. 10)` }, true);
+      }
+    }
     if (tool.name === "lumi_brief" && args.format !== undefined && args.format !== "json" && args.format !== "md") {
       return text({ error: "format must be json or md" }, true);
     }
@@ -551,33 +585,45 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
 
     const restUrl = `${base}${tool.path({ ...args, coin: prep.coin?.symbol ?? coinArg, ...(tool.argName === "vendor_id" ? { vendor_id: String(prep.body.id ?? coinArg) } : {}) })}`;
     if (owner) {
-      if (tool.name === "lumi_brief" && args.format === "md") {
+      if (tool.route === "high_value_check") {
+      const amt = Number(String(args.amount ?? "").trim());
+      if (!Number.isFinite(amt) || amt <= 0 || amt > HIGH_VALUE.maxAmountUsd) {
+        return text({ error: `amount must be the USD amount you are about to pay: a number > 0 and <= ${HIGH_VALUE.maxAmountUsd} (e.g. 10)` }, true);
+      }
+    }
+    if (tool.name === "lumi_brief" && args.format === "md") {
         const md = String((prep.body as { markdown?: string }).markdown ?? "");
         return text(`${md}\n\n_${DISCLAIMER}_`);
       }
-      return text({ ...prep.body, access: { mode: "owner", charged: false, via: "remote MCP" }, ...(tool.route === "vendor_report" ? {} : { note: tool.route === "trust_check" ? TRUST_DISCLAIMER : DISCLAIMER }) });
+      return text({ ...prep.body, access: { mode: "owner", charged: false, via: "remote MCP" }, ...(tool.route === "vendor_report" ? {} : { note: tool.route === "high_value_check" ? TRUST_DISCLAIMER : DISCLAIMER }) });
     }
-    return paymentRequired(tool, restUrl, cfg, base);
+    const usdOverride = tool.route === "high_value_check" ? highValuePriceUsd(Number(String(args.amount).trim())) : undefined;
+    return paymentRequired(tool, restUrl, cfg, base, usdOverride);
   } catch (err) {
     deps.log({ event: "mcp_tool_error", tool: name, error: String((err as Error)?.message ?? err) });
     return text({ error: "internal_error", detail: "The tool failed before any payment. Not charged.", retryable: true }, true);
   }
 }
 
-function paymentRequired(tool: PaidTool, restUrl: string, cfg: Config, base: string): ToolResult {
+/**
+ * usdOverride: the dynamic high_value_check price for the stated amount (same math as the REST quote: highValuePriceUsd,
+ * XRP at the live rate), so the explanation matches the 402 the agent will get.
+ */
+function paymentRequired(tool: PaidTool, restUrl: string, cfg: Config, base: string, usdOverride?: string): ToolResult {
   const endpoint = endpointFor(tool.route);
-  const xrp = dropsToXrp(cfg.pricesDrops[tool.route]);
+  const xrp = dropsToXrp(usdOverride ? usdToDrops(usdOverride, cfg.xrpRate?.usd ?? cfg.xrpUsdFallback) : cfg.pricesDrops[tool.route]);
+  const usdc = (fixed: string | undefined) => usdOverride ?? fixed;
   const prices: Record<string, unknown>[] = [
     { asset: "XRP", amount: xrp, network: cfg.network },
-    ...cfg.ious.map((o) => ({ asset: o.symbol, amount: o.prices[tool.route], issuer: o.issuer, network: cfg.network })),
+    ...cfg.ious.map((o) => ({ asset: o.symbol, amount: usdc(o.prices[tool.route]), issuer: o.issuer, network: cfg.network })),
   ];
-  if (cfg.evm) prices.push({ asset: "USDC", amount: cfg.evm.prices[tool.route], network: cfg.evm.network, token: cfg.evm.asset });
+  if (cfg.evm) prices.push({ asset: "USDC", amount: usdc(cfg.evm.prices[tool.route]), network: cfg.evm.network, token: cfg.evm.asset });
   const xrplText = prices.filter((p) => p.network === cfg.network).map((p) => `${p.amount} ${p.asset}`).join(" or ");
   // Base USDC first (gasless, most agent wallets hold it), the XRP Ledger second.
   const priceText = cfg.evm
-    ? `${cfg.evm.prices[tool.route]} USDC on ${cfg.evm.networkName}, or ${xrplText} on the XRP Ledger`
+    ? `${usdc(cfg.evm.prices[tool.route])} USDC on ${cfg.evm.networkName}, or ${xrplText} on the XRP Ledger`
     : `${xrplText} on the XRP Ledger`;
-  const priceTextAll = cfg.stellar ? `${priceText}, or ${cfg.stellar.prices[tool.route]} USDC on ${cfg.stellar.networkName}` : priceText;
+  const priceTextAll = cfg.stellar ? `${priceText}, or ${usdc(cfg.stellar.prices[tool.route])} USDC on ${cfg.stellar.networkName}` : priceText;
   const summary =
     `${tool.name} is a paid Lumi tool: ${priceTextAll} per call (x402). ` +
     "This remote MCP connection has no wallet, so nothing was charged and no data was returned. " +
@@ -591,8 +637,9 @@ function paymentRequired(tool: PaidTool, restUrl: string, cfg: Config, base: str
           status: "payment_required",
           charged: false,
           tool: tool.name,
+          ...(usdOverride ? { price_usd: usdOverride, pricing: "0.5% of the stated amount, minimum $0.005, maximum $0.25" } : {}),
           what_you_get: endpoint.summary,
-          price: [...(cfg.evm ? [prices[prices.length - 1], ...prices.slice(0, -1)] : prices), ...(cfg.stellar ? [{ asset: "USDC", amount: cfg.stellar.prices[tool.route], network: cfg.stellar.network, token: cfg.stellar.asset }] : [])],
+          price: [...(cfg.evm ? [prices[prices.length - 1], ...prices.slice(0, -1)] : prices), ...(cfg.stellar ? [{ asset: "USDC", amount: usdc(cfg.stellar.prices[tool.route]), network: cfg.stellar.network, token: cfg.stellar.asset }] : [])],
           network: cfg.network,
           pay_to: cfg.payTo,
           ...(cfg.evm ? { base: { network: cfg.evm.network, pay_to: cfg.evm.payTo, asset: cfg.evm.asset } } : {}),
@@ -620,13 +667,13 @@ function paymentRequired(tool: PaidTool, restUrl: string, cfg: Config, base: str
             {
               option: `npm MCP server (${NPM_PACKAGE}), XRP Ledger`,
               install: `npx -y ${NPM_PACKAGE}`,
-              config: { command: "npx", args: ["-y", NPM_PACKAGE], env: { XRPL_SEED: "<your XRPL wallet seed, signed locally>", LUMI_PAY_ASSET: "XRP", LUMI_MAX_XRP_PER_CALL: Number(xrp) > 0.05 ? "0.25" : "0.05", ...(Number(cfg.ious[0]?.prices[tool.route] ?? 0) > 0.05 ? { LUMI_MAX_USD_PER_CALL: "0.3" } : {}), LUMI_SESSION_BUDGET: "1" } },
+              config: { command: "npx", args: ["-y", NPM_PACKAGE], env: { XRPL_SEED: "<your XRPL wallet seed, signed locally>", LUMI_PAY_ASSET: "XRP", LUMI_MAX_XRP_PER_CALL: Number(xrp) > 0.05 ? "0.25" : "0.05", ...(Number(usdc(cfg.ious[0]?.prices[tool.route]) ?? 0) > 0.05 ? { LUMI_MAX_USD_PER_CALL: "0.3" } : {}), LUMI_SESSION_BUDGET: "1" } },
               note: "Runs locally over stdio and pays from your wallet within per-call caps and a session budget.",
             },
           ],
           free_tools: ["lumi_catalog", "lumi_samples", "lumi_quote", ...(cfg.verdictPaid ? [] : ["lumi_verdict"]), "lumi_vendor_scores", "lumi_seller_monitoring", "lumi_trust_feed"],
           free_sample: `${base}/v1/samples`,
-          disclaimer: tool.route === "trust_check" || tool.route === "vendor_report" ? TRUST_DISCLAIMER : DISCLAIMER,
+          disclaimer: tool.route === "high_value_check" || tool.route === "vendor_report" ? TRUST_DISCLAIMER : DISCLAIMER,
         },
         null,
         2,

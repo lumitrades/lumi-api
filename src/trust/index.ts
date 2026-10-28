@@ -109,7 +109,7 @@ export interface Trust {
   /** Paid detailed report: full observation history. Unknown vendor and stale data are never sold. */
   vendorReport(id: string, base: string): Promise<VendorReportResult>;
   /** Lookup by resource URL, domain or payTo across the curated list and the catalog. */
-  /** free=true: answer-only (no tx hashes / evidence detail) for free surfaces; default full for paid /v1/trust/check. */
+  /** free=true: answer-only (no tx hashes / evidence detail) for free surfaces; default full for /v1/trust/check (free, rate-limited) and the paid high-value check. */
   lookup(q: LookupQuery, base: string, opts?: { free?: boolean }): Promise<Record<string, unknown>>;
   /** Live score of one curated vendor (same inputs as the public score: probes, Lumi test-buys, verified reports). Null = unknown id. */
   vendorScore(id: string): Promise<{ vendor_id: string; name: string; score: ScoreResult; status: string; last_conclusive: "delivered" | "not_delivered" | null; last_conclusive_at: number | null } | null>;
@@ -379,7 +379,7 @@ export function methodologyDoc(base: string) {
     x402_catalog: {
       source: "CDP x402 Bazaar discovery API (free), ingested daily at 02:00 UTC. x402scan's resource API is paid, so it is not ingested.",
       lookup: `${base}/v1/trust/vendors?url=<resource> | ?domain=<host> | ?payTo=<address> (case-insensitive)`,
-      free_tier: "Free lookups are answer-only: tier, listed price, last quote check (valid, pays listed address, price matches) and test-buy count/date, up to 5 entries. Tx hashes, explorer links, check history, latency and domain age are in the paid /v1/trust/check ($0.02) and the curated vendor report ($0.02). GET /v1/trust/catalog is a teaser of the 100 most-used listings (25 per page), not a full export. Free calls are rate-limited per hashed client IP (catalog 10/min and 40/day; lookups 30/min and 300/day).",
+      free_tier: "Free lookups are answer-only: tier, listed price, last quote check (valid, pays listed address, price matches) and test-buy count/date, up to 5 entries. Tx hashes, explorer links, check history, latency and domain age are in the free, rate-limited /v1/trust/check and the curated vendor report ($0.02). GET /v1/trust/catalog is a teaser of the 100 most-used listings (25 per page), not a full export. Free calls are rate-limited per hashed client IP (catalog 10/min and 40/day; lookups 30/min and 300/day).",
       quote_checks: "Catalogued http resources get free, unpaid requests in rotating slices every 30 minutes, fanned out over a queue; not every resource is checked every day (see counts.quote_checked_24h in the catalog summary for live coverage). Recorded: HTTP status, whether a readable x402 quote came back, whether it pays an address in the listing, quoted price vs listed price, latency, and the last 30 results. MCP listings are not probed. The registrable domain's registration date is read from RDAP about monthly (shared hosting hosts such as workers.dev are skipped). TLS certificate age is not measured.",
       tiers: {
         "catalogued, not yet checked": "Listed in the Bazaar; no quote check yet.",
@@ -433,7 +433,7 @@ export function methodologyDoc(base: string) {
       format: "counterparty_delivery_receipt v0.1 (proposed ARS evidence type): seller {vendor_id, endpoint, domain, pay_to}, payment {network, asset, amount, tx_hash, payer, ledger_result, ledger_index|block_number}, delivery {observed_at, http_status, data_returned, outcome, latency_ms}, issuer {methodology_url}, receipt_hash (SHA-256 of the canonical JSON body) and signer.",
       signing: "Signed by the wallet that paid: message `lumi-receipt:<network>:<tx_hash>:<receipt_hash>`; XRPL via ripple-keypairs (UTF-8 hex of the message, with public_key), Base via EIP-191 personal_sign. Signed on Lumi's operator box; the API never holds wallet keys.",
       coverage: "One per stored test-buy, curated (XRPL) and catalog (Base); earlier buys were backfilled (issued_at is the signing time, delivery.observed_at the buy time). Lumi's test-buys of its own endpoints are not counterparty evidence and get no receipt.",
-      served: "Paid only: receipts[].receipt in GET /v1/trust/receipts?seller= (Lumi's test-buys of one seller, newest first), paid_test_buys.history[].receipt in the vendor report (/v1/trust/vendors/{id}/report) and entries[].purchases[].receipt in paid catalog lookups (POST /v1/feed/lookup on the Feed and Feed Pro plans). The paid /v1/trust/check returns a verdict with reasons, not receipts. Free lookups stay answer-only.",
+      served: "Paid only: receipts[].receipt in GET /v1/trust/receipts?seller= (Lumi's test-buys of one seller, newest first), paid_test_buys.history[].receipt in the vendor report (/v1/trust/vendors/printmoneylab/report, any vendor id) and entries[].purchases[].receipt in paid catalog lookups (POST /v1/feed/lookup on the Feed and Feed Pro plans). The free /v1/trust/check returns a verdict with reasons, not test-buy receipts. Free lookups stay answer-only.",
       verify: `GET ${base}/v1/trust/receipts/verify (how-to, free) and POST ${base}/v1/trust/receipts/verify with a receipt (free; ?ledger=1 also checks the payment on-chain).`,
     },
     tips: { endpoint: `POST ${base}/v1/tips`, privacy: "Stored privately. Never shown, published, or returned by any endpoint, MCP tool or A2A skill." },
@@ -461,7 +461,7 @@ export const FREE_LIMITS = {
 /** Free lookups are also limited per caller key or wallet (same 30 a minute / 300 a day), so rotating IPs does not lift the limit. */
 export const KEY_LIMIT_HEADERS = ["X-Lumi-Key", "X-Wallet", "X-Lumi-Wallet"] as const;
 /** Shown on a free-lookup 429: where to go for volume. */
-export const FREE_LIMIT_MORE = "Free lookups are limited to 30 a minute and 300 a day per IP and per key or wallet. For more: the $0.02 live check (/v1/trust/check, x402, no account), or a Feed key and the platform licence (see /v1/feed).";
+export const FREE_LIMIT_MORE = "Free lookups are limited to 30 a minute and 300 a day per IP and per key or wallet. For more: the free /v1/trust/check (100 a day), the paid high-value check (/v1/trust/check/high-value, 0.5% of the amount, min $0.005, x402, no account), or a Feed key and the platform licence (see /v1/feed).";
 
 /** Free, answer-only view of a paid test-buy: outcome only; tx hashes and explorer links of the history are in the paid vendor report. */
 function obsFreeView(o: ObservationRow) {

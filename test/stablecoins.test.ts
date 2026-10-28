@@ -20,7 +20,7 @@ function setup(env: Record<string, string> = {}, fac: FakeFacilitator = happyFac
 describe("stablecoin config", () => {
   it("defaults to Ripple's / Circle's official issuers per network and USD-cent prices", () => {
     const main = loadConfig({ XRPL_NETWORK: "xrpl:0", INVOICE_SECRET: "x".repeat(32) });
-    const cents = { vendor_report: "0.02", trust_check: "0.02", verdict: "0.01", receipts: "0.005", batch_check: "0.008" };
+    const cents = { vendor_report: "0.02", high_value_check: "0.005", verdict: "0.01", receipts: "0.005", batch_check: "0.008" };
     expect(main.ious).toEqual([
       { symbol: "RLUSD", currency: RLUSD_CURRENCY, issuer: MAINNET_ISSUER, prices: cents },
       { symbol: "USDC", currency: USDC_CURRENCY, issuer: USDC_MAINNET, prices: cents },
@@ -48,7 +48,7 @@ describe("stablecoin config", () => {
 describe("stablecoins in the 402", () => {
   it("offers XRP first, then RLUSD, then USDC, sharing one invoice", async () => {
     const { get } = setup();
-    for (const [path, xrp, rl] of [["/v1/verdict?url=https://a.example/x", "7500", "0.01"], ["/v1/trust/check?url=https://a.example/x", "15000", "0.02"]]) {
+    for (const [path, xrp, rl] of [["/v1/verdict?url=https://a.example/x", "7500", "0.01"], ["/v1/trust/check/high-value?url=https://a.example/x&amount=4", "15200", "0.02"]]) {
       const r = await get(path);
       expect(r.status).toBe(402);
       const body = await r.json();
@@ -82,8 +82,8 @@ describe("stablecoins in the 402", () => {
 
   it("settles a USDC payment", async () => {
     const { get, fac } = setup();
-    const req = (await (await get("/v1/trust/check?url=https://a.example/x")).json()).accepts[2];
-    const r = await get("/v1/trust/check?url=https://a.example/x", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
+    const req = (await (await get("/v1/trust/check/high-value?url=https://a.example/x&amount=4")).json()).accepts[2];
+    const r = await get("/v1/trust/check/high-value?url=https://a.example/x&amount=4", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
     expect(r.status).toBe(200);
     expect(fac.calls[1].body.paymentRequirements).toEqual(req);
     expect((await r.json()).payment).toMatchObject({ asset: "USDC", amount: "0.02", issuer: USDC_TESTNET });
@@ -124,9 +124,9 @@ describe("stablecoins in the 402", () => {
 
   it("invoices are bound to the RLUSD price too", async () => {
     const a = setup();
-    const req = (await (await a.get("/v1/trust/check?url=https://a.example/x")).json()).accepts[1];
-    const repriced = setup({ PRICE_TRUST_CHECK_RLUSD: "0.05" });
-    const r = await repriced.get("/v1/trust/check?url=https://a.example/x", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
+    const req = (await (await a.get("/v1/verdict?url=https://a.example/x")).json()).accepts[1];
+    const repriced = setup({ PRICE_VERDICT_RLUSD: "0.05" });
+    const r = await repriced.get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": paymentHeaderFor(req) });
     expect(r.status).toBe(402);
     expect((await r.json()).error).toBe("invalid_invoice");
   });
@@ -134,13 +134,13 @@ describe("stablecoins in the 402", () => {
   it("documents RLUSD in index, discovery, OpenAPI and skill.md", async () => {
     const { get } = setup();
     const index = await (await get("/")).json();
-    expect(index.paid_endpoints.map((p: any) => p.price_rlusd)).toEqual(["0.02", "0.02", "0.01", "0.005", "0.008"]);
-    expect(index.paid_endpoints.map((p: any) => p.price_usdc)).toEqual(["0.02", "0.02", "0.01", "0.005", "0.008"]);
+    expect(index.paid_endpoints.map((p: any) => p.price_rlusd)).toEqual(["0.005", "0.02", "0.01", "0.005", "0.008"]);
+    expect(index.paid_endpoints.map((p: any) => p.price_usdc)).toEqual(["0.005", "0.02", "0.01", "0.005", "0.008"]);
     expect(index.payment.assets[1]).toMatchObject({ symbol: "RLUSD", issuer: TESTNET_ISSUER, accepts_index: 1 });
     expect(index.payment.assets[2]).toMatchObject({ symbol: "USDC", issuer: USDC_TESTNET, accepts_index: 2 });
     const wk = await (await get("/.well-known/x402")).json();
     expect(wk.resources[0].accepts[2]).toMatchObject({ asset: USDC_CURRENCY, asset_symbol: "USDC", issuer: USDC_TESTNET });
-    expect(wk.resources[0].accepts[1]).toMatchObject({ asset: RLUSD_CURRENCY, asset_symbol: "RLUSD", issuer: TESTNET_ISSUER, amount: "0.02" }); // /v1/trust/check (first listed)
+    expect(wk.resources[0].accepts[1]).toMatchObject({ asset: RLUSD_CURRENCY, asset_symbol: "RLUSD", issuer: TESTNET_ISSUER, amount: "0.005" }); // /v1/trust/check/high-value (first listed, minimum price)
     const oa = await (await get("/openapi.json")).json();
     expect(oa.paths["/v1/verdict"].get["x-payment-info"].alternatives[0].price).toEqual({ mode: "fixed", currency: "RLUSD", amount: "0.01" });
     const skill = await (await get("/skill.md")).text();

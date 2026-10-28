@@ -14,30 +14,27 @@ import { createClient, loadSettings, assetLabel } from "./lumi.js";
 import { registerContribTools, checkLumiReceipt } from "./contrib.js";
 
 const VENDOR_LOOKUP_DESCRIPTION =
-  "Free. Check an x402 seller before you pay it: pass url (the resource you are about to buy), domain, or payTo (the address in its 402 quote, case-insensitive). Lumi ingests the full CDP x402 Bazaar catalog daily and runs free, unpaid 402-quote checks of listings on a rotating schedule (valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response), labelled 'quote-checked, low confidence', plus Lumi's own test-buys confirmed on-chain, labelled 'test-bought' and counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated list, separately). Answer-only: tx evidence is in the paid trust check. Observations, not ratings; no match is not a negative finding. With no arguments: the curated XRPL vendor scores and catalog counts; vendor_id gives one curated vendor's summary (tx evidence is in the paid vendor report).";
+  "Free. Check an x402 seller before you pay it: pass url (the resource you are about to buy), domain, or payTo (the address in its 402 quote, case-insensitive). Lumi ingests the full CDP x402 Bazaar catalog daily and runs free, unpaid 402-quote checks of listings on a rotating schedule (valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response), labelled 'quote-checked, low confidence', plus Lumi's own test-buys confirmed on-chain, labelled 'test-bought' and counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated list, separately). Answer-only: tx evidence is in the paid receipts and vendor report. Observations, not ratings; no match is not a negative finding. With no arguments: the curated XRPL vendor scores and catalog counts; vendor_id gives one curated vendor's summary (tx evidence is in the paid vendor report).";
 
-export const VERSION = "0.9.9";
+export const VERSION = "0.10.0";
 
 /** Paid tools: name -> API path builder + description (prices are read live from the API's 402 quote). */
 export const PAID_TOOLS = [
   {
-    name: "lumi_trust_check",
+    name: "lumi_high_value_check",
     path: (a) => {
-      const q = new URLSearchParams({ url: String(a.url ?? "") });
+      const q = new URLSearchParams({ url: String(a.url ?? ""), amount: String(a.amount ?? "") });
       if (a.payTo) q.set("payTo", String(a.payTo));
-      if (a.amount !== undefined) q.set("amount", String(a.amount));
-      return `/v1/trust/check?${q}`;
+      return `/v1/trust/check/high-value?${q}`;
     },
     input: {
       url: z.string().describe("The x402 resource URL you are about to pay"),
+      amount: z.string().describe("The USD amount you are about to pay, e.g. 10 (sets the price)"),
       payTo: z.string().optional().describe("Optional: the payTo address in its 402 quote"),
-      amount: z.string().optional().describe("Optional: the quoted price in USD, e.g. 0.01"),
     },
     description:
-      "Should I pay this x402 URL? allow / warn / block with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
-      "Live: after payment Lumi contacts the seller once (an unpaid request; Lumi never pays the seller) and compares its current quote, price, payTo and TLS with Lumi's record, returned as live with signed live_evidence; the free check is cached and shows data_age. " +
-      "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Links the free lookup and, for curated vendors, the $0.02 full report. " +
-      "Observations, not a guarantee. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger).",
+      "Before a larger x402 payment: the same allow / warn / block verdict and score as the free lumi_trust_check, plus a live re-check (Lumi contacts the seller once with an unpaid request; Lumi never pays the seller) comparing its current quote, price, payTo and TLS with Lumi's record, returned as live with signed live_evidence, and a signed receipt bound to the stated amount. " +
+      "Paid: 0.5% of amount, minimum $0.005, maximum $0.25 (e.g. amount 10 costs $0.05), in USDC on Base or XRP/RLUSD/USDC on the XRP Ledger. Paying never changes a verdict or score. Observations, not a guarantee.",
   },
   {
     name: "lumi_vendor_report",
@@ -85,7 +82,7 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: free samples of every paid product",
       description:
-        "Free. A truncated, clearly labelled SAMPLE of each paid product (trust_check, vendor report, verdict) with its USD price and full URL, so you can judge it before paying. Lists are cut to 2 entries; up to 10 minutes old. Pass route to get one product.",
+        "Free. A truncated, clearly labelled SAMPLE of each paid product (high-value check, vendor report, verdict) with its USD price and full URL, so you can judge it before paying. Lists are cut to 2 entries; up to 10 minutes old. Pass route to get one product.",
       inputSchema: { route: z.string().regex(/^[a-z_]{1,32}$/).optional().describe("Optional product route, e.g. trust_check or verdict") },
     },
     async ({ route }) => {
@@ -101,7 +98,7 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: price check without paying (free)",
       description: "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base) for any Lumi paid path, e.g. /v1/verdict?url=..., without paying. A 503 means Lumi cannot answer right now and the call would not be sold.",
-      inputSchema: { path: z.string().regex(/^\/v1\//).describe("Paid API path, e.g. /v1/verdict?url=... or /v1/trust/check?url=...") },
+      inputSchema: { path: z.string().regex(/^\/v1\//).describe("Paid API path, e.g. /v1/verdict?url=... or /v1/trust/check/high-value?url=...&amount=10") },
     },
     async ({ path }) => text(await client.quote(path)),
   );
@@ -185,6 +182,30 @@ export function buildServer(client, opts = {}) {
     async () => text((await client.free("/v1/feed")).body),
   );
 
+  server.registerTool(
+    "lumi_trust_check",
+    {
+      title: "Lumi: trust check before paying (free)",
+      description:
+        "Free (rate-limited per client). Should I pay this x402 URL? allow / warn / block with coded reasons and next steps, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
+        "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Cached (shows data_age); for a live re-check before a larger payment use lumi_high_value_check. Over the free limit Lumi answers 429 free_limit_reached with the paid route. Observations, not a guarantee.",
+      inputSchema: {
+        url: z.string().describe("The x402 resource URL you are about to pay"),
+        payTo: z.string().optional().describe("Optional: the payTo address in its 402 quote"),
+        amount: z.string().optional().describe("Optional: the quoted price in USD, e.g. 0.01"),
+      },
+    },
+    async ({ url, payTo, amount }) => {
+      const q = new URLSearchParams({ url: String(url ?? "") });
+      if (payTo) q.set("payTo", String(payTo));
+      if (amount !== undefined) q.set("amount", String(amount));
+      const r = await client.free(`/v1/trust/check?${q}`);
+      if (r.status !== 200) return { ...text({ status: r.status, body: r.body }), isError: true };
+      const body = typeof r.body === "object" && r.body ? await checkLumiReceipt(r.body, opts.contrib ?? {}) : r.body;
+      return text(typeof body === "object" && body ? { ...body, note: TRUST_DISCLAIMER } : body);
+    },
+  );
+
   for (const t of PAID_TOOLS) {
     server.registerTool(
       t.name,
@@ -194,9 +215,9 @@ export function buildServer(client, opts = {}) {
         if (!r.paid) return { ...text(r), isError: r.status !== 402 || !!r.error };
         const receipt = { tx: r.receipt?.transaction, network: r.receipt?.network, spent_this_session: r.spent_this_session };
         if (typeof r.body === "string") return text(`${r.body}\n\n[x402 receipt: ${JSON.stringify(receipt)}]`);
-        // Paid trust/check: its lumi_receipt is kept only when signed by a pinned Lumi key.
-        const body = t.name === "lumi_trust_check" ? await checkLumiReceipt(r.body, opts.contrib ?? {}) : r.body;
-        return text({ ...body, mcp_receipt: receipt, ...(t.name === "lumi_trust_check" ? { note: TRUST_DISCLAIMER } : {}) });
+        // Paid high-value check: its lumi_receipt is kept only when signed by a pinned Lumi key.
+        const body = t.name === "lumi_high_value_check" ? await checkLumiReceipt(r.body, opts.contrib ?? {}) : r.body;
+        return text({ ...body, mcp_receipt: receipt, ...(t.name === "lumi_high_value_check" ? { note: TRUST_DISCLAIMER } : {}) });
       },
     );
   }

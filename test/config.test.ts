@@ -20,16 +20,16 @@ describe("config", () => {
     expect(cfg.payTo).toBe(MAINNET_PAY_TO);
     expect(cfg.facilitatorUrl).toBe("https://xrpl-facilitator-mainnet.t54.ai");
     expect(cfg.pricesDrops).toEqual({
-      vendor_report: "15000", trust_check: "15000", verdict: "7500", receipts: "3800", batch_check: "6000",
+      vendor_report: "15000", high_value_check: "3800", verdict: "7500", receipts: "3800", batch_check: "6000",
     });
-    expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_TRUST_CHECK_XRP: "0.02" }).pricesDrops.trust_check).toBe("20000");
+    expect(loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_HIGH_VALUE_CHECK_XRP: "0.02" }).pricesDrops.high_value_check).toBe("20000");
   });
 
   it("requires an explicit PAY_TO off mainnet and validates it", () => {
     expect(() => loadConfig({ XRPL_NETWORK: "xrpl:1" })).toThrow(/PAY_TO/);
     expect(() => loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: "nope" })).toThrow(/PAY_TO/);
-    const cfg = loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_TRUST_CHECK_XRP: "0.1" });
-    expect(cfg.pricesDrops.trust_check).toBe("100000");
+    const cfg = loadConfig({ XRPL_NETWORK: "xrpl:1", PAY_TO: MAINNET_PAY_TO, PRICE_HIGH_VALUE_CHECK_XRP: "0.1" });
+    expect(cfg.pricesDrops.high_value_check).toBe("100000");
     expect(cfg.invoiceSecretIsDevDefault).toBe(true);
   });
 });

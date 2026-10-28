@@ -33,7 +33,7 @@ describe("Bazaar listing copy (owner-approved cleanup 2026-10-25)", () => {
   });
 
   it("trust listings lead with check-before-paying terms", () => {
-    for (const r of ["trust_check", "verdict"] as PaidRoute[]) {
+    for (const r of ["high_value_check", "verdict"] as PaidRoute[]) {
       expect(BAZAAR_ROUTES[r].description, r).toMatch(/before paying/);
       expect(ROUTE_TAGS[r], r).toContain("check-before-paying");
       expect(ROUTE_TAGS[r], r).toContain("pre-payment-check");
@@ -49,7 +49,7 @@ describe("Bazaar listing copy (owner-approved cleanup 2026-10-25)", () => {
       expect(out.description, r).toMatch(/^Errors: /);
     }
     expect(errorDocs("vendor_report").map((e) => e.status)).toEqual(expect.arrayContaining([400, 404]));
-    expect(errorDocs("trust_check").map((e) => e.status)).toContain(400);
+    expect(errorDocs("high_value_check").map((e) => e.status)).toContain(400);
     expect(errorDocs("verdict").map((e) => e.status)).toContain(400);
   });
 });

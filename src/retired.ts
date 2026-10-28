@@ -4,6 +4,8 @@
  * payment handling or 402 quote: a payment header sent to a retired path is ignored and never settled.
  */
 
+import { EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, FREE_TRUST_CHECK_LIMITS } from "./config";
+
 export const RETIRED_ON = "2026-10-25";
 export const RETIRED_USE = "/v1/check";
 
@@ -43,7 +45,24 @@ export function retiredBody(path: string, base = "") {
       : `This endpoint was retired on ${RETIRED_ON}. Lumi now offers x402 seller checks only. Nothing is sold or charged here.`,
     use: `${base}${RETIRED_USE}`,
     use_detail: "Lumi now checks x402 sellers before you pay: GET /v1/check?url=<x402 resource> (free).",
+    current_routes: currentTrustRoutes(base),
     note: "Not charged.",
+  };
+}
+
+/**
+ * Current trust routes, attached to every 410 so a client with an old path can move on without reading docs. Every url is a
+ * working example (no {id} or <placeholder> to fill in); params says what to replace.
+ */
+export function currentTrustRoutes(base = "") {
+  const ex = encodeURIComponent(EXAMPLE_SELLER_URL);
+  return {
+    trust_check: { method: "GET", url: `${base}${FREE_TRUST_CHECK_EXAMPLE}`, params: "url: the x402 resource you are about to pay; optional payTo, amount (USD)", price: `free, ${FREE_TRUST_CHECK_LIMITS.perDay}/day per IP and per key (RateLimit-* headers; 429 names the paid route)` },
+    high_value_check: { method: "GET", url: `${base}${HIGH_VALUE_EXAMPLE}`, params: "url and amount (USD) required; optional payTo", price: `${HIGH_VALUE_PRICING_TEXT} (x402)` },
+    seller_check: { method: "GET", url: `${base}/v1/check?url=${ex}`, params: "url", price: "free" },
+    vendor_lookup: { method: "GET", url: `${base}/v1/trust/vendors?url=${ex}`, params: "url, domain or payTo", price: "free" },
+    vendor_report: { method: "GET", url: `${base}/v1/trust/vendors/${EXAMPLE_VENDOR_ID}/report`, params: "vendor id in the path (list: GET /v1/trust/vendors)", price: "$0.02 (x402)" },
+    docs: `${base}/openapi.json`,
   };
 }
 

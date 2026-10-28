@@ -94,7 +94,7 @@ async function setup(env: Record<string, string> = {}) {
   };
   const check = async (u: string) => (await req("/v1/check?url=" + enc(u))).json() as Promise<any>;
   const trustCheck = async (u: string, headers: Record<string, string> = {}) => {
-    const p = "/v1/trust/check?url=" + enc(u);
+    const p = "/v1/trust/check/high-value?amount=4&url=" + enc(u);
     const r = await req(p, { headers });
     if (r.status !== 402) return { status: r.status, body: await r.json() as any, callsAtQuote: -1 };
     const callsAtQuote = seller.calls;
@@ -157,7 +157,7 @@ describe("liveProbe / compare (unit)", () => {
   });
 });
 
-describe("paid /v1/trust/check is a live check (Phase 2)", () => {
+describe("paid /v1/trust/check/high-value is a live check (Phase 2)", () => {
   it("never contacts the seller before payment; never sends a payment header to the seller; signed live evidence", async () => {
     const s = await setup();
     const before = seller.calls;

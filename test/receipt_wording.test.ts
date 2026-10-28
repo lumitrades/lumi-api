@@ -22,7 +22,7 @@ describe("receipt and test-buy cap wording", () => {
   it("methodology points receipts at vendor reports, Feed lookups and the free verifier", async () => {
     const m = JSON.parse(await setup()("/v1/trust/methodology"));
     const r = JSON.stringify(m);
-    expect(r).toMatch(/vendors\/\{id\}\/report/);
+    expect(r).toMatch(/vendors\/printmoneylab\/report/);
     expect(r).toMatch(/\/v1\/feed\/lookup/);
     expect(r).toMatch(/POST [^"]*\/v1\/trust\/receipts\/verify/);
   });

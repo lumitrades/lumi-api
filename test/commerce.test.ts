@@ -54,12 +54,12 @@ describe("seller monitoring (legacy Monitor terms, simulated as bought before th
   afterEach(() => { PLANS.monitor.retired = true; PLANS.monitor_plus.retired = true; });
   it("enrols with an XRPL payTo proof, rejects reused nonces and endpoints above the cap", async () => {
     const s = setup({ PRICE_TRUST_CHECK_XRP: "0.19", PRICE_TRUST_CHECK_RLUSD: "0.25", PRICE_TRUST_CHECK_USDC: "0.25" }); // above the $0.10 test-buy cap
-    const { r, body, proof } = await enroll(s, [{ url: `${BASE}/v1/verdict?url=https://a.example/x` }, { url: `${BASE}/v1/trust/check?url=https://a.example/x` }]);
+    const { r, body, proof } = await enroll(s, [{ url: `${BASE}/v1/verdict?url=https://a.example/x` }, { url: `${BASE}/v1/trust/check/high-value?url=https://a.example/x&amount=40` }]); // $0.20 at amount=40
     expect(r.status).toBe(201);
     expect(body.enrollment_id).toMatch(/^men_[a-f0-9]{24}$/);
     expect(body.management_token).toMatch(/^lumi_mt_/);
     expect(body.endpoints.map((e: any) => e.url)).toEqual([`${BASE}/v1/verdict?url=https://a.example/x`]);
-    expect(body.rejected[0].url).toBe(`${BASE}/v1/trust/check?url=https://a.example/x`);
+    expect(body.rejected[0].url).toBe(`${BASE}/v1/trust/check/high-value?url=https://a.example/x&amount=40`);
     expect(body.rejected[0].reason).toMatch(/unprofitable/);
     expect(body.test).toBeUndefined();
     // same challenge again

@@ -8,6 +8,10 @@ No API key, no account: each paid tool call is one small payment, signed locally
 
 > Automated observations by Lumi, not a rating, endorsement or guarantee.
 >
+> **Changed in 0.10.0:** `lumi_trust_check` is now **free** (rate-limited per client; over the limit the API answers 429 `free_limit_reached`
+> pointing to the paid route). New paid `lumi_high_value_check` (`url` + `amount`): the same verdict and score plus a live re-check and a signed receipt
+> bound to the amount, priced at 0.5% of the amount (min $0.005, max $0.25). Paying never changes a verdict or score.
+>
 > **Changed in 0.9.9:** this package is now only about checking x402 sellers. Tools for API routes retired on Oct 25, 2026 were removed;
 > those routes answer 410 Gone and are never charged. Use `lumi_check` / `/v1/check` to check a seller before paying.
 > zod is now required at the patched range (GHSA-mrhx-c7xc-m3w5) for every dependency.
@@ -37,7 +41,8 @@ use this package when you want paid tools to pay automatically from your own wal
 | `lumi_check` | free | `url?` `pay_to?` `amount_usd?` `network?` | **Lumi Check** before you pay any x402 seller: allow / warn / block with reasons, the seller's score and a link to its live report. Signed by Lumi and verified locally. Only origin + path of the URL is sent. Fail-open: warn if Lumi is unreachable within 2.5 s |
 | `lumi_scan_seller` | free | `url` | Fetch an x402 seller's 402 quote without paying, plus a dry-run test-buy plan against local caps |
 | `lumi_report_receipt` | free | `endpoint` `network` `tx_hash` … | Sign a receipt for a purchase you already made. `submit: true` is tier 2 sharing: off by default, needs `LUMI_SHARE_RECEIPTS=1` or `lumi-scan sharing on`. Shares the payment's chain and transaction ID, which is public on-chain and linkable to the paying wallet. Verified receipts earn a public badge only |
-| `lumi_trust_check` | paid | $0.02 | Pre-payment check of any x402 URL you are about to pay: payTo/price mismatches vs listings and Lumi's observations. `url` required |
+| `lumi_trust_check` | free | `url` `payTo?` `amount?` | Pre-payment check of any x402 URL you are about to pay: allow / warn / block with coded reasons, payTo/price mismatches vs listings and Lumi's observations. Rate-limited per client (429 `free_limit_reached` points to the paid route) |
+| `lumi_high_value_check` | 0.5% of `amount` (min $0.005, max $0.25) | `url` `amount` `payTo?` | Before a larger payment: the same verdict and score as `lumi_trust_check`, plus a live re-check of the seller and a signed receipt bound to the amount (e.g. `amount` 10 costs $0.05) |
 | `lumi_vendor_report` | paid | $0.02 | Full observation history for one x402 vendor on Lumi's trust list: every quote check (90 days) and paid test-buy with tx hash and delivered yes/no, latency stats and trend, uptime %, agent reports, vendor replies, confidence labels. `vendor_id` required |
 
 How to pay, in order of preference: **1. USDC on Base** (gasless, `EVM_PRIVATE_KEY`), **2. the XRP Ledger** (`XRPL_SEED`):

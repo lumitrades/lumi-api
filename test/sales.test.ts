@@ -62,11 +62,11 @@ describe("sales ledger", () => {
     const { app, appFetch, salesStore } = setup();
     const { account, client } = buyer();
     expect((await wrapFetchWithPayment(appFetch, client)(BASE + "/v1/verdict?url=https%3A%2F%2Fa.example%2Fx")).status).toBe(200);
-    expect((await payXrpl(app, "/v1/trust/check?url=https%3A%2F%2Fa.example%2Fx")).status).toBe(200);
+    expect((await payXrpl(app, "/v1/trust/check/high-value?url=https%3A%2F%2Fa.example%2Fx&amount=4")).status).toBe(200);
     expect(salesStore.rows).toHaveLength(2);
     const [b, x] = salesStore.rows;
     expect(b).toMatchObject({ route: "verdict", routeKey: "verdict", rail: "base", network: "eip155:84532", asset: "USDC", amount: "0.01", usd: 0.01, payer: account.address, isTest: false });
-    expect(x).toMatchObject({ route: "trust_check", routeKey: "trust_check", rail: "xrpl", network: "xrpl:1", asset: "XRP", isTest: false, usd: 0.0198 }); // 0.015 XRP valued at the fallback 1.32 USD/XRP
+    expect(x).toMatchObject({ route: "high_value_check", routeKey: "high_value_check:u200", rail: "xrpl", network: "xrpl:1", asset: "XRP", isTest: false, usd: 0.020064 }); // 0.0152 XRP valued at the fallback 1.32 USD/XRP
     expect(Number(x.amount)).toBeGreaterThan(0);
     expect(x.amount).not.toMatch(/^\d{4,}$/); // XRP, not drops
   });
@@ -126,7 +126,7 @@ describe("sales ledger", () => {
     const app = createApp({ ...ENV, SALES_WEBHOOK_URL: "https://unreachable.invalid/x" } as any, {
       fetch: makeFetch(happyFacilitator()), log: () => {}, now: () => NOW, salesStore: broken as any,
     });
-    expect((await payXrpl(app, "/v1/trust/check?url=https%3A%2F%2Fa.example%2Fx")).status).toBe(200);
+    expect((await payXrpl(app, "/v1/trust/check/high-value?url=https%3A%2F%2Fa.example%2Fx&amount=4")).status).toBe(200);
   });
 
   it("email alert goes through the send_email binding when recipient, sender and binding are all set", async () => {

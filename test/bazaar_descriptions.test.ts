@@ -22,7 +22,7 @@ describe("/health", () => {
 describe("Bazaar resource descriptions", () => {
   it("use the v2 listing text verbatim, with no price in the text, never cut and never instructions to agents", async () => {
     const get = setup();
-    for (const [p, route] of [["/v1/trust/check?url=https://a.example/x", "trust_check"], ["/v1/verdict?url=https://a.example/x", "verdict"]] as const) {
+    for (const [p, route] of [["/v1/trust/check/high-value?url=https://a.example/x&amount=4", "high_value_check"], ["/v1/verdict?url=https://a.example/x", "verdict"]] as const) {
       const d = (await (await get(p)).json()).resource.description as string;
       expect(d.length, p).toBeLessThanOrEqual(500);
       expect(d, p).toBe(BAZAAR_ROUTES[route].description);

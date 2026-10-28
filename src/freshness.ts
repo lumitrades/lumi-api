@@ -95,6 +95,7 @@ export function hasContent(route: string, body: Json): boolean {
     case "lite":
       return typeof body.label === "string";
     case "trust_check":
+    case "high_value_check":
       return typeof body.verdict === "string";
     case "funding":
       return Array.isArray(body.coins) && body.coins.length > 0;

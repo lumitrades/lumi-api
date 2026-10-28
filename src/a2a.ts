@@ -12,7 +12,7 @@ import { planPriceTable } from "./commerce/discovery";
 import { MONITOR_PRICE_TEXT } from "./commerce/plans";
 import type { Trust } from "./trust";
 import type { Config } from "./config";
-import { atomicToUsdc, dropsToXrp } from "./config";
+import { atomicToUsdc, dropsToXrp, EXAMPLE_SELLER_URL, FREE_TRUST_CHECK_LIMITS, HIGH_VALUE_PRICING_TEXT } from "./config";
 import { PAID_ENDPOINTS, priceTable } from "./catalog";
 import { VERSION, paymentNetworks, settledIn } from "./docs";
 import { DISCLAIMER, type CoinRef } from "./views";
@@ -69,25 +69,34 @@ const SKILLS: SkillDef[] = [
   },
   {
     id: "trust_check",
-    route: "trust_check",
-    name: "Should I pay this x402 URL? allow / warn / block (paid)",
-    tags: ["trust", "x402", "payment-safety", "check", "paid"],
-    examples: ["should I pay https://api.example.com/v1/data", "{\"skill\":\"trust_check\",\"url\":\"https://api.example.com/v1/data\",\"payTo\":\"0x...\",\"amount\":\"0.01\"}"],
+    name: "Should I pay this x402 URL? allow / warn / block (free, rate-limited)",
+    tags: ["trust", "x402", "payment-safety", "check", "free"],
+    examples: [`should I pay ${EXAMPLE_SELLER_URL}`, `{"skill":"trust_check","url":"${EXAMPLE_SELLER_URL}","amount":"0.01"}`],
     match: /\b(should i pay|pay[- ]check|trust[- ]check|safe to pay)\b/i,
+    needsUrl: true,
+  },
+  {
+    id: "high_value_check",
+    route: "high_value_check",
+    name: "High-value check before a larger x402 payment: same verdict + live re-check + signed receipt (paid, 0.5% of the amount)",
+    tags: ["trust", "x402", "payment-safety", "check", "high-value", "paid"],
+    examples: [`high-value check ${EXAMPLE_SELLER_URL} amount 10`, `{"skill":"high_value_check","url":"${EXAMPLE_SELLER_URL}","amount":"10"}`],
+    match: /\bhigh[- ]value\b/i,
     needsUrl: true,
   },
 ];
 
 const FREE_DESCRIPTIONS: Record<string, string> = {
+  trust_check: `Should I pay this x402 URL? {"url":"...","payTo":"...","amount":"0.01"} answers allow / warn / block with coded reasons and a Lumi-signed receipt, free: ${FREE_TRUST_CHECK_LIMITS.perDay} checks a day per IP and per key (GET /v1/trust/check). For a larger payment, the paid high_value_check skill adds a live re-check of the seller (${HIGH_VALUE_PRICING_TEXT})`,
   catalog: "Lists every Lumi endpoint with live prices on every payment network (XRP Ledger, Base, Stellar), the MCP and A2A endpoints, and the not-charged-when-Lumi-cannot-answer guarantee.",
   vendor_trust:
-    "Check an x402 seller before paying it: {\"url\":\"...\"}, {\"domain\":\"...\"} or {\"payTo\":\"...\"} (case-insensitive) looks it up in the full CDP x402 Bazaar catalog (free quote checks of listings on a rotating schedule: 'quote-checked, low confidence'; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys ('test-bought', counted per chain: Base USDC for Bazaar listings, XRPL for a small curated list). Answer-only; tx evidence is in the paid trust check. With no arguments: curated XRPL vendor observations; {\"vendor_id\":\"...\"} for one vendor's summary. Observations, not ratings; no match is not a negative finding.",
+    "Check an x402 seller before paying it: {\"url\":\"...\"}, {\"domain\":\"...\"} or {\"payTo\":\"...\"} (case-insensitive) looks it up in the full CDP x402 Bazaar catalog (free quote checks of listings on a rotating schedule: 'quote-checked, low confidence'; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys ('test-bought', counted per chain: Base USDC for Bazaar listings, XRPL for a small curated list). Answer-only; for an allow / warn / block verdict use the free trust_check skill. With no arguments: curated XRPL vendor observations; {\"vendor_id\":\"...\"} for one vendor's summary. Observations, not ratings; no match is not a negative finding.",
   samples: "Free, clearly labelled SAMPLE previews of every paid product (truncated, up to 10 minutes old), with the USD price of each. Use it to see the output shape before paying.",
   seller_monitoring:
     `${MONITOR_PRICE_TEXT.replace(/\.$/, "")}. Seller-funded, no auto-renew, payTo proven by signature; paying never changes a score. Answers with the plan table and enrolment steps; payment happens at GET /v1/monitor/subscribe/{plan}?enrollment=<id>&endpoints=<N>.`,
   trust_feed:
     "Licensed trust data feed: free key with 1,000 lookups/month (wallet signature), $1.50 per 1,000 extra lookups, Feed $99/30 days, Feed Pro $199/30 days (snapshot export, webhooks). Answers with plans, endpoints and licence terms; keys and payments at the REST URLs under /v1/feed.",
-  quote: "Live x402 v2 quote (all accepts options) for a paid skill or path, e.g. {\"skill\":\"trust_check\",\"url\":\"...\"} or \"quote /v1/verdict?url=...\". A 503 means Lumi cannot answer right now and would not sell the call.",
+  quote: "Live x402 v2 quote (all accepts options) for a paid skill or path, e.g. {\"skill\":\"high_value_check\",\"url\":\"...\",\"amount\":\"25\"} or \"quote /v1/verdict?url=...\". A 503 means Lumi cannot answer right now and would not sell the call.",
 };
 
 function priceLine(cfg: Config, route: PaidRoute): string {
@@ -100,7 +109,7 @@ function priceLine(cfg: Config, route: PaidRoute): string {
 export function agentCard(cfg: Config, base: string) {
   const a2aUrl = `${base}/a2a`;
   // Card order leads with the trust check (matching order in SKILLS is unchanged).
-  const LEAD = ["trust_check", "vendor_trust", "vendor_report"];
+  const LEAD = ["trust_check", "high_value_check", "vendor_trust", "vendor_report"];
   const ordered = [...SKILLS.filter((s) => LEAD.includes(s.id)).sort((a, b) => LEAD.indexOf(a.id) - LEAD.indexOf(b.id)), ...SKILLS.filter((s) => !LEAD.includes(s.id))];
   const skills = ordered.map((s) => {
     const ep = s.route ? PAID_ENDPOINTS.find((e) => e.route === s.route)! : undefined;
@@ -313,6 +322,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
   let skill: SkillDef | undefined = typeof data.skill === "string" ? SKILLS.find((s) => s.id === data.skill || s.route === data.skill) : undefined;
   const pathArg = typeof data.path === "string" ? data.path : text.match(QUOTE_PATH_IN_TEXT)?.[0]?.replace(/[.,;:!?]+$/, "");
   if (!skill && /\bquote\b/i.test(text)) skill = SKILLS.find((s) => s.id === "quote");
+  if (!skill && /\bhigh[- ]value\b/i.test(text)) skill = SKILLS.find((s) => s.id === "high_value_check");
   if (!skill && /\b(should i pay|pay[- ]check|trust[- ]check|safe to pay)\b/i.test(text)) skill = SKILLS.find((s) => s.id === "trust_check");
   if (!skill && /\b(vendor|trust)\s+report\b|\breport\b.*\bvendors?\b/i.test(text)) skill = SKILLS.find((s) => s.id === "vendor_report");
   if (!skill && /\b(seller monitoring|monitor(ing)? plans?|monitored by lumi|badge)\b/i.test(text)) skill = SKILLS.find((s) => s.id === "seller_monitoring");
@@ -330,7 +340,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
       skill: "catalog",
       text:
         `Lumi Trades checks x402 sellers before you pay; paid checks settle per call over x402 (${settledIn(cfg)}). ` +
-        "Free here: catalog, quote, vendor_trust, seller_monitoring, trust_feed. Paid skills: " + SKILLS.filter((s) => s.route).map((s) => s.id).join(", ") +
+        "Free here: catalog, quote, trust_check (rate-limited), vendor_trust, seller_monitoring, trust_feed. Paid skills: " + SKILLS.filter((s) => s.route).map((s) => s.id).join(", ") +
         ". Ask e.g. 'should I pay https://example.com/api' or 'quote /v1/verdict?url=https://api.example.com/v1/data' to get the live payment terms." + (skill ? "" : " (No skill matched your message, so here is the catalog.)"),
       data: {
         api: base,
@@ -379,6 +389,21 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     const list = (doc.vendors as { name: string; score: number | null; confidence: string }[]).map((v) => `${v.name}: ${v.score ?? "n/a"} (${v.confidence})`).join("; ");
     return { skill: "vendor_trust", text: `Lumi's automated observations of x402 vendors (not ratings): ${list}. Methodology: ${base}/v1/trust/methodology`, data: doc };
   }
+  if (skill.id === "trust_check") {
+    const u = (typeof data.url === "string" && data.url.trim()) || text.match(/https?:\/\/[^\s"'<>]+/)?.[0];
+    if (!u) return { skill: "trust_check", text: "Which URL? trust_check needs url (the x402 resource you are about to pay), optionally payTo and amount.", data: { error: "missing_url" } };
+    const qs = new URLSearchParams({ url: u.slice(0, 500) });
+    if (typeof data.payTo === "string" && data.payTo.trim()) qs.set("payTo", data.payTo.trim());
+    if (data.amount !== undefined) qs.set("amount", String(data.amount));
+    const r = await deps.quote(`/v1/trust/check?${qs}`);
+    const b = r.body ?? {};
+    if (r.status === 200) {
+      const why = Array.isArray(b.reasons) ? b.reasons.map((x: any) => x?.code ?? x).filter(Boolean).slice(0, 5).join(", ") : "";
+      return { skill: "trust_check", text: `${String(b.verdict ?? "unknown")}${why ? ` (${why})` : ""}. Free check; observations, not a guarantee.${b.high_value_check?.url ? ` High-value check (paid): ${b.high_value_check.url}` : ""}`, data: b };
+    }
+    if (r.status === 429) return { skill: "trust_check", text: `${b.detail ?? "Free trust-check limit reached."} Paid route: ${b.paid_route?.url ?? `${base}/v1/trust/check/high-value`}. Not charged.`, data: b };
+    return { skill: "trust_check", text: `${b.detail ?? b.error ?? `HTTP ${r.status}`}. Not charged.`, data: b };
+  }
   if (skill.id === "samples") {
     const doc = deps.samples ? await deps.samples() : null;
     return {
@@ -410,7 +435,8 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
       if (!u) return { skill: target.id, text: `Which URL? ${target.id} needs url (the x402 resource you are about to pay), optionally payTo and amount.`, data: { error: "missing_url" } };
       const qs = new URLSearchParams({ url: u.slice(0, 500) });
       if (typeof data.payTo === "string" && data.payTo.trim()) qs.set("payTo", data.payTo.trim());
-      if (data.amount !== undefined) qs.set("amount", String(data.amount));
+      const amt = data.amount !== undefined ? String(data.amount) : text.match(/\bamount\s*[:=]?\s*\$?(\d+(?:\.\d+)?)/i)?.[1];
+      if (amt !== undefined) qs.set("amount", amt);
       path = `${ep.template}?${qs}`;
     } else if (target.needsCoin && !coinArg) {
       return { skill: target.id, text: `Which coin? ${target.id} needs one of: ${coins.map((c) => c.symbol).join(", ")}.`, data: { error: "missing_coin", supported: coins.map((c) => c.symbol) } };

@@ -106,8 +106,8 @@ describe("Bazaar metadata", () => {
       expect(sanitizeResourceServiceMetadata(meta as any)).toEqual(meta);
       expect(validateDiscoveryExtension(body.extensions.bazaar).valid).toBe(true);
     }
-    const tc = decodeB64Json((await app.fetch(new Request("http://lumi.test/v1/trust/check?url=https%3A%2F%2Fa.example%2Fx"))).headers.get("PAYMENT-REQUIRED"));
-    expect(Object.keys(tc.extensions.bazaar.info.input.queryParams)).toEqual(["url"]);
+    const tc = decodeB64Json((await app.fetch(new Request("http://lumi.test/v1/trust/check/high-value?url=https%3A%2F%2Fa.example%2Fx&amount=4"))).headers.get("PAYMENT-REQUIRED"));
+    expect(Object.keys(tc.extensions.bazaar.info.input.queryParams).sort()).toEqual(["amount", "url"]);
   });
 });
 
@@ -154,7 +154,7 @@ function setup(cdp: { verify?: Handler; settle?: Handler } = {}, env: Record<str
   };
 }
 
-async function payBase(app: { fetch: (r: Request) => Promise<Response> }, path = "/v1/trust/check?url=https://a.example/x", strip = false) {
+async function payBase(app: { fetch: (r: Request) => Promise<Response> }, path = "/v1/trust/check/high-value?url=https://a.example/x&amount=4", strip = false) {
   const first = await app.fetch(new Request("http://lumi.test" + path));
   const pr = await first.json();
   const account = privateKeyToAccount(generatePrivateKey());

@@ -29,14 +29,15 @@ function setup(opts: { liveStore?: MemoryLiveStore; feedStore?: MemoryFeedStore;
 describe("Stage C: /v1/trust/check", () => {
   it("bare probe without url: standard 402 quote; a payment without url is refused 400 (not charged)", async () => {
     const { get, buy } = setup();
-    const r = await get("/v1/trust/check");
+    expect((await get("/v1/trust/check")).status).toBe(400); // the free route: bare call is a 400 with an example
+    const r = await get("/v1/trust/check/high-value");
     expect(r.status).toBe(402);
     const q: any = await r.json();
     expect(q.accepts.length).toBeGreaterThan(0);
     expect(q.extensions.bazaar).toBeTruthy();
     expect(q.extensions["sign-in-with-x"]).toBeUndefined();
     expect(q.note).toMatch(/\?url=/);
-    const paid = await buy("/v1/trust/check");
+    const paid = await buy("/v1/trust/check/high-value");
     expect(paid.status).toBe(400);
     const j: any = await paid.json();
     expect(j.error).toBe("invalid_query");
@@ -45,8 +46,8 @@ describe("Stage C: /v1/trust/check", () => {
   });
 
   it("allows Lumi itself", async () => {
-    const { buy } = setup();
-    const r = await buy(`/v1/trust/check?url=${encodeURIComponent("https://api.lumitrades.io/v1/signal/BTC")}`);
+    const { get } = setup();
+    const r = await get(`/v1/trust/check?url=${encodeURIComponent("https://api.lumitrades.io/v1/signal/BTC")}`);
     expect(r.status).toBe(200);
     const j: any = await r.json();
     expect(j.kind).toBe("trust_check");
@@ -56,8 +57,8 @@ describe("Stage C: /v1/trust/check", () => {
   });
 
   it("an unknown URL is no_data (legal review M2), not a warning", async () => {
-    const { buy } = setup();
-    const j: any = await (await buy(`/v1/trust/check?url=${encodeURIComponent("https://unknown-seller.test/v1/x")}`)).json();
+    const { get } = setup();
+    const j: any = await (await get(`/v1/trust/check?url=${encodeURIComponent("https://unknown-seller.test/v1/x")}`)).json();
     expect(j.verdict).toBe("unknown");
     expect(j.label).toBe("no_data");
     expect(j.reasons.map((r: any) => r.code)).toContain("not_observed");

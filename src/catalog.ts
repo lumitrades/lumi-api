@@ -1,7 +1,7 @@
 /** Single source of truth for endpoints, prices and descriptions (used by docs, discovery and the paywall). */
 
 import type { Config, PaidRoute } from "./config";
-import { dropsToXrp } from "./config";
+import { dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_LIMITS, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT } from "./config";
 import { LINE_LABEL, productLine } from "./lines";
 
 export interface PaidEndpoint {
@@ -14,6 +14,8 @@ export interface PaidEndpoint {
   template: string;
   summary: string;
   example: string;
+  /** Dynamic price rule (high_value_check); the listed price is the floor. */
+  pricing?: string;
 }
 
 /** Shared buyer guarantee on every paid endpoint. */
@@ -21,14 +23,15 @@ export const NOT_CHARGED = "Not charged on bad input or when Lumi cannot answer 
 
 export const PAID_ENDPOINTS: PaidEndpoint[] = [
   {
-    route: "trust_check",
-    name: "Lumi Trades: check before paying an x402 URL (allow / warn / block)",
+    route: "high_value_check",
+    name: "Lumi Trades: high-value check before paying an x402 URL (priced at 0.5% of the payment)",
     method: "GET",
-    path: "/v1/trust/check",
-    template: "/v1/trust/check",
+    path: "/v1/trust/check/high-value",
+    template: "/v1/trust/check/high-value",
     summary:
-      "Use this before your agent pays an unfamiliar x402 URL: allow / warn / block with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). Query: url (required), payTo and amount (optional: the payTo address and USD price you were quoted, to catch address or price mismatches). block = a concrete mismatch or a paid call that returned nothing; warn = not enough evidence; allow = listing and recent checks agree. Live: after payment Lumi contacts the seller once (an unpaid request; Lumi never pays the seller) and compares its current quote, price, payTo and TLS with Lumi's record; the result is in live, signed as live_evidence. A safety change it finds also shows on the free /v1/check at once. Links the free lookup and, for curated vendors, the $0.02 full report. Observations, not a guarantee. Not charged on bad input.",
-    example: "/v1/trust/check?url=https://api.example.com/v1/data",
+      `Use this before your agent makes a larger x402 payment. The basic GET /v1/trust/check is free (${FREE_TRUST_CHECK_LIMITS.perDay} checks a day per IP and per key); this paid version gives the same allow / warn / block verdict with coded reasons and the same score (paying never changes them), plus: after payment Lumi contacts the seller once (an unpaid request; Lumi never pays the seller) and compares its current quote, price, payTo and TLS with Lumi's record (signed as live_evidence), and a Lumi-signed receipt bound to the stated amount (lumi_receipt, paid: true). Query: url (required), amount (required: the USD amount you are about to pay), payTo (optional, to catch an address mismatch). Price: ${HIGH_VALUE_PRICING_TEXT} Observations, not a guarantee. Not charged on bad input.`,
+    example: HIGH_VALUE_EXAMPLE,
+    pricing: HIGH_VALUE_PRICING_TEXT,
   },
   {
     route: "vendor_report",
@@ -41,8 +44,8 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
       "with status, quoted price and latency; every paid test-buy with amount, ledger tx hash, explorer link and delivered yes/no; latency stats " +
       "(min/p50/p90/p95/max) and the 7-day trend; uptime % over 24h/7d/30d/90d and a daily series; per-endpoint quoted-price history; " +
       "agent reports; vendor replies; score components, sample sizes and confidence labels. Automated observations, not a rating. " +
-      "Not sold (503, not charged) when the vendor has no observation in the last 48 h. The free summary is GET /v1/trust/vendors/{id}.",
-    example: "/v1/trust/vendors/example-vendor/report",
+      "Not sold (503, not charged) when the vendor has no observation in the last 48 h. The free summary is GET /v1/trust/vendors/<vendor id>, e.g. /v1/trust/vendors/" + EXAMPLE_VENDOR_ID + ".",
+    example: `/v1/trust/vendors/${EXAMPLE_VENDOR_ID}/report`,
   },
   {
     route: "receipts",
@@ -52,7 +55,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     template: "/v1/trust/receipts",
     summary:
       "Use this when you want the record behind a seller check: the signed test-buy receipts Lumi holds for one x402 seller, newest first (up to 50). Query: seller (required): a domain, an x402 resource URL or a payTo address. Each receipt has date, endpoint, network (Base, XRP Ledger, Stellar), amount, transaction hash, explorer link and outcome (delivered, not delivered or inconclusive), plus the signed counterparty_delivery_receipt that anyone can verify for free at /v1/trust/receipts/verify. Only Lumi's own test-buys from its published wallets (/v1/check/wallets). Not charged on bad input or when Lumi has no test-buy of the seller (404). Paying never changes a score or label. Observations, not a guarantee.",
-    example: "/v1/trust/receipts?seller=api.example.com",
+    example: `/v1/trust/receipts?seller=${EXAMPLE_SELLER_DOMAIN}`,
   },
   {
     route: "batch_check",
@@ -62,7 +65,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     template: "/v1/check/batch",
     summary:
       "Use this before your agent pays several x402 sellers: up to 10 resource URLs or seller domains in one call (query: urls, comma-separated), each with the same label as the free /v1/check (checks_passed, check_first, checks_failed or no_data), reason codes, conclusive test-buy count, last delivered and last failed dates and an evidence link, in one signed answer (kind lumi_batch_check). Based on Lumi's record: it does not contact the sellers (GET /v1/verdict adds a live check for one URL). Not charged on bad input. Paying never changes a score or label. Observations, not a guarantee.",
-    example: "/v1/check/batch?urls=https://api.example.com/v1/data,data.example.org",
+    example: `/v1/check/batch?urls=${encodeURIComponent(EXAMPLE_SELLER_URL)},${EXAMPLE_SELLER_DOMAIN}`,
   },
 ];
 
@@ -78,7 +81,7 @@ export const VERDICT_ENDPOINT: PaidEndpoint = {
   template: "/v1/verdict",
   summary:
     "Use this before your agent pays an x402 URL or seller domain: one label from the same data and signing key as the free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as_of, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. When paid it is the one-word version of the live check: label_live is the same label after Lumi contacts the seller once at call time (an unpaid request; Lumi never pays the seller) and compares its quote, price, payTo and TLS with Lumi's record, with signed live_evidence. Paying Lumi never changes a result. Observations, not a guarantee. Not charged on bad input.",
-  example: "/v1/verdict?url=https://api.example.com/v1/data",
+  example: `/v1/verdict?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}`,
 };
 
 /** Every endpoint sold over x402 under this config (adds /v1/verdict only in paid mode). */
@@ -115,6 +118,7 @@ export function priceTable(cfg: Config) {
         ? [{ asset: "USDC", amount: cfg.stellar.prices[e.route], network: cfg.stellar.network, chain: cfg.stellar.networkName, token: cfg.stellar.asset, amount_atomic: cfg.stellar.amounts[e.route] }]
         : []),
     ],
+    ...(e.pricing ? { pricing: e.pricing, price_is_floor: true } : {}),
     summary: e.summary,
     example: e.example,
   }));

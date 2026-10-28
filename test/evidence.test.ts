@@ -215,7 +215,7 @@ describe("evidence: lookups and trust/check", () => {
     expect(c.top_clusters).toBeUndefined();
     expect(JSON.stringify(free.body)).not.toContain(H(1));
     expect(free.body.catalog.entries[0].bazaar_quality).toMatchObject({ calls_30d: 50, unique_payers_30d: 4 });
-    const paid = await buy("/v1/trust/check?url=" + encodeURIComponent("https://api.xseller.com/v1/q"));
+    const paid = await buy("/v1/trust/check/high-value?amount=4&url=" + encodeURIComponent("https://api.xseller.com/v1/q"));
     expect(paid.status).toBe(200);
     expect(paid.body.reasons.map((r: any) => r.code)).toEqual(expect.arrayContaining(["bazaar_usage", "organic_payers"]));
     expect(JSON.stringify(paid.body)).not.toMatch(/\bscam\b/i);
@@ -227,7 +227,7 @@ describe("evidence: lookups and trust/check", () => {
     expect(r).toMatchObject({ valid: 1 });
     const { get, buy } = await setup(store);
     const url = encodeURIComponent("https://api.xseller.com/v1/q");
-    const paid = await buy("/v1/trust/check?url=" + url);
+    const paid = await buy("/v1/trust/check/high-value?amount=4&url=" + url);
     const codes = paid.body.reasons.map((x: any) => x.code);
     expect(codes).not.toContain("organic_payers");
     expect(codes).toEqual(expect.arrayContaining(["organic_payers_qualified", "self_funded_loop"]));
@@ -257,7 +257,7 @@ describe("evidence: lookups and trust/check", () => {
     expect(free.body.catalog.entries[0].third_party.vet402).toMatchObject({ license: "CC BY 4.0", l0: { verdict: "fail" } });
     // The free lookup by exact URL already sends the priority signal (same rule as the paid check since Oct 23 2026).
     expect(ev.queue.get("https://api.bseller.com/v1/q")).toMatchObject({ status: "queued", hits: 1 });
-    const u = "/v1/trust/check?url=" + encodeURIComponent("https://api.bseller.com/v1/q");
+    const u = "/v1/trust/check/high-value?amount=4&url=" + encodeURIComponent("https://api.bseller.com/v1/q");
     await req(u); // unpaid quote: never queues or adds hits
     expect(ev.queue.size).toBe(1);
     expect(ev.queue.get("https://api.bseller.com/v1/q")!.hits).toBe(1);

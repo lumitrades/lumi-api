@@ -257,7 +257,7 @@ describe("Watch trial (internal id watch_plus_trial)", () => {
 
   it("caps test-buys at the trial total, freezes read-only at the end and never converts", async () => {
     const s = setup({ PRICE_INSTITUTIONAL_XRP: "0.03", PRICE_INSTITUTIONAL_RLUSD: "0.09", PRICE_INSTITUTIONAL_USDC: "0.09" });
-    const ep = `${BASE}/v1/trust/check?url=https://a.example/x`;
+    const ep = `${BASE}/v1/trust/check/high-value?url=https://a.example/x&amount=4`;
     const e = await enroll(s, [{ url: ep }]);
     const h = { Authorization: `Bearer ${e.management_token}` };
     const { c } = await trialProof(s);

@@ -802,7 +802,7 @@ export function createCatalog(deps: CatalogDeps) {
     const u = q?.url ? `?url=${encodeURIComponent(q.url)}` : "?url=<resource>";
     return {
       free: "answer only: tier and the yes/no outcome of the latest quote check and test-buys",
-      paid: `Tx hashes, explorer links, check history, latency and domain age: ${base}/v1/trust/check${u} ($0.02) or, for curated vendors, ${base}/v1/trust/vendors/{id}/report ($0.02).`,
+      paid: `Tx hashes, explorer links, check history, latency and domain age: ${base}/v1/trust/check${u} (free, rate-limited; ${base}/v1/trust/check/high-value adds a live re-check, 0.5% of the amount) or, for curated vendors, the vendor report ${base}/v1/trust/vendors/printmoneylab/report ($0.02; any vendor id from /v1/trust/vendors).`,
     };
   }
 

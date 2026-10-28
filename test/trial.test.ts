@@ -69,8 +69,8 @@ describe("free trial (x402 sign-in-with-x)", () => {
     expect(ext.supportedChains).toEqual([{ chainId: "eip155:84532", type: "eip191" }, { chainId: "xrpl:1", type: "xrpl" }]);
     expect(body.extensions.bazaar).toBeTruthy();
     expect(body.accepts).toEqual(expect.arrayContaining([expect.objectContaining({ network: "eip155:84532" })]));
-    const inst = await (await appFetch(BASE + "/v1/trust/check?url=https://a.example/x", TRIAL)).json();
-    expect(inst.extensions["sign-in-with-x"].info.resources).toEqual([BASE + "/v1/trust/check?url=https://a.example/x"]);
+    const inst = await (await appFetch(BASE + "/v1/trust/check/high-value?url=https://a.example/x&amount=4", TRIAL)).json();
+    expect(inst.extensions["sign-in-with-x"].info.resources).toEqual([BASE + "/v1/trust/check/high-value?url=https://a.example/x&amount=4"]);
   });
 
   it("official wrapFetchWithSIWx client gets 3 free calls per wallet, never charged, then the normal 402", async () => {
@@ -96,8 +96,8 @@ describe("free trial (x402 sign-in-with-x)", () => {
   it("caps per IP per day, refuses replayed nonces, other URLs, empty wallets and bad signatures", async () => {
     const { appFetch, setIp } = setup();
     // one IP: 3 trial calls a day across wallets
-    for (let i = 0; i < 3; i++) expect((await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/trust/check?url=https://a.example/x", TRIAL)).status).toBe(200);
-    const blocked = await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/trust/check?url=https://a.example/x", TRIAL);
+    for (let i = 0; i < 3; i++) expect((await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/trust/check/high-value?url=https://a.example/x&amount=4", TRIAL)).status).toBe(200);
+    const blocked = await wrapFetchWithSIWx(appFetch, privateKeyToAccount(generatePrivateKey()))(BASE + "/v1/trust/check/high-value?url=https://a.example/x&amount=4", TRIAL);
     expect((await blocked.json()).trial.reason).toBe("ip_daily_cap");
     setIp("198.51.100.9");
 
@@ -108,7 +108,7 @@ describe("free trial (x402 sign-in-with-x)", () => {
     expect((await appFetch(BASE + "/v1/verdict?url=https://a.example/x", { headers: { "SIGN-IN-WITH-X": header } })).status).toBe(200);
     const replay = await appFetch(BASE + "/v1/verdict?url=https://a.example/x", { headers: { "SIGN-IN-WITH-X": header } });
     expect((await replay.json()).trial.reason).toBe("nonce_used");
-    const other = await appFetch(BASE + "/v1/trust/check?url=https://a.example/x", { headers: { "SIGN-IN-WITH-X": header } });
+    const other = await appFetch(BASE + "/v1/trust/check/high-value?url=https://a.example/x&amount=4", { headers: { "SIGN-IN-WITH-X": header } });
     expect((await other.json()).trial.reason).toBe("challenge_not_for_this_url");
 
     const forged = JSON.parse(Buffer.from(header, "base64").toString());

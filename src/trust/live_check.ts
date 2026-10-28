@@ -1,5 +1,5 @@
 /**
- * Live check (paid /v1/trust/check, $0.02): Lumi contacts the seller at call time (one unpaid request, never a payment
+ * Live check (paid /v1/trust/check/high-value, 0.5% of the amount, min $0.005): Lumi contacts the seller at call time (one unpaid request, never a payment
  * header), reads its x402 quote and compares quote, price, payTo and TLS against the last values Lumi has on record.
  * The free /v1/check stays cached; any safety-relevant change found here is also stored as a live alert that the free
  * check shows at once (safety is never held behind the paid call).

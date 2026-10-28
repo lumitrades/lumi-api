@@ -191,7 +191,7 @@ describe("earned-only Tested by Lumi badge (/v1/badge/{key})", () => {
       return req(p, { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(xrp) } });
     };
     // 1. paid trust check for both sellers
-    const paid = await pay(`/v1/trust/check?url=${encodeURIComponent("https://api.cryptobuddy.com/x?k=SECRET")}`);
+    const paid = await pay(`/v1/trust/check/high-value?amount=4&url=${encodeURIComponent("https://api.cryptobuddy.com/x?k=SECRET")}`);
     expect(paid.status).toBe(200);
     const pb = await paid.json();
     expect((await verifySignedResponse(pb.lumi_receipt, { trusted: [PUB], now: NOW })).ok).toBe(true);

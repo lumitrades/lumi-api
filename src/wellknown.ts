@@ -56,7 +56,8 @@ export function agentsJson(base: string) {
     },
     sources: [{ id: "lumi", path: `${base}/openapi.json` }],
     flows: [
-      flow("trust_check", "Should I pay this x402 URL?", "allow / warn / block with coded reasons for one x402 resource URL, optionally checking the quoted payTo and USD amount.", "trust_check"),
+      flow("trust_check", "Should I pay this x402 URL?", "allow / warn / block with coded reasons for one x402 resource URL, optionally checking the quoted payTo and USD amount. Free, rate-limited.", "trust_check"),
+      flow("high_value_check", "High-value check before a larger payment", "The same verdict as trust_check plus a live re-check and a receipt bound to the stated amount; priced at 0.5% of the amount (min $0.005, max $0.25).", "high_value_check"),
       flow("vendor_report", "x402 vendor report", "Full observation history for one curated vendor: quote checks, test-buys with tx hashes, uptime and latency.", "vendor_report"),
       flow("verdict", "One-label pre-payment check", "checks_passed / check_first / checks_failed / no_data for one x402 resource URL, from the same data as the free GET /v1/check.", "verdict"),
     ],

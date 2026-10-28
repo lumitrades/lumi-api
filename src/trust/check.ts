@@ -5,7 +5,7 @@ import { DECISION_TO_LABEL, LABELS, DISPUTE_URL, type Label } from "./verdict";
  *
  *   GET /v1/check?url=&payTo=&amount=&network=   free, rate-limited like free lookups: allow / warn / block, reason
  *                                                codes, the seller's current Lumi score, a link, and a signed receipt.
- *                                                Answer-only (codes, no tx hashes); the paid /v1/trust/check adds detail.
+ *                                                Answer-only (codes, no tx hashes); the free, rate-limited /v1/trust/check adds detail.
  *   GET /v1/check/keys                           Lumi's public signing key(s) (also /.well-known/lumi-keys.json)
  *   GET /v1/badge/{key}.json                     earned-only badge: signed JSON verdict, valid BADGE_SIGNED_TTL_SEC
  *   GET /v1/badge/{key}.svg                      rendered from the same decision; "no badge" when not earned

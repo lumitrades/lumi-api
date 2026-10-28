@@ -5,7 +5,7 @@ import { DATA, NOW, FACILITATOR, PAY_TO, PAYER, makeFetch, happyFacilitator, jso
 
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, OWNER_MCP_KEY: "owner-key-for-tests-0123456789abcdef", INVOICE_SECRET: "test-secret" };
 const BASE = "http://lumi.test";
-const ROUTE = "/v1/trust/check?url=https://api.example.com/x";
+const ROUTE = "/v1/trust/check/high-value?url=https://api.example.com/x&amount=4";
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64");
 const EVM_PAYER = "0x1111111111111111111111111111111111111111";
 
@@ -52,7 +52,7 @@ describe("refused payment attempts are logged (no payer address or signature)", 
       expect(reasons.some((r) => r.startsWith("verify_failed") || r.includes("insufficient_funds") || r.startsWith("invalid"))).toBe(true);
       // a v1 payload has no `accepted` block, so the server refuses it as an unusable header; the event still says v1
       const v1f = fails.find((f) => f.x402_version === 1)!;
-      expect(v1f).toMatchObject({ route: "/v1/trust/check", status: 402, reason: "invalid_payment_signature_header", network: "base", scheme: "exact", ua_family: "x402-fetch/0.6" });
+      expect(v1f).toMatchObject({ route: "/v1/trust/check/high-value", status: 402, reason: "invalid_payment_signature_header", network: "base", scheme: "exact", ua_family: "x402-fetch/0.6" });
       expect(fails.find((f) => f.network === "undecodable")).toMatchObject({ reason: "invalid_payment_signature_header", x402_version: null });
       expect(fails.find((f) => f.reason === "payment_requirements_mismatch")).toMatchObject({ network: "xrpl:1", x402_version: 2 });
       for (const f of fails) expect(typeof f.ts).toBe("number");
@@ -70,7 +70,7 @@ describe("refused payment attempts are logged (no payer address or signature)", 
       expect(s.payment_failures.total).toBe(4);
       expect(s.payment_failures.by_reason.invalid_payment_signature_header).toBe(2);
       expect(s.payment_failures.by_x402_version).toMatchObject({ v1: 1, v2: 2, unknown: 1 });
-      expect(s.payment_failures.by_route["/v1/trust/check"]).toBe(4);
+      expect(s.payment_failures.by_route["/v1/trust/check/high-value"]).toBe(4);
       expect(s.payment_failures.recent.length).toBe(4);
       expect(JSON.stringify(s)).not.toContain(PAYER);
     } finally {

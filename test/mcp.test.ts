@@ -88,7 +88,7 @@ describe("remote MCP: protocol", () => {
     expect(r.headers.get("Content-Type")).toBe("text/event-stream");
     const t = await r.text();
     expect(t).toMatch(/^event: message\ndata: /);
-    expect(JSON.parse(t.split("data: ")[1]).result.tools.length).toBe(9);
+    expect(JSON.parse(t.split("data: ")[1]).result.tools.length).toBe(10);
   });
 });
 
@@ -99,7 +99,7 @@ describe("remote MCP: tools", () => {
     const src = readFileSync(join(__dirname, "..", "mcp", "src", "index.js"), "utf8");
     const wrapper = [...src.matchAll(/name: "(lumi_[a-z0-9_]+)"/g), ...src.matchAll(/registerTool\(\s*"(lumi_[a-z0-9_]+)"/g)].map((m) => m[1]);
     expect(new Set(names)).toEqual(new Set(wrapper));
-    expect(names).toHaveLength(9);
+    expect(names).toHaveLength(10);
     for (const gone of ["lumi_funding", "lumi_fear_greed", "lumi_institutional_brief"]) expect(names).not.toContain(gone);
   });
 
@@ -137,25 +137,39 @@ describe("remote MCP: tools", () => {
     expect(gone.status).toBe(410);
   });
 
-  it("paid tool without a key: payment explanation, no charge, no facilitator call", async () => {
+  it("lumi_trust_check is free without a key: a verdict, no payment, no facilitator call", async () => {
     const { call, fac } = setup();
     const r = await call("lumi_trust_check", { url: "https://a.example/x" });
+    expect(r.body.result.isError).toBeUndefined();
+    const tc = JSON.parse(textOf(r.body));
+    expect(tc).toMatchObject({ kind: "trust_check", access: { mode: "free", charged: false } });
+    expect(["allow", "warn", "block", "unknown"]).toContain(tc.verdict);
+    expect(fac.calls).toHaveLength(0);
+  });
+
+  it("paid tool without a key: payment explanation, no charge, no facilitator call", async () => {
+    const { call, fac } = setup();
+    const r = await call("lumi_high_value_check", { url: "https://a.example/x", amount: "4" });
     expect(r.status).toBe(200);
     expect(r.body.result.isError).toBe(true);
     const t = textOf(r.body);
-    expect(t).toMatch(/0\.015 XRP/);
+    expect(t).toMatch(/0\.0152 XRP/);
     expect(t).toMatch(/x402/);
     expect(t).toMatch(/lumi-trades-mcp/);
-    expect(t).toContain(`${BASE}/v1/trust/check?url=`);
+    expect(t).toContain(`${BASE}/v1/trust/check/high-value?`);
+    expect(JSON.parse(t.slice(t.indexOf("\n\n{") + 2))).toMatchObject({ price_usd: "0.02" });
+    const bad = await call("lumi_high_value_check", { url: "https://a.example/x", amount: "-1" });
+    expect(bad.body.result.isError).toBe(true);
+    expect(textOf(bad.body)).toMatch(/amount must be/);
     expect(fac.calls).toHaveLength(0);
     // a wrong bearer is just public access
-    const w = await call("lumi_trust_check", { url: "https://a.example/x" }, { headers: { Authorization: "Bearer wrong" } });
+    const w = await call("lumi_high_value_check", { url: "https://a.example/x", amount: "4" }, { headers: { Authorization: "Bearer wrong" } });
     expect(textOf(w.body)).toMatch(/payment_required/);
   });
 
   it("paid tool with the owner key (header and path) returns data, free", async () => {
     const { call, fac, logs } = setup();
-    const viaHeader = await call("lumi_trust_check", { url: "https://a.example/x" }, { headers: { Authorization: `Bearer ${KEY}` } });
+    const viaHeader = await call("lumi_high_value_check", { url: "https://a.example/x", amount: "4" }, { headers: { Authorization: `Bearer ${KEY}` } });
     expect(viaHeader.body.result.isError).toBeUndefined();
     const tc = JSON.parse(textOf(viaHeader.body));
     expect(tc).toMatchObject({ kind: "trust_check", access: { mode: "owner", charged: false } });
