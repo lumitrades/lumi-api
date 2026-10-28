@@ -52,6 +52,7 @@ import { lookupError, withSafety } from "./trust/index";
 const SAFETY_WARN_CODES = new Set(["pay_to_unrecognised", "quoted_price_differs", "paid_no_data", "xrpl_paid_no_data", "recent_buy_failed", "checks_failed_pending_review"]);
 import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
 import { signingSecretSeparate } from "./trust/lumi_keys";
+import { summaryFor } from "./trust/summary";
 import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, BADGE_WINDOW_DAYS, earnedBadgeSvg, noBadgeSvg, testedBadgeRules, utcDay } from "./trust/check";
 import { curatedByHost, badgeDocs } from "./trust/badge";
 import type { LookupQuery } from "./trust/catalog";
@@ -746,7 +747,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     const score = host ? scoreView(await liveScore(host), verdict.matched?.tier, notScoredFor(exact, dom)) : null;
     const link = host ? `${base}/trust/v/${encodeURIComponent(host)}` : `${base}/v1/trust/vendors?payTo=${encodeURIComponent(payTo!)}`;
-    const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict, score, link, paid: false });
+    const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict, score, link, paid: false, summary: summaryFor(exact, dom, verdict?.label ?? null) });
     const t = now();
     const receipt = await signResponse("lumi_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
     return json(200, {
@@ -940,14 +941,18 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         if (hit) sanctions.refuse(hv ? "high_value_check" : "trust_check", hit, { url_host: host });
       }
       const t = now();
-      const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: body, score: scoreView(await liveScore(host), (body as any).matched?.tier, notScoredFor(exact, dom)), link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: hv });
+      // Plain-English facts line, first in the body and inside the signed receipt.
+      const sum = summaryFor(exact, dom, ((body as any).label ?? null));
+      const payload = checkPayload({ query: { url: clean, payTo, amountUsd, network }, verdict: body, score: scoreView(await liveScore(host), (body as any).matched?.tier, notScoredFor(exact, dom)), link: `${base}/trust/v/${encodeURIComponent(host)}`, paid: hv, summary: sum });
       (body as any).lumi_receipt = await signResponse("trust_check", payload, await signKey(), t, CHECK_SIGNED_TTL_SEC);
       if (hv) (body as any).high_value = { amount_usd: amountUsd, price_usd: highValuePriceUsd(amountUsd!), pricing: HIGH_VALUE_PRICING_TEXT, adds: HIGH_VALUE_ADDS };
       else (body as any).high_value_check = { url: `${base}/v1/trust/check/high-value?${new URLSearchParams({ url: clean, ...(payTo ? { payTo } : {}), amount: amountRaw && amountUsd! > 0 ? String(amountUsd) : "10" })}`, pricing: HIGH_VALUE_PRICING_TEXT, adds: HIGH_VALUE_ADDS };
       const meta = metaFrom(t, t + 86_400_000, t + 30 * 60_000, t);
+      const m = withMeta(body as Record<string, unknown>, meta);
+      const out = { kind: m.kind, timestamp: m.timestamp, source: m.source, summary: sum.summary, summary_facts: sum.summary_facts, ...m };
       // Runs once the check is served, free, paid or free trial: the same priority signal either way.
       return {
-        ok: true, route: hv ? "high_value_check" : "trust_check", body: isoTimestamps(withMeta(body as Record<string, unknown>, meta)), onServed: () => prioritySignal(body, exact, hv ? "high_value_check" : "trust_check"),
+        ok: true, route: hv ? "high_value_check" : "trust_check", body: isoTimestamps(out), onServed: () => prioritySignal(body, exact, hv ? "high_value_check" : "trust_check"),
         ...(hv ? { enrich: () => liveCheck(clean, host, exact, dom, { url: clean, payTo, amountUsd, network }) } : {}),
       };
     } catch (e) {

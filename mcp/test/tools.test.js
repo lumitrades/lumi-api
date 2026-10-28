@@ -114,3 +114,19 @@ test("registry server.json points to lumitrades.io and a working repository", ()
   assert.equal(srv.repository.url, "https://github.com/lumitrades/lumi-api");
   assert.ok(srv.description.length <= 100);
 });
+
+test("lumi_trust_check leads with the plain summary line when the API sends one (agent-summary-line-1028)", async () => {
+  const line = "Lumi test-bought this listing 3 times; 2 delivered, 1 did not deliver (last test-buy Oct 28, 2026). Lumi's check result: Check first. Not a guarantee.";
+  const fetchStub = async () => new Response(JSON.stringify({ kind: "trust_check", verdict: "warn", summary: line, summary_facts: { test_buys: 3 } }), { status: 200, headers: { "content-type": "application/json" } });
+  const server = buildServer(createClient(loadSettings({}), { fetch: fetchStub }));
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  await server.connect(a);
+  const c = new Client({ name: "t", version: "0" });
+  await c.connect(b);
+  const r = await c.callTool({ name: "lumi_trust_check", arguments: { url: "https://api.example.com/x" } });
+  await c.close();
+  const body = JSON.parse(r.content[0].text);
+  assert.equal(Object.keys(body)[0], "summary");
+  assert.equal(body.summary, line);
+  assert.equal(body.summary_facts.test_buys, 3);
+});

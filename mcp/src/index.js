@@ -74,7 +74,8 @@ export function buildServer(client, opts = {}) {
       const r = await client.free(`/v1/trust/check?${q}`);
       if (r.status !== 200) return { ...text({ status: r.status, body: r.body }), isError: true };
       const body = typeof r.body === "object" && r.body ? await checkLumiReceipt(r.body, opts.contrib ?? {}) : r.body;
-      return text(typeof body === "object" && body ? { ...body, note: TRUST_DISCLAIMER } : body);
+      // summary (a plain facts line the agent can show its user verbatim) leads the result.
+      return text(typeof body === "object" && body ? { ...(body.summary ? { summary: body.summary } : {}), ...body, note: TRUST_DISCLAIMER } : body);
     },
   );
 

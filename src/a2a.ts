@@ -399,7 +399,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     const b = r.body ?? {};
     if (r.status === 200) {
       const why = Array.isArray(b.reasons) ? b.reasons.map((x: any) => x?.code ?? x).filter(Boolean).slice(0, 5).join(", ") : "";
-      return { skill: "trust_check", text: `${String(b.verdict ?? "unknown")}${why ? ` (${why})` : ""}. Free check; observations, not a guarantee.${b.high_value_check?.url ? ` High-value check (paid): ${b.high_value_check.url}` : ""}`, data: b };
+      return { skill: "trust_check", text: `${typeof b.summary === "string" ? `${b.summary} ` : ""}Verdict: ${String(b.verdict ?? "unknown")}${why ? ` (${why})` : ""}. Free check; observations, not a guarantee.${b.high_value_check?.url ? ` High-value check (paid): ${b.high_value_check.url}` : ""}`, data: b };
     }
     if (r.status === 429) return { skill: "trust_check", text: `${b.detail ?? "Free trust-check limit reached."} Paid route: ${b.paid_route?.url ?? `${base}/v1/trust/check/high-value`}. Not charged.`, data: b };
     return { skill: "trust_check", text: `${b.detail ?? b.error ?? `HTTP ${r.status}`}. Not charged.`, data: b };

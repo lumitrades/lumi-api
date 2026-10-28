@@ -882,6 +882,10 @@ export function catalogView(row: CatalogRow, buys: BuyRow[], dom: DomainRow | un
           ...(b.corrected_at ? { corrected_at: iso(b.corrected_at), corrections: "https://api.lumitrades.io/v1/monitor/corrections" } : {}),
         }))
       : [],
+    // Every recorded test-buy of this listing (purchases above is the newest 5 only); same shape as the free view.
+    test_buys: buys.length
+      ? { count: buys.length, last_at: iso(buys[0].ts), last_data_returned: dataReturnedView(buys[0]), last_delivery: deliveryState(buys[0]), ...deliveryCounts(buys) }
+      : { count: 0 },
     reachability: reachView(row),
     listed_until: row.last_seen < now - DELISTED_AFTER_MS ? iso(row.last_seen) : null,
   };

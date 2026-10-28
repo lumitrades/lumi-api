@@ -107,10 +107,14 @@ export function checkPayload(o: {
   score: Record<string, unknown> | null;
   link: string;
   paid: boolean;
+  /** Plain-English facts line (src/trust/summary.ts), signed with the rest. */
+  summary?: { summary: string; summary_facts: Record<string, unknown> } | null;
 }) {
   const v = o.verdict;
   const reasons = (Array.isArray(v.reasons) ? v.reasons : []).map((r: any) => ({ code: String(r.code), severity: String(r.severity) }));
   return {
+    // Facts only, for an agent to show its user verbatim (test-buy counts, delivered, last test-buy date, label).
+    ...(o.summary ? { summary: o.summary.summary, summary_facts: o.summary.summary_facts } : {}),
     decision: String(v.verdict) as "allow" | "warn" | "block" | "unknown",
     // Shared label set. The legacy decision stays for existing clients; the mapping is in /v1/verdict/rules.
     label: (v.label ?? DECISION_TO_LABEL[String(v.verdict) as keyof typeof DECISION_TO_LABEL] ?? "no_data") as Label,

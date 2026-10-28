@@ -510,7 +510,8 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
         const qs = new URLSearchParams(Object.entries({ url: u, payTo: str(args.payTo), amount: args.amount === undefined ? undefined : String(args.amount) }).filter(([, v]) => v) as [string, string][]);
         // Free and rate-limited; 429 carries the paid high-value route.
         const r = await deps.quote(`/v1/trust/check?${qs}`);
-        return text(r.status === 200 ? { ...r.body, note: TRUST_DISCLAIMER } : r.body, r.status !== 200);
+        // summary (a plain facts line the agent can show its user verbatim) leads the result.
+        return text(r.status === 200 ? { ...(r.body?.summary ? { summary: r.body.summary } : {}), ...r.body, note: TRUST_DISCLAIMER } : r.body, r.status !== 200);
       }
       case "lumi_verdict": {
         const u = str(args.url)?.trim();
