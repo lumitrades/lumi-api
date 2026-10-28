@@ -26,6 +26,8 @@ export const WALLET_RETENTION_DAYS = 90;
 /** Most distinct recipients matched against Lumi's records per call (each match is one lookup). */
 export const WALLET_MAX_SELLERS = 15;
 /** Two payments to the same recipient, same amount and asset, this close together: flagged as a possible duplicate. */
+/** Most recipients looked up per call (busy wallets: the rest are counted as not checked). */
+export const WALLET_MAX_LOOKUPS = 40;
 export const DUPLICATE_WINDOW_MS = 120_000;
 export const WALLET_COMING_LATER = ["weekly reports", "alerts", "longer history"] as const;
 

@@ -228,6 +228,17 @@ describe("GET /v1/wallet/check", () => {
     expect(b.source.complete).toBe(true);
   });
 
+  it("busy wallet: looks up at most 40 recipients and says how many were not checked", async () => {
+    const txs = Array.from({ length: 45 }, (_, k) => ({
+      hash: "B" + k, close_time_iso: iso(NOW - (k + 1) * 60_000),
+      tx_json: { TransactionType: "Payment", Account: XWALLET, Destination: "r" + String(k).padStart(2, "0") + "x".repeat(30), DeliverMax: "1000" }, meta: { TransactionResult: "tesSUCCESS", delivered_amount: "1000" },
+    }));
+    const s = await setup({ xrpl: { result: { transactions: txs } } });
+    const b = (await s.wc(XWALLET)).body;
+    expect(b.other_recipients).toBe(40);
+    expect(b.unchecked_recipients).toBe(5);
+    expect(b.summary).toContain("5 older ones were not checked.");
+  });
   it("XRPL read failure is not an all-clear", async () => {
     const s = await setup({ xrpl: { result: { error: "actNotFound" } } });
     const b = (await s.wc(XWALLET)).body;

@@ -54,7 +54,7 @@ const SAFETY_WARN_CODES = new Set(["pay_to_unrecognised", "quoted_price_differs"
 import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
 import { signingSecretSeparate } from "./trust/lumi_keys";
 import { summaryFor } from "./trust/summary";
-import { chainOf, CHAIN_NETWORK, WALLET_RETENTION_DAYS, WALLET_MAX_SELLERS, WALLET_COMING_LATER, WALLET_CHECK_VERSION, readXrpl, readStellar, recipientsFromInflow, groupPayments, sellerFlags, walletSummary, paymentsLine, day as walletDay, type Recipient } from "./trust/wallet_check";
+import { chainOf, CHAIN_NETWORK, WALLET_RETENTION_DAYS, WALLET_MAX_SELLERS, WALLET_MAX_LOOKUPS, WALLET_COMING_LATER, WALLET_CHECK_VERSION, readXrpl, readStellar, recipientsFromInflow, groupPayments, sellerFlags, walletSummary, paymentsLine, day as walletDay, type Recipient } from "./trust/wallet_check";
 import { LUMI_WALLETS } from "./trust/evidence";
 import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, BADGE_WINDOW_DAYS, earnedBadgeSvg, noBadgeSvg, testedBadgeRules, utcDay } from "./trust/check";
 import { curatedByHost, badgeDocs } from "./trust/badge";
@@ -652,9 +652,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     recipients = recipients.filter((x) => !own.has(x.to.toLowerCase()) && x.to.toLowerCase() !== address.toLowerCase());
     const sellers: any[] = [];
-    let other = 0, more = 0, matched = 0;
+    let other = 0, more = 0, matched = 0, looked = 0, unchecked = 0;
     for (const rec of recipients) {
       if (matched >= WALLET_MAX_SELLERS) { more++; continue; }
+      if (looked >= WALLET_MAX_LOOKUPS) { unchecked++; continue; }
+      looked++;
       let doc: any = null, v: any = null;
       try {
         doc = await trust.lookup({ payTo: rec.to } as LookupQuery, base, { free: true });
@@ -690,7 +692,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     }
     const summary = readError && !recipients.length
       ? (readError === "account_not_found" ? "Lumi could not find this account on the ledger, so it has no payments to list." : "Lumi could not read this wallet's payments right now; this is not an all-clear. Try again later.")
-      : walletSummary(chain, sellers.map((s) => ({ flags: s.flags, tested: (s.summary_facts?.test_buys ?? 0) > 0 })), other, more);
+      : walletSummary(chain, sellers.map((s) => ({ flags: s.flags, tested: (s.summary_facts?.test_buys ?? 0) > 0 })), other, more)
+        + (unchecked ? ` Lumi looked up the ${WALLET_MAX_LOOKUPS} most recently paid recipients; ${unchecked} older one${unchecked === 1 ? " was" : "s were"} not checked.` : "");
     return json(200, {
       kind: "wallet_check",
       version: WALLET_CHECK_VERSION,
@@ -701,6 +704,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       sellers,
       ...(more ? { more_sellers: more, more_sellers_note: `Only the ${WALLET_MAX_SELLERS} most recently paid sellers are shown.` } : {}),
       other_recipients: other,
+      ...(unchecked ? { unchecked_recipients: unchecked } : {}),
       other_recipients_note: "Recipients Lumi has no x402 seller record of are counted, never listed (they may be personal transfers).",
       source: { read: source, window, complete, ...(readError ? { error: readError } : {}) },
       not_included: [
