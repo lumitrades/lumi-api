@@ -23,26 +23,6 @@ function appFor(env: Env): App {
   return app;
 }
 
-/** Header that keeps the app's own Cache-Control on the stored copy. Cloudflare's zone "Browser Cache TTL" (4 h by default)
- * rewrites Cache-Control on Cache-API hits, which would let clients keep trust lookups for 4 h instead of 5 min. */
-const ORIGIN_CC = "X-Lumi-Cache-Control";
-
-/** A cache hit with the app's original Cache-Control restored (and the helper header dropped). */
-export function restoreHit(hit: Response): Response {
-  const h = new Headers(hit.headers);
-  const cc = h.get(ORIGIN_CC);
-  if (cc) h.set("Cache-Control", cc);
-  h.delete(ORIGIN_CC);
-  return new Response(hit.body, { status: hit.status, statusText: hit.statusText, headers: h });
-}
-
-/** The copy stored in the edge cache: the same response plus the helper header. */
-export function storable(res: Response): Response {
-  const h = new Headers(res.headers);
-  h.set(ORIGIN_CC, res.headers.get("Cache-Control") ?? "");
-  return new Response(res.clone().body, { status: res.status, statusText: res.statusText, headers: h });
-}
-
 /**
  * Cache key for the public badge paths: origin + lowercased path, no query string and no trailing slash, so
  * `?v=123` cache-busting or case variants cannot turn into extra D1 reads. GET and HEAD share the entry.

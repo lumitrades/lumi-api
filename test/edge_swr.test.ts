@@ -88,7 +88,7 @@ describe("edge cache: stale-while-revalidate, coalescing, deadline, crawler limi
     expect(await r2.json()).toEqual({ n: 7 });
   });
 
-  it("a burst crawler gets 429 + Retry-After; other clients are unaffected; only 200/400/404 public responses are stored", async () => {
+  it("a burst crawler gets 429 + Retry-After; other clients are unaffected; only public 200s are stored", async () => {
     const cache = memCache();
     const limiter = new CrawlerLimiter({ capacity: 20, refillPerS: 1 });
     let calls = 0;
@@ -159,5 +159,120 @@ describe("worker: free pages through the edge cache, paid 402s untouched", () =>
     expect(paid.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
     expect(paid.headers.has(EDGE_STATUS)).toBe(false);
     expect(store.size).toBe(before);
+  });
+});
+
+/**
+ * vendor-cache-fix 2026-10-28: the cached copy of /v1/trust/vendors?domain=... sent ~3.7 KB of 15.3 KB and then hung. The
+ * stored copy was a tee'd branch of the live response stream, put into the Cache API while the body was still streaming.
+ * Now the body is read completely first, checked against Content-Length, and every copy is built from that buffer; hits
+ * are read and length-checked before they are served.
+ */
+describe("edge cache: only complete bodies are stored or served", () => {
+  let t = 1_000_000;
+  const now = () => t;
+  let waits: Promise<unknown>[] = [];
+  const waitUntil = (p: Promise<unknown>) => { waits.push(p); };
+  const settle = async () => { while (waits.length) await Promise.all(waits.splice(0)); };
+  beforeEach(() => { _resetEdgeState(); t = 1_000_000; waits = []; });
+
+  const big = "x".repeat(15_298);
+  const chunked = (chunks: string[], cc = "public, max-age=300", extra: Record<string, string> = {}) => {
+    const enc = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(ctl) {
+        const c = chunks.shift();
+        if (c === undefined) { ctl.close(); return; }
+        await new Promise((ok) => setTimeout(ok, 1));
+        ctl.enqueue(enc.encode(c));
+      },
+    });
+    return new Response(stream, { status: 200, headers: { "Content-Type": "application/json", "Cache-Control": cc, ...extra } });
+  };
+
+  it("a streamed 15.3 KB body is stored whole; the hit returns every byte with the right length", async () => {
+    const cache = memCache();
+    const parts = [big.slice(0, 3_700), big.slice(3_700, 9_000), big.slice(9_000)];
+    const r1 = await serveEdgeCached(req("/v1/trust/vendors?domain=api.jobsproperty-api.workers.dev"), async () => chunked([...parts], undefined, { "Content-Length": "15298" }), { cache, now, waitUntil });
+    expect((await r1.text()).length).toBe(15_298);
+    await settle();
+    const stored = [...cache.m.values()][0];
+    expect(stored.headers.get("X-Lumi-Body-Length")).toBe("15298");
+    expect((await stored.clone().arrayBuffer()).byteLength).toBe(15_298);
+    t += 10_000;
+    const r2 = await serveEdgeCached(req("/v1/trust/vendors?domain=api.jobsproperty-api.workers.dev"), async () => { throw new Error("should not rebuild"); }, { cache, now, waitUntil });
+    expect(r2.headers.get(EDGE_STATUS)).toBe("hit");
+    expect(r2.headers.has("X-Lumi-Body-Length")).toBe(false);
+    expect((await r2.arrayBuffer()).byteLength).toBe(15_298);
+  });
+
+  it("concurrent misses all get the full body (one buffer, no tee)", async () => {
+    const cache = memCache();
+    const rs = await Promise.all([0, 1, 2, 3].map(() => serveEdgeCached(req("/v1/trust/catalog"), async () => chunked([big.slice(0, 5000), big.slice(5000)]), { cache, now, waitUntil })));
+    for (const r of rs) expect((await r.text()).length).toBe(15_298);
+    await settle();
+    expect(cache.m.size).toBe(1);
+  });
+
+  it("a body shorter than its Content-Length is served as read but never cached", async () => {
+    const cache = memCache();
+    const r = await serveEdgeCached(req("/v1/trust/vendors?domain=a.example"), async () => chunked([big.slice(0, 3_700)], undefined, { "Content-Length": "15298" }), { cache, now, waitUntil });
+    await settle();
+    expect(r.status).toBe(200);
+    expect(r.headers.get("Content-Length")).not.toBe("15298");
+    expect((await r.text()).length).toBe(3_700);
+    expect(cache.m.size).toBe(0);
+  });
+
+  it("non-200 public responses are not cached", async () => {
+    const cache = memCache();
+    for (const s of [400, 404, 410]) {
+      _resetEdgeState();
+      await serveEdgeCached(req(`/trust/v/unknown-${s}`), async () => new Response("{}", { status: s, headers: { "Cache-Control": "public, max-age=300" } }), { cache, now, waitUntil });
+    }
+    await settle();
+    expect(cache.m.size).toBe(0);
+  });
+
+  it("a truncated or stalled cached copy is dropped and rebuilt instead of hanging the client", async () => {
+    const deleted: string[] = [];
+    const m = new Map<string, () => Response>();
+    const cache: EdgeCacheLike = {
+      match: async (k) => m.get(k)?.(),
+      put: async () => {},
+      delete: async (k) => { deleted.push(k); m.delete(k); return true; },
+    };
+    const key = "https://api.lumitrades.io/v1/trust/vendors?domain=api.jobsproperty-api.workers.dev";
+    const storedHeaders = { "Cache-Control": "public, max-age=1800", "X-Lumi-Cache-Control": "public, max-age=300", "X-Lumi-Stored-At": String(t - 10_000) };
+    // 1) old-style copy: Content-Length 15298, only 3.7 KB present
+    m.set(key, () => new Response(big.slice(0, 3_700), { status: 200, headers: { ...storedHeaders, "Content-Length": "15298" } }));
+    let calls = 0;
+    const produce = async () => { calls++; return new Response(big, { status: 200, headers: { "Cache-Control": "public, max-age=300" } }); };
+    const r1 = await serveEdgeCached(req("/v1/trust/vendors?domain=api.jobsproperty-api.workers.dev"), produce, { cache, now, waitUntil });
+    expect(r1.headers.get(EDGE_STATUS)).toBe("miss");
+    expect((await r1.text()).length).toBe(15_298);
+    expect(calls).toBe(1);
+    await settle();
+    expect(deleted).toEqual([key]);
+    // 2) a copy whose body sends 3.7 KB and then never ends
+    _resetEdgeState();
+    m.set(key, () => {
+      const enc = new TextEncoder();
+      let sent = false;
+      const s = new ReadableStream<Uint8Array>({ pull(ctl) { if (!sent) { sent = true; ctl.enqueue(enc.encode(big.slice(0, 3_700))); } return new Promise(() => {}); } });
+      return new Response(s, { status: 200, headers: { ...storedHeaders, "X-Lumi-Body-Length": "15298" } });
+    });
+    const started = Date.now();
+    const r2 = await serveEdgeCached(req("/v1/trust/vendors?domain=api.jobsproperty-api.workers.dev"), produce, { cache, now, waitUntil, hitReadMs: 30 });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(r2.headers.get(EDGE_STATUS)).toBe("miss");
+    expect((await r2.text()).length).toBe(15_298);
+    expect(calls).toBe(2);
+  });
+
+  it("a rebuild that throws answers 503 + Retry-After, not an exception", async () => {
+    const r = await serveEdgeCached(req("/v1/samples"), async () => { throw new Error("d1 down"); }, { cache: memCache(), now, waitUntil });
+    expect(r.status).toBe(503);
+    expect(r.headers.get("Retry-After")).toBe("30");
   });
 });

@@ -7,7 +7,9 @@
  * caller wait for a rebuild.
  *
  * What this does (GET/HEAD only, never paid routes, never 402s, never requests with Authorization or a payment header):
- *  - caches 200 responses whose Cache-Control is `public, max-age=N` in caches.default under a normalized key
+ *  - caches complete 200 responses whose Cache-Control is `public, max-age=N` in caches.default under a normalized key
+ *    (body fully read into memory first and checked against Content-Length; the stored copy is built from that buffer,
+ *    never from a tee'd stream; a hit is read and length-checked before it is served, broken copies are dropped)
  *    (sorted query string), stored with a stale window so the entry outlives its freshness;
  *  - fresh hit: served as-is; stale hit (age <= max-age + stale window): served at once and refreshed in the background
  *    (stale-while-revalidate), one refresh per key per isolate;
@@ -20,6 +22,8 @@
 export interface EdgeCacheLike {
   match(key: string): Promise<Response | undefined>;
   put(key: string, res: Response): Promise<void>;
+  /** Optional: drop a bad entry (truncated / unreadable copy) so the next request rebuilds it. */
+  delete?(key: string): Promise<unknown>;
 }
 
 export interface EdgeOpts {
@@ -29,17 +33,24 @@ export interface EdgeOpts {
   /** ms before a miss gives up (stale copy or 503). */
   deadlineMs?: number;
   limiter?: CrawlerLimiter;
+  /** ms allowed to read a cached copy's body before it is treated as broken (default HIT_READ_MS). */
+  hitReadMs?: number;
 }
 
 /** Free public documents handled here. Paid routes (402) never match. */
 export const PUBLIC_CACHED = /^\/(v1\/(samples|trust\/vendors|trust\/catalog|trust\/methodology)|trust\/v\/[^/]{1,300})\/?$/i;
 
-/** Header holding the app's own Cache-Control on the stored copy (see restoreHit in index.ts). */
+/** Header holding the app's own Cache-Control on the stored copy (Cloudflare's zone Browser Cache TTL rewrites
+ * Cache-Control on Cache-API hits; fromStored puts the app's value back). */
 export const ORIGIN_CC = "X-Lumi-Cache-Control";
 /** Header holding the store time (ms) on the stored copy. */
 export const STORED_AT = "X-Lumi-Stored-At";
 /** Diagnostic header on responses that went through the edge layer: hit | stale | miss | shared | timeout-stale. */
 export const EDGE_STATUS = "X-Lumi-Edge";
+/** Header holding the exact body byte length on the stored copy; a hit whose body does not match is discarded. */
+export const BODY_LENGTH = "X-Lumi-Body-Length";
+/** A cached body must be fully readable within this many ms, else the copy is treated as broken (never a hang). */
+export const HIT_READ_MS = 3_000;
 
 export const DEFAULT_DEADLINE_MS = 20_000;
 /** Stale window: 5x the max-age, at least 10 min, at most 6 h. */
@@ -113,31 +124,90 @@ function unavailable(head: boolean): Response {
   return new Response(body, { status: 503, headers: { "Content-Type": "application/json; charset=utf-8", "Retry-After": "30", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" } });
 }
 
-/** Statuses worth caching when the app marks them public (a 404 "unknown key" is as cacheable as a 200; never 402/429/5xx). */
-const STORABLE_STATUS = new Set([200, 400, 404]);
+/**
+ * Only complete 200s are stored (vendor-cache-fix 2026-10-28). A cached 400/404 saved little and every stored copy is a
+ * chance to serve something broken for hours.
+ */
+const STORABLE_STATUS = new Set([200]);
 
-/** The copy that goes into the cache: same response, app Cache-Control kept aside, store time, longer max-age for SWR. */
-export function toStored(res: Response, nowMs: number): Response | null {
-  const cc = res.headers.get("Cache-Control");
-  const maxAge = maxAgeOf(cc);
-  if (!STORABLE_STATUS.has(res.status) || maxAge === null) return null;
-  const h = new Headers(res.headers);
-  h.set(ORIGIN_CC, cc ?? "");
-  h.set(STORED_AT, String(nowMs));
-  h.set("Cache-Control", `public, max-age=${maxAge + staleWindowS(maxAge)}`);
-  h.delete(EDGE_STATUS);
-  return new Response(res.clone().body, { status: res.status, statusText: res.statusText, headers: h });
+/**
+ * A fully read response: the bytes are in memory, so every client copy and the cache copy are built from the same
+ * buffer (no ReadableStream tee, nothing can be stored half-written).
+ */
+export interface Buffered {
+  status: number;
+  statusText: string;
+  headers: Headers;
+  body: ArrayBuffer;
+  /** False when the app declared a Content-Length that the bytes read do not match. */
+  complete: boolean;
 }
 
-/** A stored copy turned back into a client response (original Cache-Control, helper headers removed). */
-export function fromStored(hit: Response, status: string, head: boolean): Response {
+/** Read the whole body before anything is cached or sent; checks it against any declared Content-Length. */
+export async function bufferResponse(res: Response): Promise<Buffered> {
+  const body = await res.arrayBuffer();
+  const declared = res.headers.get("Content-Length");
+  const encoded = !!res.headers.get("Content-Encoding");
+  const n = declared === null ? NaN : Number(declared);
+  const complete = declared === null || encoded || (Number.isFinite(n) && n === body.byteLength);
+  const headers = new Headers(res.headers);
+  // The length of a Response built from an ArrayBuffer is set by the runtime from the real bytes.
+  headers.delete("Content-Length");
+  return { status: res.status, statusText: res.statusText, headers, body, complete };
+}
+
+/** A client response from a buffered result (fresh Response, own copy of the bytes). */
+export function fromBuffered(b: Buffered, head: boolean, status?: string): Response {
+  const h = new Headers(b.headers);
+  if (status) h.set(EDGE_STATUS, status);
+  const nullBody = head || b.status === 204 || b.status === 304;
+  return new Response(nullBody ? null : b.body.slice(0), { status: b.status, statusText: b.statusText, headers: h });
+}
+
+/**
+ * The copy that goes into the cache, built from the buffered bytes: app Cache-Control kept aside, store time, exact body
+ * length, longer max-age for SWR. Null when it must not be stored (non-200, not public, or incomplete body).
+ */
+export function toStored(b: Buffered, nowMs: number): Response | null {
+  const cc = b.headers.get("Cache-Control");
+  const maxAge = maxAgeOf(cc);
+  if (!STORABLE_STATUS.has(b.status) || maxAge === null || !b.complete) return null;
+  const h = new Headers(b.headers);
+  h.set(ORIGIN_CC, cc ?? "");
+  h.set(STORED_AT, String(nowMs));
+  h.set(BODY_LENGTH, String(b.body.byteLength));
+  h.set("Cache-Control", `public, max-age=${maxAge + staleWindowS(maxAge)}`);
+  h.delete(EDGE_STATUS);
+  h.delete("Content-Length");
+  return new Response(b.body.slice(0), { status: b.status, statusText: b.statusText, headers: h });
+}
+
+/**
+ * Read a cached copy completely (bounded by `ms`) and check its length against the stored X-Lumi-Body-Length (or the
+ * Content-Length on copies written before this header existed). Null when the copy is truncated, unreadable or slow.
+ */
+export async function readHit(hit: Response, ms: number): Promise<ArrayBuffer | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((ok) => { timer = setTimeout(() => ok(null), ms); });
+  const read = hit.arrayBuffer().catch(() => null);
+  const buf = await Promise.race([read, timeout]).finally(() => clearTimeout(timer));
+  if (!buf) return null;
+  const want = hit.headers.get(BODY_LENGTH) ?? (hit.headers.get("Content-Encoding") ? null : hit.headers.get("Content-Length"));
+  if (want !== null && Number(want) !== buf.byteLength) return null;
+  return buf;
+}
+
+/** A stored copy (already read and checked) turned back into a client response (original Cache-Control, helper headers removed). */
+export function fromStored(hit: Response, body: ArrayBuffer, status: string, head: boolean): Response {
   const h = new Headers(hit.headers);
   const cc = h.get(ORIGIN_CC);
   if (cc) h.set("Cache-Control", cc);
   h.delete(ORIGIN_CC);
   h.delete(STORED_AT);
+  h.delete(BODY_LENGTH);
+  h.delete("Content-Length");
   h.set(EDGE_STATUS, status);
-  return new Response(head ? null : hit.body, { status: hit.status, statusText: hit.statusText, headers: h });
+  return new Response(head ? null : body, { status: hit.status, statusText: hit.statusText, headers: h });
 }
 
 function ageOf(hit: Response, nowMs: number): { ageS: number; maxAge: number } | null {
@@ -148,7 +218,7 @@ function ageOf(hit: Response, nowMs: number): { ageS: number; maxAge: number } |
 }
 
 // One rebuild / refresh per key per isolate.
-const inflight = new Map<string, Promise<Response>>();
+const inflight = new Map<string, Promise<Buffered>>();
 const refreshing = new Set<string>();
 /** Tests only. */
 export function _resetEdgeState() { inflight.clear(); refreshing.clear(); }
@@ -166,30 +236,41 @@ export async function serveEdgeCached(request: Request, produce: (req: Request) 
   const ck = clientKey(request);
   const keep = (p: Promise<unknown>) => (opts.waitUntil ? opts.waitUntil(p) : void p.catch(() => {}));
 
-  const build = (): Promise<Response> => {
+  const build = (): Promise<Buffered> => {
     let p = inflight.get(key);
     if (!p) {
       p = (async () => {
         const res = await produce(new Request(key, { method: "GET", headers: request.headers }));
-        const stored = cache ? toStored(res, now()) : null;
+        // Read the whole body first; the cached copy and every client copy come from this one buffer.
+        const b = await bufferResponse(res);
+        const stored = cache ? toStored(b, now()) : null;
         if (stored && cache) keep(cache.put(key, stored).catch(() => {}));
-        return res;
+        return b;
       })().finally(() => inflight.delete(key));
       inflight.set(key, p);
     }
-    return p.then((r) => r.clone());
+    return p;
   };
 
-  const hit = cache ? await cache.match(key).catch(() => undefined) : undefined;
+  let hit = cache ? await cache.match(key).catch(() => undefined) : undefined;
   const age = hit ? ageOf(hit, now()) : null;
-  if (hit && age && age.ageS <= age.maxAge + staleWindowS(age.maxAge)) {
+  // A copy is only served once its body has been read completely and matches its recorded length.
+  let hitBody: ArrayBuffer | null = null;
+  if (hit) {
+    hitBody = await readHit(hit, opts.hitReadMs ?? HIT_READ_MS);
+    if (!hitBody) {
+      if (cache?.delete) keep(cache.delete(key).catch(() => {}));
+      hit = undefined;
+    }
+  }
+  if (hit && hitBody && age && age.ageS <= age.maxAge + staleWindowS(age.maxAge)) {
     if (limiter) { const wait = limiter.take(ck, HIT_COST, now()); if (wait) return tooMany(wait, head); }
-    if (age.ageS <= age.maxAge) return fromStored(hit, "hit", head);
+    if (age.ageS <= age.maxAge) return fromStored(hit, hitBody, "hit", head);
     if (!refreshing.has(key)) {
       refreshing.add(key);
       keep(build().then(() => undefined, () => undefined).finally(() => refreshing.delete(key)));
     }
-    return fromStored(hit, "stale", head);
+    return fromStored(hit, hitBody, "stale", head);
   }
 
   if (limiter) { const wait = limiter.take(ck, MISS_COST, now()); if (wait) return tooMany(wait, head); }
@@ -199,19 +280,17 @@ export async function serveEdgeCached(request: Request, produce: (req: Request) 
   const timeout = new Promise<"timeout">((ok) => { timer = setTimeout(() => ok("timeout"), deadline); });
   const work = build();
   keep(work.catch(() => undefined)); // the rebuild may finish after the deadline and still fill the cache
-  const r = await Promise.race([work, timeout]).finally(() => clearTimeout(timer));
-  if (r === "timeout") {
-    if (hit) return fromStored(hit, "timeout-stale", head);
+  const r = await Promise.race([work.catch(() => "failed" as const), timeout]).finally(() => clearTimeout(timer));
+  if (r === "timeout" || r === "failed") {
+    if (hit && hitBody) return fromStored(hit, hitBody, "timeout-stale", head);
     return unavailable(head);
   }
-  const h = new Headers(r.headers);
-  h.set(EDGE_STATUS, shared ? "shared" : "miss");
-  return new Response(head ? null : r.body, { status: r.status, statusText: r.statusText, headers: h });
+  return fromBuffered(r, head, shared ? "shared" : "miss");
 }
 
 /** caches.default adapter (string keys). */
 export function defaultEdgeCache(): EdgeCacheLike | undefined {
   const c = (globalThis as any).caches?.default as Cache | undefined;
   if (!c) return undefined;
-  return { match: (k) => c.match(k), put: (k, r) => c.put(k, r) };
+  return { match: (k) => c.match(k), put: (k, r) => c.put(k, r), delete: (k) => c.delete(k) };
 }
