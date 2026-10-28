@@ -25,7 +25,7 @@ process.on("unhandledRejection", (e) => {
 });
 
 const url = `https://api.lumitrades.io${process.argv[2] ?? "/v1/trust/vendors/printmoneylab/report"}`;
-const MAX_USDC_ATOMIC = 50_000n; // refuse anything above $0.05 (the vendor report is $0.02; a high-value check can cost up to $0.25: raise this for it)
+const MAX_USDC_ATOMIC = 50_000n; // refuse anything above $0.05 (the vendor report is $0.02); raise it (up to 250_000n = $0.25) only to use the high-value check (/v1/trust/check/high-value, 0.5% of the payment, min $0.005, max $0.25)
 
 const walletProvider = new ViemWalletProvider(
   createWalletClient({

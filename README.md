@@ -55,8 +55,10 @@ console.log(paid.data);
 ```json
 { "mcpServers": {
   "lumi-remote": { "url": "https://api.lumitrades.io/mcp" },
-  "lumi": { "command": "npx", "args": ["-y", "lumi-trades-mcp"], "env": { "EVM_PRIVATE_KEY": "0x...", "LUMI_MAX_USD_PER_CALL": "0.25" } } } }
+  "lumi": { "command": "npx", "args": ["-y", "lumi-trades-mcp"], "env": { "EVM_PRIVATE_KEY": "0x...", "LUMI_MAX_USD_PER_CALL": "0.02" } } } }
 ```
+
+`LUMI_MAX_USD_PER_CALL` is a per-call spend cap: `0.02` covers every fixed-price route. Raise it (up to `0.25`) only if you want the high-value check (`/v1/trust/check/high-value`, 0.5% of the payment, min $0.005, max $0.25).
 
 ---
 
