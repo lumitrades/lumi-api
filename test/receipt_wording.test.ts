@@ -26,15 +26,16 @@ describe("receipt and test-buy cap wording", () => {
     expect(r).toMatch(/\/v1\/feed\/lookup/);
     expect(r).toMatch(/POST [^"]*\/v1\/trust\/receipts\/verify/);
   });
-  it("public test-buy cap is the current one (0.30 RLUSD + 0.10 XRP, plus Stellar USDC) and the README states no stale cap", async () => {
+  it("public test-buy caps are the current per-chain ones (spend cut 2026-10-28) and no stale cap is stated", async () => {
     const get = setup();
-    for (const p of ["/v1/trust/methodology", "/llms.txt"]) {
-      const t = await get(p);
-      expect(t, p).not.toMatch(/0\.15 RLUSD \+ 0\.05 XRP/);
+    const both = (await get("/llms.txt")) + (await get("/v1/trust/methodology"));
+    for (const stale of [/0\.30 RLUSD/, /0\.10 XRP/, /0\.15 USDC/, /about \$0\.50 a day/, /\$0\.10 per day/, /shared (hard |daily )?caps?\b/]) {
+      expect(both).not.toMatch(stale);
     }
+    expect(both).toMatch(/0\.15 RLUSD \+ 0\.05 XRP/);
+    expect(both).toMatch(/Base 0\.30 USDC/);
+    expect(both).toMatch(/0\.08 USDC/);
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-    expect(readme).not.toMatch(/0\.15 RLUSD \+ 0\.05 XRP/);
-    expect(readme).not.toMatch(/0\.40 RLUSD/); // the README no longer restates the cap; docs and methodology are the source
-    expect(await get("/llms.txt") + await get("/v1/trust/methodology")).toMatch(/0\.30 RLUSD \+ 0\.10 XRP/);
+    expect(readme).not.toMatch(/0\.40 RLUSD|0\.30 RLUSD|0\.15 RLUSD/); // the README no longer restates the cap; docs and methodology are the source
   });
 });

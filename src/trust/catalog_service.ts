@@ -129,14 +129,14 @@ export function chainSplit(s: CatalogStats | null, x: XrplAgg | null) {
   return {
     base_usdc: { network: "eip155:8453", asset: "USDC", source: "CDP Bazaar catalog listings Lumi bought once each", purchase_verified_resources: base.purchase_verified, test_buys: base.test_buys },
     xrpl: {
-      network: "xrpl:0", assets: x?.assets ?? [], source: "Lumi's curated XRPL vendor list (test-buys within shared daily caps)", window_days: CURATED_WINDOW_MS / 86_400_000,
+      network: "xrpl:0", assets: x?.assets ?? [], source: "Lumi's curated XRPL vendor list (test-buys within the XRPL daily cap)", window_days: CURATED_WINDOW_MS / 86_400_000,
       purchase_verified_endpoints: x?.endpoints ?? 0, vendors: x?.vendors ?? 0, test_buys: x?.buys ?? 0, delivered: x?.delivered ?? 0,
       bazaar_catalog: { purchase_verified_resources: s?.by_network?.["xrpl:0"]?.purchase_verified ?? 0, test_buys: s?.by_network?.["xrpl:0"]?.test_buys ?? 0, source: "CDP Bazaar catalog listings Lumi bought on XRPL" },
       bazaar_sweep: XRPL_BAZAAR_SWEEP,
     },
-    stellar_usdc: { network: "stellar:pubnet", asset: "USDC", source: "x402 catalog listings (CDP Bazaar) Lumi bought on Stellar with USDC (daily routine, shared cap)", purchase_verified_resources: stel.purchase_verified, test_buys: stel.test_buys },
+    stellar_usdc: { network: "stellar:pubnet", asset: "USDC", source: "x402 catalog listings (CDP Bazaar) Lumi bought on Stellar with USDC (daily routine, Stellar daily cap)", purchase_verified_resources: stel.purchase_verified, test_buys: stel.test_buys },
     ...(otherBazaar.length ? { other_bazaar_networks: Object.fromEntries(otherBazaar) } : {}),
-    note: `Counted separately per chain. Most Bazaar catalog test-buys are Base USDC. XRPL: the curated list is test-bought by a daily routine within shared caps (about $0.50 a day in total: 0.30 RLUSD + 0.10 XRP + 0.15 Stellar USDC, so not every vendor every day). Stellar: catalog listings that accept stellar:pubnet USDC are test-bought from the same shared cap, and a one-off XRPL Bazaar sweep covered ${XRPL_BAZAAR_SWEEP.statement}.`,
+    note: `Counted separately per chain. Most Bazaar catalog test-buys are Base USDC. Each chain has its own daily hard cap (UTC day): Base 0.30 USDC, XRPL 0.15 RLUSD + 0.05 XRP (network fees count toward the XRP cap), Stellar 0.08 USDC and at most 3 buys; so not every vendor is bought every day. XRPL: the curated list is test-bought by a daily routine within the XRPL cap. Stellar: catalog listings that accept stellar:pubnet USDC are test-bought within the Stellar cap, and a one-off XRPL Bazaar sweep covered ${XRPL_BAZAAR_SWEEP.statement}.`,
   };
 }
 
