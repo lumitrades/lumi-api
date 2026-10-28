@@ -104,6 +104,28 @@ describe("A2A JSON-RPC", () => {
     expect(JSON.stringify(retired.body)).not.toMatch(/"accepts"/);
   });
 
+  it("quotes the card's own quote example (an unencoded URL in the query) and paths given as data", async () => {
+    const { rpc, get } = setup();
+    const card: any = await (await get("/.well-known/agent-card.json")).json();
+    const example = card.skills.find((s: any) => s.id === "quote").examples[0];
+    expect(example).toBe("quote /v1/verdict?url=https://api.example.com/v1/data");
+    for (const parts of [
+      [{ text: example }],
+      [{ text: `Please ${example}.` }],
+      [{ data: { skill: "quote", path: "/v1/verdict?url=https://api.example.com/v1/data" } }],
+    ]) {
+      const r = await rpc(send1(parts));
+      const d = r.body.result.message.parts[1].data;
+      expect(d.status, JSON.stringify(parts)).toBe("payment_required");
+      expect(d.url).toBe(`${BASE}/v1/verdict?url=https://api.example.com/v1/data`);
+      expect(d.options.length).toBeGreaterThan(0);
+      expect(d.x402.x402Version).toBe(2);
+    }
+    // a path that is not ours is never quoted (falls back to asking which path)
+    const bad = await rpc(send1([{ data: { skill: "quote", path: "//evil.example/v1/verdict" } }]));
+    expect(JSON.stringify(bad.body)).not.toMatch(/evil\.example/);
+  });
+
   it("returns spec errors for unsupported methods and versions", async () => {
     const { rpc, get } = setup();
     expect((await rpc({ jsonrpc: "2.0", id: 2, method: "GetTask", params: { id: "x" } })).body.error.code).toBe(-32001);

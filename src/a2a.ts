@@ -22,6 +22,12 @@ import { SERVICE_ICON } from "./bazaar";
 import { RETIRED_ON, RETIRED_SKILLS, retiredBody } from "./retired";
 
 const VENDOR_IDS = VENDORS.map((v) => v.id);
+/** A /v1/ path (and query) to quote. RFC 3986 path/query characters, so an unencoded URL in the query
+ *  (the card's own example: "quote /v1/verdict?url=https://api.example.com/v1/data") is kept whole; quotes, parentheses,
+ *  whitespace, '#' and backslashes are excluded. Always resolved against our own origin, so ':' and '@' cannot change the host. */
+const QUOTE_PATH_CHARS = "A-Za-z0-9/_.~!$*+,;:@?=&%-";
+const QUOTE_PATH_IN_TEXT = new RegExp(`/v1/[${QUOTE_PATH_CHARS}]+`);
+const QUOTE_PATH = new RegExp(`^/v1/[${QUOTE_PATH_CHARS}]*$`);
 
 export const A2A_VERSIONS = ["1.0", "0.3"];
 
@@ -305,7 +311,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     return { skill: data.skill, text: `The ${data.skill} skill was retired on ${RETIRED_ON}. Use the free seller check at ${base}/v1/check. Not charged.`, data: retiredBody(`skill:${data.skill}`, base) };
   }
   let skill: SkillDef | undefined = typeof data.skill === "string" ? SKILLS.find((s) => s.id === data.skill || s.route === data.skill) : undefined;
-  const pathArg = typeof data.path === "string" ? data.path : text.match(/\/v1\/[A-Za-z0-9/_.?=&%-]+/)?.[0];
+  const pathArg = typeof data.path === "string" ? data.path : text.match(QUOTE_PATH_IN_TEXT)?.[0]?.replace(/[.,;:!?]+$/, "");
   if (!skill && /\bquote\b/i.test(text)) skill = SKILLS.find((s) => s.id === "quote");
   if (!skill && /\b(should i pay|pay[- ]check|trust[- ]check|safe to pay)\b/i.test(text)) skill = SKILLS.find((s) => s.id === "trust_check");
   if (!skill && /\b(vendor|trust)\s+report\b|\breport\b.*\bvendors?\b/i.test(text)) skill = SKILLS.find((s) => s.id === "vendor_report");
@@ -386,7 +392,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
   let path: string | undefined;
   let target = skill;
   if (skill.id === "quote") {
-    if (pathArg && /^\/v1\/[A-Za-z0-9/_.?=&%-]*$/.test(pathArg)) path = pathArg;
+    if (pathArg && QUOTE_PATH.test(pathArg)) path = pathArg;
     else {
       const t = SKILLS.filter((s) => s.route).find((s) => s.id !== "quote" && (s.id === data.of || s.match.test(text.replace(/\bquote\b/i, ""))));
       if (t) target = t;
