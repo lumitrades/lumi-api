@@ -29,7 +29,7 @@ function setup(opts: { liveStore?: MemoryLiveStore; feedStore?: MemoryFeedStore;
 describe("Stage C: /v1/trust/check", () => {
   it("bare probe without url: standard 402 quote; a payment without url is refused 400 (not charged)", async () => {
     const { get, buy } = setup();
-    expect((await get("/v1/trust/check")).status).toBe(400); // the free route: bare call is a 400 with an example
+    expect((await get("/v1/trust/check")).status).toBe(200); // the free route: bare call is a 200 usage document, not counted
     const r = await get("/v1/trust/check/high-value");
     expect(r.status).toBe(402);
     const q: any = await r.json();

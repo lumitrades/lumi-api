@@ -259,7 +259,7 @@ describe("openapi scanner hints", () => {
   it("quotes an unpaid literally probed paid template (402, same rails/prices/payTo), refuses a paid one with 400 and no facilitator call", async () => {
     const { get, fac } = setup();
     const strip = (a: any[]) => a.map((x) => ({ network: x.network, asset: x.asset, amount: x.amount, payTo: x.payTo, scheme: x.scheme }));
-    for (const [p, ex, concrete] of [["/v1/trust/vendors/%7Bid%7D/report", "/v1/trust/vendors/printmoneylab/report", "/v1/trust/vendors/printmoneylab/report"]]) {
+    for (const [p, ex, concrete] of ["/v1/trust/vendors/%7Bid%7D/report", "/v1/trust/vendors/:id/report", "/v1/trust/vendors/%3Cvendor_id%3E/report", "/v1/trust/vendors/%7B%7Bid%7D%7D/report"].map((t) => [t, "/v1/trust/vendors/printmoneylab/report", "/v1/trust/vendors/printmoneylab/report"])) {
       const q = await get(p);
       expect(q.status, p).toBe(402);
       const body = await q.json();
@@ -285,7 +285,7 @@ describe("openapi scanner hints", () => {
     expect(fac.calls).toHaveLength(0);
   });
 
-  it("other placeholder styles and a /v1/trust/check without url are a 400 (no quote, never charged); the bare probe keeps its 402", async () => {
+  it("retired per-coin templates are 410, a /v1/trust/check query without url is a 400 (never charged); bare probes answer 200 (free) / 402 (paid)", async () => {
     const { get, fac } = setup();
     for (const p of ["/v1/signal/{coin}", "/v1/levels/%7Bcoin%7D", "/v1/signal/:coin", "/v1/levels/:COIN", "/v1/signal/%3Ccoin%3E", "/v1/signal/%7B%7Bcoin%7D%7D", "/v1/signal/$%7Bcoin%7D", "/v1/lite/{coin}"]) {
       for (const h of [{}, { "PAYMENT-SIGNATURE": "junk" }] as Record<string, string>[]) {
@@ -294,21 +294,13 @@ describe("openapi scanner hints", () => {
         expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
       }
     }
-    for (const [p, ex] of [["/v1/trust/vendors/:id/report", "/v1/trust/vendors/printmoneylab/report"]]) {
-      const r = await get(p);
-      expect(r.status, p).toBe(400);
-      expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
-      const b = await r.json();
-      expect(b).toMatchObject({ error: "path_template_not_filled", note: "Not charged." });
-      expect(b.example).toBe(BASE + ex);
-    }
     for (const p of ["/v1/trust/check?domain=a.example", "/v1/trust/check?url="]) {
       const r = await get(p);
       expect(r.status, p).toBe(400);
       expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
       expect(JSON.stringify(await r.json())).not.toContain("?domain=");
     }
-    expect((await get("/v1/trust/check")).status).toBe(400); // free route: a bare call is a 400 with an example, not counted
+    expect((await get("/v1/trust/check")).status).toBe(200); // free route: a bare call is a 200 usage document, not counted
     expect((await get("/v1/trust/check/high-value")).status).toBe(402);
     expect(fac.calls).toHaveLength(0);
   });

@@ -657,10 +657,14 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const noStore = { "Cache-Control": "no-store" };
     const L = freeQuota.limits;
     if (!url.search.replace(/^\?/, "")) {
-      // Bare probe (discovery crawlers): how to call it, not counted.
-      return json(400, {
-        error: "invalid_query",
-        detail: "url is required: the x402 resource URL you are about to pay (optional payTo, amount in USD).",
+      // Bare GET (discovery crawlers, liveness probes, a buyer reading the listing): 200 usage document for this free
+      // resource, not counted against the quota and no verdict. Was 400 invalid_query, which listing probes count as down.
+      return json(200, {
+        kind: "usage",
+        route: "trust_check",
+        access: "free",
+        counted: false,
+        detail: "Add ?url= with the x402 resource URL you are about to pay (optional payTo, amount in USD) to get a verdict. This usage answer is free and not counted.",
         example: `${base}${FREE_TRUST_CHECK_EXAMPLE}`,
         pricing: { free: `${L.perDay} checks a day per IP and per API key or wallet (${L.perMinute} a minute)`, high_value_check: { url: `${base}${HIGH_VALUE_EXAMPLE}`, pricing: HIGH_VALUE_PRICING_TEXT } },
       }, noStore);
@@ -1602,10 +1606,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const route = m[1] as PaidRoute;
 
     // An unfilled path template (/v1/trust/vendors/%7Bid%7D/report, /v1/trust/vendors/:id/report, ...):
-    // - the literal OpenAPI template ({coin} / {id}) without a payment header: the normal 402 price quote for the route (same
-    //   accepts/prices/payTo as a concrete value), because discovery crawlers (x402scan / @agentcash/discovery, Bazaar) request
-    //   the template URL verbatim and only list routes that answer 402; the quote carries a note to fill the placeholder;
-    // - any other placeholder style (:coin, <coin>, ${coin}, ...), or any template with a payment header: 400, never charged.
+    // - any placeholder style ({id}, :id, <id>, ${id}, ...) without a payment header: the normal 402 price quote for the route
+    //   (same accepts/prices/payTo as a concrete value), because discovery crawlers (x402scan / @agentcash/discovery, Bazaar)
+    //   and listing liveness probes request the catalog URL verbatim (some catalogs list it as :id) and count anything but
+    //   402 as down; the quote carries a note to fill the placeholder;
+    // - any template with a payment header: 400, never charged.
     const rawArg = m[2] !== undefined ? safeDecode(m[2]) : undefined;
     // A person opening a vendor report link in a browser (Accept ranks text/html first, GET, no payment header): a small page
     // explaining the $0.02 x402 call, with links to the free summary and the docs. Agents (JSON or */* Accept) still get the 402.
@@ -1621,7 +1626,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const isReport = route === "vendor_report";
       const example = isReport ? `${base}/v1/trust/vendors/${EXAMPLE_VENDOR_ID}/report` : `${base}/v1/${route}/xrp`;
       const hasPayment = !!(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT));
-      if (!hasPayment && rawArg === (isReport ? "{id}" : "{coin}")) {
+      if (!hasPayment) {
         const endpoint = endpointFor(route);
         return paymentRequiredResponse(config, {
           routeKey: `${route}:template`,
