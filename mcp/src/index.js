@@ -78,6 +78,25 @@ export function buildServer(client, opts = {}) {
       return text(typeof body === "object" && body ? { ...(body.summary ? { summary: body.summary } : {}), ...body, note: TRUST_DISCLAIMER } : body);
     },
   );
+  server.registerTool(
+    "lumi_wallet_check",
+    {
+      title: "Lumi: which x402 sellers did this wallet pay? (free)",
+      description:
+        "Free (rate-limited, 100 a day). Pass a public wallet address (Base 0x..., XRP Ledger r... or Stellar G...) to list the x402 sellers it paid in the last 90 days, each with the same plain summary line as lumi_trust_check " +
+        "(Lumi's test-buys and how many delivered, or not test-bought yet) and simple flags (listing looks dead, no longer listed, recent checks failed, repeat or possible duplicate payments). Public data only; Lumi does not store the address. No price comparisons. Observations, not a guarantee.",
+      inputSchema: {
+        address: z.string().describe("A public wallet address: Base 0x..., XRP Ledger r... or Stellar G..."),
+      },
+    },
+    async ({ address }) => {
+      const r = await client.free(`/v1/wallet/check?address=${encodeURIComponent(String(address ?? "").trim())}`);
+      if (r.status !== 200) return { ...text({ status: r.status, body: r.body }), isError: true };
+      const body = r.body;
+      return text(typeof body === "object" && body ? { ...(body.summary ? { summary: body.summary } : {}), ...body, note: TRUST_DISCLAIMER } : body);
+    },
+  );
+
 
   registerContribTools(server, s, opts.contrib);
 

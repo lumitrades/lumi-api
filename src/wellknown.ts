@@ -17,7 +17,7 @@ export function mcpServerCard(base: string) {
     title: "Lumi Trades",
     version: VERSION,
     description:
-      "Lumi Trades, an x402 seller trust service. Start with the free lumi_trust_check: should I pay this x402 URL? allow / warn / block with coded reasons, backed by signed test-buy receipts. " +
+      "Lumi Trades, an x402 seller trust service. Start with the free lumi_trust_check: should I pay this x402 URL? allow / warn / block with coded reasons, backed by signed test-buy receipts. Also free: lumi_wallet_check lists the x402 sellers a public wallet paid, with Lumi's facts on each. " +
       "Free tools answer directly; paid tools return the x402 price (USDC on Base, XRP / RLUSD / USDC on the XRP Ledger, or USDC on Stellar).",
     websiteUrl: "https://lumitrades.io",
     repository: { url: "https://github.com/lumitrades/lumi-api", source: "github", subfolder: "mcp" },

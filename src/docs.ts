@@ -3,7 +3,7 @@
 import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPriceTable, planResources } from "./commerce/discovery";
 import { PLATFORM_LICENCE, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
-import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, highValuePriceUsd } from "./config";
+import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, highValuePriceUsd } from "./config";
 import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable } from "./catalog";
 import { BAZAAR_ROUTES, TRUST_ROUTES, VENDOR_ID_PATTERN, errorDocs, serviceNameFor } from "./bazaar";
 import { DISCLAIMER, SOURCE, type CoinRef } from "./views";
@@ -171,6 +171,7 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       ...(cfg.verdictPaid ? [] : [{ method: "GET", path: "/v1/verdict?url=", summary: "Free (rate-limited) pre-payment check, one signed label from the same data as /v1/check: checks_passed (Delivered in recent checks) / check_first (Check first) / checks_failed (Recent checks failed) / no_data (Not enough data), with dates, evidence window, sample count, reason codes, evidence and appeal links. Paying Lumi never changes a result" }]),
       { method: "GET", path: "/llms.txt", summary: "Short plain-text guide for LLMs" },
       { method: "GET", path: "/v1/check?url=", summary: "Lumi Check: free, signed allow / warn / block before you pay an x402 seller, from Lumi's cached observations (rate-limited per client)" },
+      { method: "GET", path: "/v1/wallet/check?address=", summary: "Free wallet check (rate-limited): the x402 sellers a public Base, XRPL or Stellar wallet paid in the last 90 days, each with Lumi's summary line and simple flags. Lumi does not store the address" },
       { method: "GET", path: "/v1/check/keys", summary: "Public keys that sign Lumi Check answers and badges (alias /.well-known/lumi-keys.json)" },
       { method: "GET", path: "/v1/check/wallets", summary: "Lumi's test-buy wallets: the only payers of a Lumi receipt (alias /.well-known/lumi-test-buy-wallets.json)" },
       { method: "POST", path: "/v1/check/outcome", summary: "Optional anonymous delivery outcome (seller host + delivered yes/no only; not a scoring input)" },
@@ -328,6 +329,17 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
       description: "Answer-only and rate-limited per client. Signed with the keys at /v1/check/keys; carries the data age of the observations it is based on and, for a catalogued listing, its reachability (answering, down when checked, or listing looks dead after 3 failed checks on separate occasions; plus no-paywall, quote-payTo-differs and needs-a-different-request notes, each with last_checked_at; a listing that looks dead adds the check_first reason listing_looks_dead, the other notes are disclosure only). " + notScoredDoc() + " The free /v1/trust/check returns the full coded reasons; the paid /v1/trust/check/high-value adds a live re-check.",
       parameters: [...verdictParams.map((p) => ({ ...p, required: false })), { name: "network", in: "query", required: false, description: "CAIP-2 network of the quote, e.g. eip155:8453 or xrpl:0", schema: { type: "string", maxLength: 40 } }],
       responses: { "200": { description: "Signed decision" }, "400": { description: "Bad or missing url (never charged)" }, "429": { description: "Free rate limit" } },
+    },
+  };
+  paths["/v1/wallet/check"] = {
+    get: {
+      operationId: "wallet_check",
+      tags: ["trust"],
+      security: [],
+      summary: "Which x402 sellers did this wallet pay, and what has Lumi seen of each? (free, rate-limited)",
+      description: `Free. Pass a public wallet address (Base 0x..., XRP Ledger r... or Stellar G...). Lists the x402 sellers that wallet paid in the last 90 days, each with the same plain summary line and summary_facts as the trust check (how many times Lumi test-bought the seller and how many delivered, or that Lumi has not test-bought it yet) and simple flags: listing_looks_dead, no_longer_listed, recent_checks_failed, repeat_payments, possible_duplicate_payment. Base reads Lumi's index of public USDC transfers into payTos listed in the CDP x402 Bazaar (recorded going forward); XRPL and Stellar read the wallet's latest 200 ledger entries. Recipients Lumi has no seller record of are counted, never listed. Lumi does not store the address (normal request logs only); payments to Lumi's own wallets are never shown; payer data older than 90 days is not shown; no price comparisons. Limits: ${FREE_WALLET_CHECK_LIMITS.perDay} calls a day per IP and per API key or wallet, ${FREE_WALLET_CHECK_LIMITS.perMinute} a minute per IP, RateLimit-* headers. Coming later (paid, not available yet): weekly reports, alerts, longer history. Observations, not a guarantee.`,
+      parameters: [{ name: "address", in: "query", required: true, description: "A public wallet address: Base 0x..., XRP Ledger r... or Stellar G...", schema: { type: "string", maxLength: 120 } }],
+      responses: { "200": { description: "Sellers paid, with Lumi's summary line and flags" }, "400": { description: "Bad address (not counted)" }, "429": { description: "Free rate limit" } },
     },
   };
   paths["/v1/trust/check"] = {
@@ -592,7 +604,7 @@ function mcpInfo(base: string, cfg: Config) {
     stdio: { package: "lumi-trades-mcp", command: "npx -y lumi-trades-mcp", pays_with: "your own wallet, signed locally: XRP, RLUSD or USDC on the XRP Ledger (XRPL_SEED) or USDC on Base, gasless (EVM_PRIVATE_KEY), within per-call caps and a session budget" },
     registry: "io.github.cypher-osiris/lumi-trades-mcp",
     tools: {
-      free: ["lumi_catalog", "lumi_samples", "lumi_quote", "lumi_trust_check", ...(cfg.verdictPaid ? [] : ["lumi_verdict"]), "lumi_vendor_scores"],
+      free: ["lumi_catalog", "lumi_samples", "lumi_quote", "lumi_trust_check", "lumi_wallet_check", ...(cfg.verdictPaid ? [] : ["lumi_verdict"]), "lumi_vendor_scores"],
       paid: ["lumi_high_value_check", "lumi_vendor_report", ...(cfg.verdictPaid ? ["lumi_verdict"] : [])],
     },
     note: `On the remote server, paid tools return the price and how to pay: x402 at the REST endpoint (settled in ${settledIn(cfg)}), or the npm package with your wallet. Never charged when Lumi cannot answer.`,
@@ -990,6 +1002,7 @@ Scores are observations with sample sizes, not ratings; few samples are marked l
 - **Pay-check (free, ${FREE_TRUST_CHECK_LIMITS.perDay} calls a day per IP and per API key or wallet, ${FREE_TRUST_CHECK_LIMITS.perMinute} a minute):** \`GET ${base}/v1/trust/check?url=<resource>[&payTo=<address>][&amount=<USD>]\`: one verdict, \`allow\`, \`warn\` or \`block\`,
   with coded reasons (\`pay_to_mismatch\`, \`price_above_listing\`, \`paid_no_data\`, \`not_observed\`, \`unreliable_quotes\`, \`slow\`, \`young_domain\` ...), a confidence label,
   a Lumi-signed receipt and links to the free lookup and (for curated vendors) the $0.02 report. RateLimit-* headers on every answer; over the limit, 429 \`free_limit_reached\` names the paid route. A bad or missing \`url\` gets 400 (not counted). MCP: \`lumi_trust_check\`. A2A: \`trust_check\`.
+- **Wallet check (free, ${FREE_WALLET_CHECK_LIMITS.perDay} calls a day per IP and per API key or wallet, ${FREE_WALLET_CHECK_LIMITS.perMinute} a minute):** \`GET ${base}/v1/wallet/check?address=<Base 0x... | XRPL r... | Stellar G...>\`: the x402 sellers that public wallet paid in the last 90 days, each with the same \`summary\` line as the trust check (Lumi's test-buys and how many delivered, or not test-bought yet) and simple flags (\`listing_looks_dead\`, \`no_longer_listed\`, \`recent_checks_failed\`, \`repeat_payments\`, \`possible_duplicate_payment\`). Base: Lumi's index of public USDC transfers into CDP Bazaar payTos; XRPL and Stellar: the wallet's latest 200 ledger entries. Recipients Lumi has no seller record of are counted, not listed. Lumi does not store the address; payments to Lumi itself are never shown; no price comparisons. Coming later (paid, not available yet): weekly reports, alerts, longer history. MCP: \`lumi_wallet_check\`.
 - **High-value check (paid: ${HIGH_VALUE_PRICING_TEXT}):** \`GET ${base}/v1/trust/check/high-value?url=<resource>&amount=<USD>[&payTo=<address>]\`: the same verdict and score (paying never changes them) plus a live re-check of the seller at call time (signed \`live_evidence\`) and a receipt bound to the stated amount. MCP: \`lumi_high_value_check\`. A2A: \`high_value_check\`.
   A null score (\`score.status: "not_scored"\`) carries \`score.not_scored_reason\` (\`priced_well_above_market\` | \`not_yet_test_bought\` |
   \`scores_for_curated_vendors_only\`) and \`score.not_scored_note\`; \`/v1/check\` and \`/v1/verdict\` carry the same. Disclosure only, never a score input.

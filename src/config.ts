@@ -235,6 +235,8 @@ export function highValuePriceUsd(amountUsd: number): string {
  * check adds no D1 writes. globalPerDay is a whole-service ceiling (split across the DO shards).
  */
 export const FREE_TRUST_CHECK_LIMITS = { perDay: 100, perMinute: 20, globalPerDay: 20_000 } as const;
+/** Free wallet check (GET /v1/wallet/check): same 100 a day per IP and per key as the free trust check, its own counter. */
+export const FREE_WALLET_CHECK_LIMITS = { perDay: 100, perMinute: 10, globalPerDay: 5_000 } as const;
 
 export interface Config {
   network: XrplNetwork;

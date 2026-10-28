@@ -8,6 +8,7 @@ import { testBuyWalletsDoc } from "./trust/wallets";
 import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCOME_FIELDS, OUTCOME_RETENTION_DAYS, OUTCOME_SUMMARY_RETENTION, type OutcomeStore } from "./trust/outcomes";
 import { createBadges } from "./trust/badge";
 import { setPrivateNames } from "./sanitize";
+import { FREE_WALLET_CHECK_LIMITS } from "./config";
 import { loadConfig, verdictPaid, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, usdcToAtomic, usdcToStroops, HIGH_VALUE, highValuePriceUsd, HIGH_VALUE_EXAMPLE, FREE_TRUST_CHECK_EXAMPLE, HIGH_VALUE_PRICING_TEXT, HIGH_VALUE_ADDS, EXAMPLE_VENDOR_ID, EXAMPLE_SELLER_URL, EXAMPLE_SELLER_DOMAIN, type Config, type Env, type PaidRoute } from "./config";
 import { createFreeQuota, DurableObjectQuotaCounter, MemoryQuotaCounter, rateLimitHeaders, type QuotaCounter } from "./free_quota";
 import { usdToDrops } from "./pricing";
@@ -53,6 +54,8 @@ const SAFETY_WARN_CODES = new Set(["pay_to_unrecognised", "quoted_price_differs"
 import { signResponse, signingKeyFrom, keysDoc, type SigningKey } from "./trust/lumi_sign";
 import { signingSecretSeparate } from "./trust/lumi_keys";
 import { summaryFor } from "./trust/summary";
+import { chainOf, CHAIN_NETWORK, WALLET_RETENTION_DAYS, WALLET_MAX_SELLERS, WALLET_COMING_LATER, WALLET_CHECK_VERSION, readXrpl, readStellar, recipientsFromInflow, groupPayments, sellerFlags, walletSummary, paymentsLine, day as walletDay, type Recipient } from "./trust/wallet_check";
+import { LUMI_WALLETS } from "./trust/evidence";
 import { originPath, checkPayload, badgeDecision, badgeThresholds, CHECK_SIGNED_TTL_SEC, BADGE_SIGNED_TTL_SEC, BADGE_CACHE, BADGE_WINDOW_DAYS, earnedBadgeSvg, noBadgeSvg, testedBadgeRules, utcDay } from "./trust/check";
 import { curatedByHost, badgeDocs } from "./trust/badge";
 import type { LookupQuery } from "./trust/catalog";
@@ -229,6 +232,15 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     secret: config.invoiceSecret,
     now,
     log: (e) => opts.log?.(e),
+  });
+  // Free wallet check quota: same per-day allowance as the free trust check, its own counter ("wc" keys).
+  const walletQuota = createFreeQuota({
+    counter: opts.quotaCounter ?? (env.INVOICE_GUARD ? new DurableObjectQuotaCounter(env.INVOICE_GUARD) : new MemoryQuotaCounter(now)),
+    secret: config.invoiceSecret,
+    now,
+    log: (e) => opts.log?.(e),
+    limits: FREE_WALLET_CHECK_LIMITS,
+    prefix: "wc",
   });
   const data = new DataSource(config.dataBaseUrl, config.dataTtlMs, doFetch);
   const deps: PaywallDeps = {
@@ -582,6 +594,125 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     v.relationship = relationship;
     v.commercial_relationship = commercial ?? [];
     return { verdict: v, exact, dom, host, tests, lab, gate, relationship };
+  }
+
+  /**
+   * GET /v1/wallet/check?address=: the free wallet check (branch only, 2026-10-28). Which x402 sellers did this public wallet
+   * pay (Base via Lumi's index of public USDC transfers into Bazaar payTos; XRPL and Stellar via one public ledger read), and
+   * the same factual summary line per seller as the trust check. Rate-limited like the free trust check, its own counter.
+   * The queried wallet is never stored or logged here; payments to Lumi's own wallets are never shown; 90-day window.
+   */
+  async function walletCheck(request: Request, url: URL, base: string): Promise<Response> {
+    const noStore = { "Cache-Control": "no-store" };
+    const L = walletQuota.limits;
+    const comingLater = { coming_later: [...WALLET_COMING_LATER], coming_later_note: "Planned paid extras, not available yet: weekly reports, alerts and longer history. This free check stays free." };
+    const address = (url.searchParams.get("address") ?? url.searchParams.get("wallet") ?? "").trim();
+    if (!url.search.replace(/^\?/, "")) {
+      return json(200, {
+        kind: "usage", route: "wallet_check", access: "free", counted: false,
+        detail: "Add ?address= with a public agent wallet address (Base 0x..., XRP Ledger r..., or Stellar G...) to list the x402 sellers it paid in the last 90 days and what Lumi has seen of each. This usage answer is free and not counted.",
+        example: `${base}/v1/wallet/check?address=0x0000000000000000000000000000000000000000`,
+        pricing: { free: `${L.perDay} wallet checks a day per IP and per API key or wallet (${L.perMinute} a minute)` },
+        ...comingLater,
+      }, noStore);
+    }
+    const chain = chainOf(address);
+    if (!chain) return json(400, { error: "invalid_field", field: "address", detail: "address must be a Base (0x + 40 hex), XRP Ledger (r...) or Stellar (G...) public address. Not counted." }, noStore);
+    const r = await walletQuota.take(request);
+    const t = now();
+    const rl = r.failOpen ? {} : rateLimitHeaders(r, t);
+    if (!r.allowed) {
+      const retry = String(Math.max(1, Math.ceil((r.resetAt - t) / 1000)));
+      return json(429, {
+        error: "free_limit_reached",
+        detail: r.reason === "minute" ? `The free wallet check allows ${L.perMinute} calls a minute per IP. Wait ${retry} s.`
+          : r.reason === "global" ? "The free wallet check has reached its service-wide daily ceiling. It resets at 00:00 UTC."
+          : `The free wallet check allows ${L.perDay} calls a day per IP and per API key or wallet. It resets at 00:00 UTC.`,
+        limit: { per_day: L.perDay, per_minute: L.perMinute, window: r.reason }, resets_at: new Date(r.resetAt).toISOString(), retry_after_seconds: Number(retry),
+      }, { ...noStore, ...rl, "Retry-After": retry });
+    }
+    const since = t - WALLET_RETENTION_DAYS * 86_400_000;
+    // Lumi's own wallets: never listed or counted (no customer payer data, no Lumi income).
+    const own = new Set([...LUMI_WALLETS.evm, ...LUMI_WALLETS.xrpl, config.payTo, config.evm?.payTo, config.stellar?.payTo, LUMI_STELLAR_ADDRESS].filter(Boolean).map((a) => String(a).toLowerCase()));
+    let recipients: Recipient[] = [];
+    let source: string, window: string, complete = true, readError: string | undefined;
+    let baseCumulative = new Set<string>();
+    if (chain === "base") {
+      source = "Lumi's index of public Base USDC transfers into payTos listed in the CDP x402 Bazaar (recorded going forward from the index start)";
+      window = `the last ${WALLET_RETENTION_DAYS} days`;
+      try {
+        const rows = evidenceStore.outflowOf ? await evidenceStore.outflowOf(address.toLowerCase(), since, 200) : [];
+        recipients = recipientsFromInflow(rows, since);
+        baseCumulative = new Set(rows.filter((x) => x.first_ts < since).map((x) => x.pay_to));
+      } catch { complete = false; readError = "read_failed"; }
+    } else {
+      const rd = chain === "xrpl" ? await readXrpl(doFetch, (split(env.XRPL_RPC_URLS).length && config.network === "xrpl:0" ? split(env.XRPL_RPC_URLS) : DEFAULT_XRPL_RPC["xrpl:0"]), address, since) : await readStellar(doFetch, stellarHorizon, address, since);
+      source = rd.source; window = `${rd.window}, last ${WALLET_RETENTION_DAYS} days`; complete = rd.complete; readError = rd.error;
+      recipients = groupPayments(rd.payments);
+    }
+    recipients = recipients.filter((x) => !own.has(x.to.toLowerCase()) && x.to.toLowerCase() !== address.toLowerCase());
+    const sellers: any[] = [];
+    let other = 0, more = 0, matched = 0;
+    for (const rec of recipients) {
+      if (matched >= WALLET_MAX_SELLERS) { more++; continue; }
+      let doc: any = null, v: any = null;
+      try {
+        doc = await trust.lookup({ payTo: rec.to } as LookupQuery, base, { free: true });
+      } catch { doc = null; }
+      if (doc?.self) continue; // Lumi itself: never shown
+      const entries: any[] = doc?.catalog?.entries ?? [];
+      if (!entries.length && !(doc?.curated?.length)) { other++; continue; }
+      matched++;
+      try { v = await payToVerdict({ payTo: rec.to, network: CHAIN_NETWORK[chain] }, base); } catch { v = null; }
+      const label = v?.lab?.label ?? null;
+      const sum = summaryFor(doc, null, label);
+      const flags = sellerFlags(rec, entries, label);
+      const cumulative = baseCumulative.has(rec.to);
+      if (cumulative) for (let i = flags.length - 1; i >= 0; i--) if (flags[i].code === "repeat_payments") flags.splice(i, 1);
+      const first = entries[0] ?? null;
+      let seller: string | null = doc?.curated?.[0]?.id ?? null;
+      if (!seller && first?.resource) { try { seller = new URL(first.resource).hostname.toLowerCase(); } catch { seller = null; } }
+      sellers.push({
+        seller,
+        pay_to: rec.to,
+        listings: entries.slice(0, 3).map((e) => e.resource).filter(Boolean),
+        payments: cumulative ? null : rec.payments,
+        last_paid_at: new Date(rec.last_at).toISOString(),
+        paid: cumulative ? `last on ${walletDay(rec.last_at)} (Lumi's Base index keeps one total per wallet and seller; this total started before the ${WALLET_RETENTION_DAYS}-day window, so only the last payment date is shown)` : paymentsLine(rec),
+        ...(rec.last_tx ? { last_tx: rec.last_tx } : {}),
+        summary: sum.summary,
+        summary_facts: sum.summary_facts,
+        label,
+        label_text: label ? LABELS[label as keyof typeof LABELS] : null,
+        flags,
+        trust_check: first?.resource ? `${base}/v1/trust/check?url=${encodeURIComponent(first.resource)}` : `${base}/v1/trust/check?payTo=${encodeURIComponent(rec.to)}`,
+      });
+    }
+    const summary = readError && !recipients.length
+      ? (readError === "account_not_found" ? "Lumi could not find this account on the ledger, so it has no payments to list." : "Lumi could not read this wallet's payments right now; this is not an all-clear. Try again later.")
+      : walletSummary(chain, sellers.map((s) => ({ flags: s.flags, tested: (s.summary_facts?.test_buys ?? 0) > 0 })), other, more);
+    return json(200, {
+      kind: "wallet_check",
+      version: WALLET_CHECK_VERSION,
+      access: "free",
+      network: CHAIN_NETWORK[chain],
+      as_of: new Date(t).toISOString(),
+      summary,
+      sellers,
+      ...(more ? { more_sellers: more, more_sellers_note: `Only the ${WALLET_MAX_SELLERS} most recently paid sellers are shown.` } : {}),
+      other_recipients: other,
+      other_recipients_note: "Recipients Lumi has no x402 seller record of are counted, never listed (they may be personal transfers).",
+      source: { read: source, window, complete, ...(readError ? { error: readError } : {}) },
+      not_included: [
+        "Payments to Lumi's own wallets (never shown).",
+        "Other payers of these sellers and any seller's income (never shown).",
+        "Price comparisons between sellers (not in this check).",
+        ...(chain === "base" ? ["Base payments to sellers not listed in the CDP x402 Bazaar, and payments before Lumi's index start."] : []),
+      ],
+      privacy: "Lumi does not store the wallet you look up (normal request logs only). Payer data older than 90 days is not shown.",
+      ...comingLater,
+      note: "Facts from public ledgers and Lumi's own test-buys. Not a rating, endorsement or guarantee. Not financial advice.",
+    }, { ...noStore, ...rl });
   }
 
   /** payTo-only verdict (MCP tool payments): who is this address, per the catalog and Lumi's curated vendors. */
@@ -1391,6 +1522,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (request.method === "GET" || request.method === "HEAD") {
       if (path === "/v1/check") return freeCheck(request, url, base, ctx);
       if (path === "/v1/trust/check") return freeTrustCheck(request, url, base, ctx);
+      if (path === "/v1/wallet/check") return walletCheck(request, url, base);
       if (path === "/v1/verdict/rules") return json(200, { kind: "lumi_verdict_rules", pricing: verdictIsPaid ? "paid" : "free", ...thresholdsDoc(verdictTh) }, { "Cache-Control": "public, max-age=3600" });
       // VERDICT_PRICING = "free" (default): a free alias of /v1/check with the shared label. "paid": falls through to x402.
       if (path === "/v1/verdict" && !verdictIsPaid) return freeVerdict(request, url, base, ctx);

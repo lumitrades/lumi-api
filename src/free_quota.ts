@@ -78,9 +78,11 @@ export async function callerIds(request: Request, secret: string): Promise<{ ip:
 
 const objectFor = (id: string) => `quota-${parseInt(id.slice(0, 6), 16) % QUOTA_OBJECTS}`;
 
-export function createFreeQuota(opts: { counter: QuotaCounter; secret: string; now?: () => number; log?: (e: Record<string, unknown>) => void; limits?: { perDay: number; perMinute: number; globalPerDay: number } }) {
+export function createFreeQuota(opts: { counter: QuotaCounter; secret: string; now?: () => number; log?: (e: Record<string, unknown>) => void; limits?: { perDay: number; perMinute: number; globalPerDay: number }; prefix?: string }) {
   const L = opts.limits ?? FREE_TRUST_CHECK_LIMITS;
   const now = opts.now ?? Date.now;
+  /** Counter key prefix: "tc" (free trust check, default) or another free route with its own allowance. */
+  const P = opts.prefix ?? "tc";
   /** Isolate-local memo of identities already over their daily limit: repeat callers skip the DO call until reset. */
   const denied = new Map<string, number>();
   return {
@@ -101,9 +103,9 @@ export function createFreeQuota(opts: { counter: QuotaCounter; secret: string; n
       }
       try {
         const ipKeys: QuotaKey[] = [
-          { key: `tc:m:${minute}:${ids.ip}`, max: L.perMinute, resetAt: minuteReset },
-          { key: `tc:d:${day}:${ids.ip}`, max: L.perDay, resetAt: dayReset },
-          { key: `tc:g:${day}`, max: Math.ceil(L.globalPerDay / QUOTA_OBJECTS), resetAt: dayReset },
+          { key: `${P}:m:${minute}:${ids.ip}`, max: L.perMinute, resetAt: minuteReset },
+          { key: `${P}:d:${day}:${ids.ip}`, max: L.perDay, resetAt: dayReset },
+          { key: `${P}:g:${day}`, max: Math.ceil(L.globalPerDay / QUOTA_OBJECTS), resetAt: dayReset },
         ];
         const r = await opts.counter.take(objectFor(ids.ip), ipKeys);
         if (!r.allowed) {
@@ -113,7 +115,7 @@ export function createFreeQuota(opts: { counter: QuotaCounter; secret: string; n
         }
         let remaining = Math.max(0, L.perDay - r.counts[1]);
         if (ids.key) {
-          const kr = await opts.counter.take(objectFor(ids.key), [{ key: `tc:k:${day}:${ids.key}`, max: L.perDay, resetAt: dayReset }]);
+          const kr = await opts.counter.take(objectFor(ids.key), [{ key: `${P}:k:${day}:${ids.key}`, max: L.perDay, resetAt: dayReset }]);
           if (!kr.allowed) { denied.set(ids.key, dayReset); return { allowed: false, limit: L.perDay, remaining: 0, resetAt: dayReset, reason: "key_day" }; }
           remaining = Math.min(remaining, Math.max(0, L.perDay - kr.counts[0]));
         }

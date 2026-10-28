@@ -51,7 +51,7 @@ test("tools: seller monitoring and trust feed present; retired trading tools gon
   for (const n of ["lumi_coins", "lumi_signal", "lumi_lite", "lumi_scan", "lumi_levels", "lumi_slate", "lumi_brief", "lumi_market", "lumi_macro_yen", "lumi_sentiment", "lumi_events", "lumi_events_48h", "lumi_funding", "lumi_fear_greed", "lumi_institutional_brief"]) assert.ok(!by[n], `${n} retired`);
   for (const t of tools) assert.doesNotMatch(JSON.stringify(t), /\/v1\/(funding|fear-greed|institutional)|fear.?greed|funding rate|institutional brief|policy brief|market data/i, t.name);
   for (const t of tools) assert.doesNotMatch(t.description, /projection|leverage|support|resistance|\bsignal\b|trade idea/i, t.name);
-  assert.equal(tools.length, 13); // 0.10.0: lumi_trust_check is free, lumi_high_value_check added (0.9.9: retired tools removed)
+  assert.equal(tools.length, 14); // wallet check added (free). 0.10.0: lumi_trust_check is free, lumi_high_value_check added (0.9.9: retired tools removed)
   assert.ok(by.lumi_verdict, "lumi_verdict present");
   assert.match(by.lumi_verdict.description, /never changes a result/);
   assert.ok(!tools.some((t) => t.name === "lumi_trades"), "lumi_trades removed");

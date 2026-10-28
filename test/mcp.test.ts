@@ -88,7 +88,7 @@ describe("remote MCP: protocol", () => {
     expect(r.headers.get("Content-Type")).toBe("text/event-stream");
     const t = await r.text();
     expect(t).toMatch(/^event: message\ndata: /);
-    expect(JSON.parse(t.split("data: ")[1]).result.tools.length).toBe(10);
+    expect(JSON.parse(t.split("data: ")[1]).result.tools.length).toBe(11);
   });
 });
 
@@ -99,7 +99,7 @@ describe("remote MCP: tools", () => {
     const src = readFileSync(join(__dirname, "..", "mcp", "src", "index.js"), "utf8");
     const wrapper = [...src.matchAll(/name: "(lumi_[a-z0-9_]+)"/g), ...src.matchAll(/registerTool\(\s*"(lumi_[a-z0-9_]+)"/g)].map((m) => m[1]);
     expect(new Set(names)).toEqual(new Set(wrapper));
-    expect(names).toHaveLength(10);
+    expect(names).toHaveLength(11);
     for (const gone of ["lumi_funding", "lumi_fear_greed", "lumi_institutional_brief"]) expect(names).not.toContain(gone);
   });
 

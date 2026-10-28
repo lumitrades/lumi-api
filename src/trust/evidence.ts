@@ -92,6 +92,8 @@ export interface EvidenceStore {
   markQueued(network: string, payTo: string, t: number): Promise<boolean>;
   addInflow(rows: InflowRow[]): Promise<number>;
   inflowFor(payTo: string, limit: number): Promise<InflowRow[]>;
+  /** Free wallet check: index rows where this wallet is the payer, last_ts >= since, newest first. Optional (older fakes). */
+  outflowOf?(payer: string, since: number, limit: number): Promise<InflowRow[]>;
   unresolvedPayers(limit: number): Promise<{ payer: string; first_block: number }[]>;
   funders(network: string, accounts: string[]): Promise<FunderRow[]>;
   putFunders(rows: FunderRow[]): Promise<number>;
@@ -143,6 +145,7 @@ export class MemoryEvidenceStore implements EvidenceStore {
     return rows.length;
   }
   async inflowFor(p: string, limit: number) { return [...this.inflow.values()].filter((r) => r.pay_to === p).sort((a, b) => b.last_ts - a.last_ts).slice(0, limit); }
+  async outflowOf(payer: string, since: number, limit: number) { return [...this.inflow.values()].filter((r) => r.payer === payer && r.last_ts >= since).sort((a, b) => b.last_ts - a.last_ts).slice(0, limit); }
   async unresolvedPayers(limit: number) {
     const m = new Map<string, { payer: string; first_block: number; last: number }>();
     for (const r of this.inflow.values()) {
@@ -218,6 +221,10 @@ export class D1EvidenceStore implements EvidenceStore {
   }
   async inflowFor(p: string, limit: number) {
     return (await this.db.prepare("SELECT * FROM base_inflow WHERE pay_to = ?1 ORDER BY last_ts DESC LIMIT ?2").bind(p, limit).all<InflowRow>()).results ?? [];
+  }
+  async outflowOf(payer: string, since: number, limit: number) {
+    // Uses base_inflow_payer (migration 0032). A read only: the queried wallet is never written anywhere.
+    return (await this.db.prepare("SELECT * FROM base_inflow WHERE payer = ?1 AND last_ts >= ?2 ORDER BY last_ts DESC LIMIT ?3").bind(payer, since, limit).all<InflowRow>()).results ?? [];
   }
   async unresolvedPayers(limit: number) {
     return (await this.db.prepare("SELECT payer, first_block FROM funder_todo ORDER BY added_at DESC LIMIT ?1").bind(limit).all<{ payer: string; first_block: number }>()).results ?? [];

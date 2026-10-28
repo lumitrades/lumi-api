@@ -110,6 +110,12 @@ export const PAID_TOOLS: PaidTool[] = [
   },
 ];
 
+export const WALLET_CHECK_TOOL_DESCRIPTION =
+  "Free (rate-limited, 100 a day). Pass a public wallet address (Base 0x..., XRP Ledger r... or Stellar G...) to list the x402 sellers that wallet paid in the last 90 days, " +
+  "each with the same plain summary line as lumi_trust_check (how many times Lumi test-bought it and how many delivered, or that Lumi has not test-bought it yet) and simple flags " +
+  "(listing looks dead, no longer listed, recent checks failed, repeat or possible duplicate payments). Base reads Lumi's index of public USDC transfers into CDP Bazaar payTos; XRPL and Stellar read the latest 200 ledger entries. " +
+  "Public data only; Lumi does not store the address. No price comparisons. Observations, not a guarantee.";
+
 /** Shared note for every paid tool, stated once in the server instructions instead of in each tool description. */
 export const PAID_TOOLS_NOTE =
   "Paid tools on this remote server return the price and how to pay (x402 at the REST URL on XRPL, Base or Stellar, or the lumi-trades-mcp npm package with an XRPL or Base wallet); the owner key gets the data. Never charged when Lumi cannot answer.";
@@ -130,6 +136,19 @@ function toolList() {
           amount: { type: "string", maxLength: 20, description: "Optional: the quoted price in USD, e.g. 0.01" },
         },
         required: ["url"],
+      },
+      annotations: ro,
+    },
+    {
+      name: "lumi_wallet_check",
+      title: "Lumi: which x402 sellers did this wallet pay? (free, rate-limited)",
+      description: WALLET_CHECK_TOOL_DESCRIPTION,
+      inputSchema: {
+        type: "object",
+        properties: {
+          address: { type: "string", maxLength: 120, description: "A public wallet address: Base 0x..., XRP Ledger r... or Stellar G..." },
+        },
+        required: ["address"],
       },
       annotations: ro,
     },
@@ -217,7 +236,7 @@ function toolList() {
 
 const INSTRUCTIONS =
   "Lumi Trades (lumitrades.io): an x402 seller trust service. Start with lumi_trust_check (free, rate-limited): allow / warn / block with coded reasons before you pay an x402 seller. Then lumi_verdict (paid one-label pre-payment check: checks_passed / check_first / checks_failed / no_data), lumi_high_value_check (paid, priced as a share of the amount, adds a live re-check), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
-  "Free: lumi_catalog, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_trust_check (rate-limited), lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (plans, packs, free tier and 14-day trial) and lumi_trust_feed (free key, Feed and Feed Pro); lumi_vendor_report is the paid full history for one vendor. " +
+  "Free: lumi_catalog, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_trust_check (rate-limited), lumi_wallet_check (rate-limited: which x402 sellers a public wallet paid, with Lumi's facts on each), lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (plans, packs, free tier and 14-day trial) and lumi_trust_feed (free key, Feed and Feed Pro); lumi_vendor_report is the paid full history for one vendor. " +
   "lumi_verdict is paid (on this remote server it returns the x402 terms; the free signed GET /v1/check has the same data). Paid tools are priced per call via x402 (live prices: lumi_catalog, lumi_quote); paid in XRP, RLUSD or USDC on the XRP Ledger or USDC on Base or Stellar; " + TRIAL_SHORT + "; without access they return the price and how to pay. " +
   PAID_TOOLS_NOTE + " Automated observations, not an endorsement or guarantee. Cite 'Lumi Trades (lumitrades.io)'.";
 
@@ -511,6 +530,12 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
         // Free and rate-limited; 429 carries the paid high-value route.
         const r = await deps.quote(`/v1/trust/check?${qs}`);
         // summary (a plain facts line the agent can show its user verbatim) leads the result.
+        return text(r.status === 200 ? { ...(r.body?.summary ? { summary: r.body.summary } : {}), ...r.body, note: TRUST_DISCLAIMER } : r.body, r.status !== 200);
+      }
+      case "lumi_wallet_check": {
+        const a = str(args.address)?.trim();
+        if (!a) return text({ error: "missing required argument: address (a public Base 0x..., XRP Ledger r... or Stellar G... wallet address)" }, true);
+        const r = await deps.quote(`/v1/wallet/check?address=${encodeURIComponent(a)}`);
         return text(r.status === 200 ? { ...(r.body?.summary ? { summary: r.body.summary } : {}), ...r.body, note: TRUST_DISCLAIMER } : r.body, r.status !== 200);
       }
       case "lumi_verdict": {
