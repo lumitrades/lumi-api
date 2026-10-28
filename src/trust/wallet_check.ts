@@ -4,7 +4,7 @@
  *
  * Sources (public data only, cheap reads):
  *  - Base (0x...): Lumi's own index of public Base USDC Transfer logs INTO payTos listed in the CDP x402 Bazaar
- *    (base_inflow, recorded going forward from the index start). One indexed read by payer; no explorer, no archive RPC.
+ *    (base_inflow_daily, recorded going forward from the index start). One indexed read by payer; no explorer, no archive RPC.
  *  - XRP Ledger (r...): one account_tx page (latest 200 transactions) from a public rippled server.
  *  - Stellar (G...): one Horizon /payments page (latest 200 operations).
  * Only outgoing payments of the queried wallet are read. Recipients are matched to Lumi's records (catalog listings and
@@ -14,7 +14,7 @@
  *  - The queried wallet is never stored and never logged by this module (normal request logs only).
  *  - Payments to Lumi's own wallets are never listed or counted: no Lumi customer payer data, no Lumi income.
  *  - Nothing about other payers of a seller and nothing about a seller's income: only this wallet's own outgoing payments.
- *  - Payer data older than 90 days is not shown (the payer-data retention rule).
+ *  - Payer data older than 90 days is not shown, and Base payer rows (base_inflow_daily) are deleted after 90 days by the daily prune.
  * Not in this version: "paid more than an equivalent seller" comparisons (not reliable enough). Paid extras (weekly
  * reports, alerts, longer history) are reserved and not built.
  */

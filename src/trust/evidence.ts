@@ -55,6 +55,23 @@ const declaredOf = (net: "evm" | "xrpl") => SELLER_DECLARED_TESTERS.filter((d) =
 export const KNOWN_TESTERS = { xrpl: [...declaredOf("xrpl"), "r4w68TArDZjivtcFMNL7PvKf7uPg14Vev8"], evm: [...declaredOf("evm")] as string[] };
 /** A funder that funded at least this many indexed payers is treated as a hub (exchange, bridge, faucet) and not used for clustering. */
 export const HUB_MIN = 20;
+/** Base payer data (base_inflow_daily, Base funder rows) is deleted once it is older than this, by the daily prune. */
+export const INFLOW_RETENTION_DAYS = 90;
+export const utcDay = (t: number) => new Date(t).toISOString().slice(0, 10);
+const dayOf = (r: InflowRow) => r.day ?? utcDay(r.first_ts);
+/** Sum per-day rows into one row per (pay_to, payer); last_tx follows the latest payment. */
+export function sumInflow(rows: InflowRow[]): InflowRow[] {
+  const m = new Map<string, InflowRow>();
+  for (const r of rows) {
+    const k = `${r.pay_to}|${r.payer}`;
+    const ex = m.get(k);
+    if (!ex) { const { day: _d, ...x } = r; m.set(k, { ...x }); continue; }
+    ex.n += r.n; ex.units += r.units; ex.first_ts = Math.min(ex.first_ts, r.first_ts); ex.first_block = Math.min(ex.first_block, r.first_block);
+    if (r.last_ts >= ex.last_ts) { ex.last_ts = r.last_ts; ex.last_tx = r.last_tx; }
+  }
+  return [...m.values()].sort((a, b) => b.last_ts - a.last_ts);
+}
+export interface PruneResult { cutoff_day: string; inflow_days: number; legacy_rows: number; funders: number; funder_todo: number }
 export const CENSUS_FRESH_MS = 24 * 3_600_000;
 export const CENSUS_REQUEUE_MS = 15 * 60_000;
 export const BASE_BLOCK_MS = 2000;
@@ -75,7 +92,8 @@ const iso = (t: number | null | undefined) => (t == null || !Number.isFinite(t) 
 // ---------------------------------------------------------------- rows
 
 export interface CensusRow { network: string; pay_to: string; checked_at: number; queued_at: number | null; doc: string | null }
-export interface InflowRow { pay_to: string; payer: string; n: number; units: number; first_ts: number; last_ts: number; first_block: number; last_tx: string }
+/** Base payments from `payer` into `pay_to`. Stored per UTC `day` (base_inflow_daily); reads return one row per pair, summed over the kept days. */
+export interface InflowRow { pay_to: string; payer: string; day?: string; n: number; units: number; first_ts: number; last_ts: number; first_block: number; last_tx: string }
 export interface FunderRow { network: string; account: string; funder: string | null; checked_at: number; note: string | null }
 export interface Vet402Row {
   resource_key: string; network: string | null; l0_verdict: string | null; l0_probed_at: number | null; listed: number | null;
@@ -94,6 +112,8 @@ export interface EvidenceStore {
   inflowFor(payTo: string, limit: number): Promise<InflowRow[]>;
   /** Free wallet check: index rows where this wallet is the payer, last_ts >= since, newest first. Optional (older fakes). */
   outflowOf?(payer: string, since: number, limit: number): Promise<InflowRow[]>;
+  /** 90-day retention: delete per-day payer rows dated before `cutoffDay`, and Base funder rows for payers no longer kept. Optional (older fakes). */
+  pruneInflow?(cutoffDay: string, cutoffTs: number): Promise<PruneResult>;
   unresolvedPayers(limit: number): Promise<{ payer: string; first_block: number }[]>;
   funders(network: string, accounts: string[]): Promise<FunderRow[]>;
   putFunders(rows: FunderRow[]): Promise<number>;
@@ -134,9 +154,10 @@ export class MemoryEvidenceStore implements EvidenceStore {
   }
   async addInflow(rows: InflowRow[]) {
     for (const r of rows) {
-      const k = `${r.pay_to}|${r.payer}`;
+      const day = dayOf(r);
+      const k = `${r.pay_to}|${r.payer}|${day}`;
       const ex = this.inflow.get(k);
-      if (!ex) this.inflow.set(k, { ...r });
+      if (!ex) this.inflow.set(k, { ...r, day });
       else {
         ex.n += r.n; ex.units += r.units; ex.first_ts = Math.min(ex.first_ts, r.first_ts); ex.first_block = Math.min(ex.first_block, r.first_block);
         if (r.last_ts >= ex.last_ts) { ex.last_ts = r.last_ts; ex.last_tx = r.last_tx; }
@@ -144,8 +165,15 @@ export class MemoryEvidenceStore implements EvidenceStore {
     }
     return rows.length;
   }
-  async inflowFor(p: string, limit: number) { return [...this.inflow.values()].filter((r) => r.pay_to === p).sort((a, b) => b.last_ts - a.last_ts).slice(0, limit); }
-  async outflowOf(payer: string, since: number, limit: number) { return [...this.inflow.values()].filter((r) => r.payer === payer && r.last_ts >= since).sort((a, b) => b.last_ts - a.last_ts).slice(0, limit); }
+  async inflowFor(p: string, limit: number) { return sumInflow([...this.inflow.values()].filter((r) => r.pay_to === p)).slice(0, limit); }
+  async outflowOf(payer: string, since: number, limit: number) { return sumInflow([...this.inflow.values()].filter((r) => r.payer === payer && r.last_ts >= since)).slice(0, limit); }
+  async pruneInflow(cutoffDay: string, cutoffTs: number): Promise<PruneResult> {
+    let inflow_days = 0, funders = 0, funder_todo = 0;
+    for (const [k, r] of this.inflow) if ((r.day ?? "") < cutoffDay) { this.inflow.delete(k); inflow_days++; }
+    const kept = new Set([...this.inflow.values()].map((r) => r.payer));
+    for (const [k, f] of this.fund) if (f.network === BASE_NET && f.checked_at < cutoffTs && !kept.has(f.account)) { this.fund.delete(k); funders++; }
+    return { cutoff_day: cutoffDay, inflow_days, legacy_rows: 0, funders, funder_todo };
+  }
   async unresolvedPayers(limit: number) {
     const m = new Map<string, { payer: string; first_block: number; last: number }>();
     for (const r of this.inflow.values()) {
@@ -206,12 +234,12 @@ export class D1EvidenceStore implements EvidenceStore {
   async addInflow(rows: InflowRow[]) {
     if (!rows.length) return 0;
     const stmts = rows.map((r) => this.db.prepare(
-      `INSERT INTO base_inflow (pay_to, payer, n, units, first_ts, last_ts, first_block, last_tx) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-       ON CONFLICT(pay_to, payer) DO UPDATE SET n = base_inflow.n + excluded.n, units = base_inflow.units + excluded.units,
-         first_ts = MIN(base_inflow.first_ts, excluded.first_ts), first_block = MIN(base_inflow.first_block, excluded.first_block),
-         last_tx = CASE WHEN excluded.last_ts >= base_inflow.last_ts THEN excluded.last_tx ELSE base_inflow.last_tx END,
-         last_ts = MAX(base_inflow.last_ts, excluded.last_ts)`,
-    ).bind(r.pay_to, r.payer, r.n, r.units, r.first_ts, r.last_ts, r.first_block, r.last_tx));
+      `INSERT INTO base_inflow_daily (pay_to, payer, day, n, units, first_ts, last_ts, first_block, last_tx) VALUES (?1, ?2, ?9, ?3, ?4, ?5, ?6, ?7, ?8)
+       ON CONFLICT(pay_to, payer, day) DO UPDATE SET n = base_inflow_daily.n + excluded.n, units = base_inflow_daily.units + excluded.units,
+         first_ts = MIN(base_inflow_daily.first_ts, excluded.first_ts), first_block = MIN(base_inflow_daily.first_block, excluded.first_block),
+         last_tx = CASE WHEN excluded.last_ts >= base_inflow_daily.last_ts THEN excluded.last_tx ELSE base_inflow_daily.last_tx END,
+         last_ts = MAX(base_inflow_daily.last_ts, excluded.last_ts)`,
+    ).bind(r.pay_to, r.payer, r.n, r.units, r.first_ts, r.last_ts, r.first_block, r.last_tx, dayOf(r)));
     // Work list for funder resolution: only payers without a funders row (an ignored insert writes nothing).
     for (const r of rows) stmts.push(this.db.prepare(
       `INSERT OR IGNORE INTO funder_todo (payer, first_block, added_at) SELECT ?1, ?2, ?3 WHERE NOT EXISTS (SELECT 1 FROM funders WHERE network = '${BASE_NET}' AND account = ?1)`,
@@ -220,11 +248,35 @@ export class D1EvidenceStore implements EvidenceStore {
     return rows.length * 2;
   }
   async inflowFor(p: string, limit: number) {
-    return (await this.db.prepare("SELECT * FROM base_inflow WHERE pay_to = ?1 ORDER BY last_ts DESC LIMIT ?2").bind(p, limit).all<InflowRow>()).results ?? [];
+    return this.summed("pay_to = ?1", [p], limit);
   }
   async outflowOf(payer: string, since: number, limit: number) {
-    // Uses base_inflow_payer (migration 0032). A read only: the queried wallet is never written anywhere.
-    return (await this.db.prepare("SELECT * FROM base_inflow WHERE payer = ?1 AND last_ts >= ?2 ORDER BY last_ts DESC LIMIT ?3").bind(payer, since, limit).all<InflowRow>()).results ?? [];
+    // Uses base_inflow_daily_payer (migration 0032). A read only: the queried wallet is never written anywhere.
+    return this.summed("payer = ?1 AND last_ts >= ?2", [payer, since], limit);
+  }
+  /** One row per (pay_to, payer) summed over the kept days matching `where`; last_tx of the latest day (a PK lookup per returned row). */
+  private async summed(where: string, args: unknown[], limit: number): Promise<InflowRow[]> {
+    const l = `?${args.length + 1}`;
+    return (await this.db.prepare(
+      `SELECT g.*, (SELECT d.last_tx FROM base_inflow_daily d WHERE d.pay_to = g.pay_to AND d.payer = g.payer ORDER BY d.last_ts DESC LIMIT 1) AS last_tx
+       FROM (SELECT pay_to, payer, SUM(n) AS n, SUM(units) AS units, MIN(first_ts) AS first_ts, MAX(last_ts) AS last_ts, MIN(first_block) AS first_block
+             FROM base_inflow_daily WHERE ${where} GROUP BY pay_to, payer ORDER BY MAX(last_ts) DESC LIMIT ${l}) g ORDER BY g.last_ts DESC`,
+    ).bind(...args, limit).all<InflowRow>()).results ?? [];
+  }
+  /**
+   * 90-day retention, run once a day by the catalog cron. Deletes: per-day rows dated before cutoffDay; any rows left in the
+   * legacy base_inflow table (only an older, rolled-back Worker writes it) whose last payment is older than cutoffTs; Base
+   * funder rows checked before cutoffTs whose payer has no kept day (an indexed lookup each); funder_todo items older than cutoffTs.
+   */
+  async pruneInflow(cutoffDay: string, cutoffTs: number): Promise<PruneResult> {
+    const ch = (r: any) => Number(r?.meta?.changes ?? 0);
+    const [a, b, c, d] = (await this.db.batch([
+      this.db.prepare("DELETE FROM base_inflow_daily WHERE day < ?1").bind(cutoffDay),
+      this.db.prepare("DELETE FROM base_inflow WHERE last_ts < ?1").bind(cutoffTs),
+      this.db.prepare(`DELETE FROM funders WHERE network = '${BASE_NET}' AND checked_at < ?1 AND NOT EXISTS (SELECT 1 FROM base_inflow_daily b WHERE b.payer = funders.account)`).bind(cutoffTs),
+      this.db.prepare("DELETE FROM funder_todo WHERE added_at < ?1").bind(cutoffTs),
+    ])) as unknown[];
+    return { cutoff_day: cutoffDay, inflow_days: ch(a), legacy_rows: ch(b), funders: ch(c), funder_todo: ch(d) };
   }
   async unresolvedPayers(limit: number) {
     return (await this.db.prepare("SELECT payer, first_block FROM funder_todo ORDER BY added_at DESC LIMIT ?1").bind(limit).all<{ payer: string; first_block: number }>()).results ?? [];
@@ -459,7 +511,7 @@ async function getLogs(f: Fetch, urls: string[], from: number, to: number, topic
   return r.result;
 }
 
-/** USDC Transfer logs into `payTos` over [from, to]; aggregated per (payTo, payer). Self-transfers and mints are skipped. */
+/** USDC Transfer logs into `payTos` over [from, to]; aggregated per (payTo, payer, UTC day). Self-transfers and mints are skipped. */
 export async function baseLogs(f: Fetch, urls: string[], payTos: string[], from: number, to: number, head: { block: number; ts: number }): Promise<InflowRow[]> {
   const topics = [TRANSFER_TOPIC, null, payTos.map(pad)];
   let logs: any[];
@@ -480,9 +532,10 @@ export async function baseLogs(f: Fetch, urls: string[], payTos: string[], from:
     if (!(units > 0)) continue;
     const b = parseInt(l.blockNumber, 16);
     const ts = head.ts - (head.block - b) * BASE_BLOCK_MS;
-    const k = `${payTo}|${payer}`;
+    const day = utcDay(ts);
+    const k = `${payTo}|${payer}|${day}`;
     const ex = agg.get(k);
-    if (!ex) agg.set(k, { pay_to: payTo, payer, n: 1, units, first_ts: ts, last_ts: ts, first_block: b, last_tx: String(l.transactionHash).toLowerCase() });
+    if (!ex) agg.set(k, { pay_to: payTo, payer, day, n: 1, units, first_ts: ts, last_ts: ts, first_block: b, last_tx: String(l.transactionHash).toLowerCase() });
     else {
       ex.n++; ex.units += units; ex.first_ts = Math.min(ex.first_ts, ts); ex.first_block = Math.min(ex.first_block, b);
       if (ts >= ex.last_ts) { ex.last_ts = ts; ex.last_tx = String(l.transactionHash).toLowerCase(); }

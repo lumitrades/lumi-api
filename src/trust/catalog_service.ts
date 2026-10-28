@@ -13,7 +13,7 @@ import {
 } from "./catalog";
 import { lookupBaseUsdc, lookupXrplPayment, lookupStellarUsdc, EVM_TX_RE, XRPL_TX_RE, XRPL_ADDR_RE, EVM_ADDR_RE, STELLAR_TX_RE, STELLAR_HORIZON } from "./verify";
 import {
-  type EvidenceStore, type PayerAgg, type XrplCensusDoc, BASE_NET, XRPL_NET, LUMI_WALLETS, KNOWN_TESTERS, HUB_MIN, CENSUS_FRESH_MS, BASE_WINDOW_MAX, BASE_GROUP, BASE_BLOCK_MS,
+  type EvidenceStore, type PayerAgg, type XrplCensusDoc, BASE_NET, XRPL_NET, LUMI_WALLETS, KNOWN_TESTERS, HUB_MIN, INFLOW_RETENTION_DAYS, utcDay, CENSUS_FRESH_MS, BASE_WINDOW_MAX, BASE_GROUP, BASE_BLOCK_MS,
   classifyPayers, xrplCensus, baseHead, baseLogs, baseFunder, vet402View, parseVet402, VET402,
 } from "./evidence";
 
@@ -321,6 +321,10 @@ export function createCatalog(deps: CatalogDeps) {
     if (deps.evidence) {
       try { out.evidence = await evidenceCron(t); } catch (e) { out.evidence_error = String(e); }
     }
+    if (deps.evidence) {
+      // 90-day retention of Base payer data: once per UTC day (first cron run of the day), never skipped for the write budget.
+      try { const p = await pruneInflow(t); if (p) out.inflow_prune = p; } catch (e) { out.inflow_prune_error = String(e); }
+    }
     const st = await stats();
     if (!st || t - st.computed_at > STATS_EVERY_MS) await store.setMeta("stats", JSON.stringify(await store.computeStats(t)));
     try {
@@ -476,6 +480,21 @@ export function createCatalog(deps: CatalogDeps) {
     } catch (e) { out.hubs_error = String(e); }
     await send(jobs, 5);
     return out;
+  }
+
+  /** Deletes base_inflow_daily days older than INFLOW_RETENTION_DAYS (and Base funder rows of payers no longer kept). Once a day. */
+  async function pruneInflow(t: number) {
+    const ev = deps.evidence!;
+    if (!ev.pruneInflow) return null;
+    const day = utcDay(t);
+    const m = await metaJson<{ day: string }>("inflow_prune");
+    if (m?.day === day) return null;
+    const cutoffTs = t - INFLOW_RETENTION_DAYS * 86_400_000;
+    const r = await ev.pruneInflow(utcDay(cutoffTs), cutoffTs);
+    const deleted = r.inflow_days + r.legacy_rows + r.funders + r.funder_todo;
+    await store.setMeta("inflow_prune", JSON.stringify({ day, at: t, retention_days: INFLOW_RETENTION_DAYS, ...r }));
+    await store.addCounter(dayKey(t), deleted + 1);
+    return { retention_days: INFLOW_RETENTION_DAYS, ...r };
   }
 
   async function consumeEvidence(job: Extract<CatalogJob, { kind: "xrpl_census" | "base_logs" | "base_funders" }>) {
