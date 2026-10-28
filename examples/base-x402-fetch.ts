@@ -2,7 +2,7 @@
  * Any EVM agent, using the official x402 v2 fetch SDK and USDC on Base.
  *
  *   npm i @x402/fetch @x402/evm viem
- *   EVM_PRIVATE_KEY=0x... npx tsx examples/base-x402-fetch.ts /v1/fear-greed
+ *   EVM_PRIVATE_KEY=0x... npx tsx examples/base-x402-fetch.ts /v1/trust/vendors/printmoneylab/report
  *
  * The client sees Lumi's 402, skips the XRPL options, picks eip155:8453 USDC, signs an
  * EIP-3009 authorization (gasless: no ETH needed) and retries. Paid routes from $0.005 per call (most $0.005 to $0.02;
@@ -13,7 +13,7 @@ import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { decodePaymentResponseHeader } from "@x402/fetch";
 import { privateKeyToAccount } from "viem/accounts";
 
-const path = process.argv[2] ?? "/v1/fear-greed";
+const path = process.argv[2] ?? "/v1/trust/vendors/printmoneylab/report";
 const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`) });
 const fetchPaid = wrapFetchWithPayment(fetch, client);

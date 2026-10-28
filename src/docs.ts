@@ -3,7 +3,7 @@
 import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPriceTable, planResources } from "./commerce/discovery";
 import { PLATFORM_LICENCE, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
-import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, PAID_PRICE_SUMMARY, highValuePriceUsd } from "./config";
+import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, PAID_PRICE_SUMMARY, highValuePriceUsd, usdcToAtomic } from "./config";
 import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable } from "./catalog";
 import { BAZAAR_ROUTES, TRUST_ROUTES, VENDOR_ID_PATTERN, errorDocs, serviceNameFor } from "./bazaar";
 import { DISCLAIMER, SOURCE, type CoinRef } from "./views";
@@ -937,7 +937,7 @@ const act = (n: string) => agentkit.getActions().find((a) => a.name.endsWith(n))
 
 const url = "${base}${HIGH_VALUE_EXAMPLE}";
 const quote = JSON.parse(await act("make_http_request").invoke({ url }));        // status: error_402_payment_required
-const o = quote.acceptablePaymentOptions.find((x: any) => x.network === "${cfg.evm.network}"); // amount "20000" = $0.02
+const o = quote.acceptablePaymentOptions.find((x: any) => x.network === "${cfg.evm.network}"); // amount "${usdcToAtomic(highValuePriceUsd(10))}" = $${highValuePriceUsd(10)} (0.5% of amount=10)
 const paid = JSON.parse(await act("retry_http_request_with_x402").invoke({
   url, method: "GET",
   selectedPaymentOption: { scheme: o.scheme, network: o.network, asset: o.asset, amount: o.amount, payTo: o.payTo },

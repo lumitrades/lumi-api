@@ -18,7 +18,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 const client = new x402Client();
 registerExactEvmScheme(client, { signer: privateKeyToAccount(process.env.EVM_PRIVATE_KEY as `0x${string}`) });
-const res = await wrapFetchWithPayment(fetch, client)("https://api.lumitrades.io/v1/trust/check?url=https://api.example.com/v1/data"); // $0.02, gasless
+const res = await wrapFetchWithPayment(fetch, client)("https://api.lumitrades.io/v1/trust/vendors/printmoneylab/report"); // paid vendor report, $0.02 USDC, gasless
 console.log(await res.json());
 ```
 
@@ -38,7 +38,7 @@ const walletProvider = new ViemWalletProvider(createWalletClient({
 const agentkit = await AgentKit.from({ walletProvider, actionProviders: [x402ActionProvider()] });
 const act = (n: string) => agentkit.getActions().find((a) => a.name.endsWith(n))!;
 
-const url = "https://api.lumitrades.io/v1/trust/check?url=https://api.example.com/v1/data";
+const url = "https://api.lumitrades.io/v1/trust/vendors/printmoneylab/report"; // paid vendor report (the basic /v1/trust/check is free)
 const quote = JSON.parse(await act("make_http_request").invoke({ url }));          // 402 terms
 const o = quote.acceptablePaymentOptions.find((x: any) => x.network === "eip155:8453"); // 20000 = $0.02 USDC
 const paid = JSON.parse(await act("retry_http_request_with_x402").invoke({
@@ -55,7 +55,7 @@ console.log(paid.data);
 ```json
 { "mcpServers": {
   "lumi-remote": { "url": "https://api.lumitrades.io/mcp" },
-  "lumi": { "command": "npx", "args": ["-y", "lumi-trades-mcp"], "env": { "EVM_PRIVATE_KEY": "0x...", "LUMI_MAX_USD_PER_CALL": "0.02" } } } }
+  "lumi": { "command": "npx", "args": ["-y", "lumi-trades-mcp"], "env": { "EVM_PRIVATE_KEY": "0x...", "LUMI_MAX_USD_PER_CALL": "0.25" } } } }
 ```
 
 ---
