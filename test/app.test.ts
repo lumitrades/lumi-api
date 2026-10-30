@@ -256,32 +256,20 @@ describe("openapi scanner hints", () => {
     expect(oa.paths["/v1/trust/vendors/{id}/report"].get.parameters[0].example).toBe("printmoneylab");
   });
 
-  it("quotes an unpaid literally probed paid template (402, same rails/prices/payTo), refuses a paid one with 400 and no facilitator call", async () => {
+  it("an unfilled paid path template is a 400 with the fix (never a 402), with or without a payment header; no facilitator call", async () => {
     const { get, fac } = setup();
-    const strip = (a: any[]) => a.map((x) => ({ network: x.network, asset: x.asset, amount: x.amount, payTo: x.payTo, scheme: x.scheme }));
-    for (const [p, ex, concrete] of ["/v1/trust/vendors/%7Bid%7D/report", "/v1/trust/vendors/:id/report", "/v1/trust/vendors/%3Cvendor_id%3E/report", "/v1/trust/vendors/%7B%7Bid%7D%7D/report"].map((t) => [t, "/v1/trust/vendors/printmoneylab/report", "/v1/trust/vendors/printmoneylab/report"])) {
-      const q = await get(p);
-      expect(q.status, p).toBe(402);
-      const body = await q.json();
-      expect(decodeB64Json(q.headers.get("PAYMENT-REQUIRED"))).toEqual(body);
-      expect(body.resource.url).toBe(BASE + new URL(BASE + p).pathname);
-      expect(body.note).toContain(BASE + ex);
-      const c = await get(concrete);
-      const cb = await c.json();
-      if (c.status === 402) expect(strip(body.accepts)).toEqual(strip(cb.accepts));
-      expect(body.accepts.length).toBeGreaterThan(0);
-
-      // Junk header and a well-formed payload built from the template quote: both refused, nothing verified or settled.
-      const forged = Buffer.from(JSON.stringify({ x402Version: 2, accepted: body.accepts[0], payload: { signedTxBlob: "00" } })).toString("base64");
-      for (const h of [{ "PAYMENT-SIGNATURE": "junk" }, { "X-PAYMENT": forged }] as Record<string, string>[]) {
+    const ex = "/v1/trust/vendors/printmoneylab/report";
+    for (const p of ["/v1/trust/vendors/%7Bid%7D/report", "/v1/trust/vendors/{id}/report", "/v1/trust/vendors/:id/report", "/v1/trust/vendors/%3Cid%3E/report", "/v1/trust/vendors/%3Cvendor_id%3E/report", "/v1/trust/vendors/%7B%7Bid%7D%7D/report"]) {
+      for (const h of [{}, { Accept: "application/json" }, { "PAYMENT-SIGNATURE": "junk" }, { "X-PAYMENT": Buffer.from(JSON.stringify({ x402Version: 2, payload: { signedTxBlob: "00" } })).toString("base64") }] as Record<string, string>[]) {
         const r = await get(p, h);
         expect(r.status, p).toBe(400);
         expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
         const b = await r.json();
-        expect(b).toMatchObject({ error: "path_template_not_filled", note: "Not charged." });
-        expect(b.example).toBe(BASE + ex);
+        expect(b).toMatchObject({ error: "path_template_not_filled", note: "Not charged.", example: BASE + ex, openapi: BASE + "/openapi.json" });
+        expect(b.detail).toMatch(/^Replace .+ with a real value\. Vendor ids: GET \/v1\/trust\/vendors \(free\)\.$/);
       }
     }
+    expect((await get(ex)).status).not.toBe(400); // the concrete URL is a normal paid route (402, or 503 while data is stale)
     expect(fac.calls).toHaveLength(0);
   });
 

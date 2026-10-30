@@ -40,7 +40,9 @@ describe("vendor report: HTML page for unpaid browser visits", () => {
     expect(paid.status).not.toBe(200);
     expect(paid.headers.get("content-type") ?? "").not.toMatch(/text\/html/);
   });
-  it("the unfilled template still answers the 402 quote for crawlers", async () => {
-    expect((await mk()("/v1/trust/vendors/%7Bid%7D/report", { Accept: BROWSER })).status).toBe(402);
+  it("the unfilled template is a 400 with the fix, not a 402 and not the HTML page", async () => {
+    const r = await mk()("/v1/trust/vendors/%7Bid%7D/report", { Accept: BROWSER });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toBe("path_template_not_filled");
   });
 });

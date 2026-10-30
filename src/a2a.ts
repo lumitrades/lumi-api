@@ -12,7 +12,7 @@ import { planPriceTable } from "./commerce/discovery";
 import { MONITOR_PRICE_TEXT } from "./commerce/plans";
 import type { Trust } from "./trust";
 import type { Config } from "./config";
-import { atomicToUsdc, dropsToXrp, EXAMPLE_SELLER_URL, FREE_TRUST_CHECK_LIMITS, HIGH_VALUE_PRICING_TEXT } from "./config";
+import { atomicToUsdc, dropsToXrp, EXAMPLE_SELLER_URL, FREE_TRUST_CHECK_LIMITS, HIGH_VALUE_PRICING_TEXT, HIGH_VALUE_PRICE_SHORT, highValuePriceUsd } from "./config";
 import { PAID_ENDPOINTS, priceTable } from "./catalog";
 import { VERSION, paymentNetworks, settledIn } from "./docs";
 import { DISCLAIMER, type CoinRef } from "./views";
@@ -61,7 +61,7 @@ const SKILLS: SkillDef[] = [
   {
     id: "vendor_report",
     route: "vendor_report",
-    name: "x402 vendor report: full observation history for one vendor (paid)",
+    name: "x402 vendor report: full observation history for one vendor (paid, $0.02)",
     tags: ["trust", "x402", "vendors", "observations", "report", "paid"],
     examples: ["vendor report printmoneylab", "{\"skill\":\"vendor_report\",\"vendor_id\":\"printmoneylab\"}"],
     match: /\b(vendor|trust)\s+report\b|\breport\b.*\bvendor\b/i,
@@ -69,7 +69,7 @@ const SKILLS: SkillDef[] = [
   },
   {
     id: "trust_check",
-    name: "Should I pay this x402 URL? allow / warn / block (free, rate-limited)",
+    name: "Should I pay this x402 URL? checks_passed / check_first / checks_failed / no_data, with allow / warn / block (free, rate-limited; start here)",
     tags: ["trust", "x402", "payment-safety", "check", "free"],
     examples: [`should I pay ${EXAMPLE_SELLER_URL}`, `{"skill":"trust_check","url":"${EXAMPLE_SELLER_URL}","amount":"0.01"}`],
     match: /\b(should i pay|pay[- ]check|trust[- ]check|safe to pay)\b/i,
@@ -78,7 +78,7 @@ const SKILLS: SkillDef[] = [
   {
     id: "high_value_check",
     route: "high_value_check",
-    name: "High-value check before a larger x402 payment: same verdict + live re-check + signed receipt (paid, 0.5% of the amount)",
+    name: "High-value check before a larger x402 payment: same verdict + live re-check + signed receipt (paid, 0.5% of the amount, min $0.005, max $0.25)",
     tags: ["trust", "x402", "payment-safety", "check", "high-value", "paid"],
     examples: [`high-value check ${EXAMPLE_SELLER_URL} amount 10`, `{"skill":"high_value_check","url":"${EXAMPLE_SELLER_URL}","amount":"10"}`],
     match: /\bhigh[- ]value\b/i,
@@ -87,7 +87,7 @@ const SKILLS: SkillDef[] = [
 ];
 
 const FREE_DESCRIPTIONS: Record<string, string> = {
-  trust_check: `Should I pay this x402 URL? {"url":"...","payTo":"...","amount":"0.01"} answers allow / warn / block with coded reasons and a Lumi-signed receipt, free: ${FREE_TRUST_CHECK_LIMITS.perDay} checks a day per IP and per key (GET /v1/trust/check). For a larger payment, the paid high_value_check skill adds a live re-check of the seller (${HIGH_VALUE_PRICING_TEXT})`,
+  trust_check: `Should I pay this x402 URL? {"url":"...","payTo":"...","amount":"0.01"} answers one label (checks_passed / check_first / checks_failed / no_data) and an allow / warn / block verdict with coded reasons and a Lumi-signed receipt, free: ${FREE_TRUST_CHECK_LIMITS.perDay} checks a day per IP and per key (GET /v1/trust/check). For a larger payment, the paid high_value_check skill adds a live re-check of the seller (${HIGH_VALUE_PRICING_TEXT})`,
   catalog: "Lists every Lumi endpoint with live prices on every payment network (XRP Ledger, Base, Stellar), the MCP and A2A endpoints, and the not-charged-when-Lumi-cannot-answer guarantee.",
   vendor_trust:
     "Check an x402 seller before paying it: {\"url\":\"...\"}, {\"domain\":\"...\"} or {\"payTo\":\"...\"} (case-insensitive) looks it up in the full CDP x402 Bazaar catalog (free quote checks of listings on a rotating schedule: 'quote-checked, low confidence'; live coverage counts in the response) and Lumi's on-chain-confirmed test-buys ('test-bought', counted per chain: Base USDC for Bazaar listings, XRPL for a small curated list). Answer-only; for an allow / warn / block verdict use the free trust_check skill. With no arguments: curated XRPL vendor observations; {\"vendor_id\":\"...\"} for one vendor's summary. Observations, not ratings; no match is not a negative finding.",
@@ -106,6 +106,13 @@ function priceLine(cfg: Config, route: PaidRoute): string {
   return (cfg.evm ? `${xrpl}, or ${cfg.evm.prices[route]} USDC on ${cfg.evm.networkName}` : xrpl) + st;
 }
 
+/** Dollar price first in each paid skill description, e.g. "Price: $0.02 per call." */
+function skillPrice(cfg: Config, route: PaidRoute): string {
+  if (route === "high_value_check") return `Price: ${HIGH_VALUE_PRICE_SHORT} per call, e.g. $${highValuePriceUsd(10)} for amount=10.`;
+  const usd = cfg.evm?.prices[route] ?? cfg.ious.find((o) => o.symbol === "RLUSD")?.prices[route] ?? cfg.ious[0]?.prices[route];
+  return usd ? `Price: $${usd} per call.` : "";
+}
+
 export function agentCard(cfg: Config, base: string) {
   const a2aUrl = `${base}/a2a`;
   // Card order leads with the trust check (matching order in SKILLS is unchanged).
@@ -117,7 +124,7 @@ export function agentCard(cfg: Config, base: string) {
       id: s.id,
       name: s.name,
       description: ep
-        ? `${ep.summary} Paid per call via x402 at ${base}${ep.template}: ${priceLine(cfg, s.route!)}. Over A2A this skill returns the live payment terms; it is never charged when Lumi cannot answer.`
+        ? `${skillPrice(cfg, s.route!)} ${ep.summary} Paid per call via x402 at ${base}${ep.template}: ${s.route === "high_value_check" ? "from " : ""}${priceLine(cfg, s.route!)}${s.route === "high_value_check" ? " (the floor; the 402 for your amount is binding)" : ""}. Over A2A this skill returns the live payment terms; it is never charged when Lumi cannot answer.`
         : FREE_DESCRIPTIONS[s.id],
       tags: s.tags,
       examples: s.examples,
@@ -399,7 +406,7 @@ async function answer(m: any, base: string, deps: A2aDeps): Promise<Answer> {
     const b = r.body ?? {};
     if (r.status === 200) {
       const why = Array.isArray(b.reasons) ? b.reasons.map((x: any) => x?.code ?? x).filter(Boolean).slice(0, 5).join(", ") : "";
-      return { skill: "trust_check", text: `${typeof b.summary === "string" ? `${b.summary} ` : ""}Verdict: ${String(b.verdict ?? "unknown")}${why ? ` (${why})` : ""}. Free check; observations, not a guarantee.${b.high_value_check?.url ? ` High-value check (paid): ${b.high_value_check.url}` : ""}`, data: b };
+      return { skill: "trust_check", text: `${typeof b.summary === "string" ? `${b.summary} ` : ""}Verdict: ${String(b.verdict ?? "unknown")}${why ? ` (${why})` : ""}. Free check; observations, not a guarantee.${b.high_value_check?.url ? ` High-value check (paid, ${HIGH_VALUE_PRICE_SHORT}; same verdict and score): ${b.high_value_check.url}` : ""}`, data: b };
     }
     if (r.status === 429) return { skill: "trust_check", text: `${b.detail ?? "Free trust-check limit reached."} Paid route: ${b.paid_route?.url ?? `${base}/v1/trust/check/high-value`}. Not charged.`, data: b };
     return { skill: "trust_check", text: `${b.detail ?? b.error ?? `HTTP ${r.status}`}. Not charged.`, data: b };

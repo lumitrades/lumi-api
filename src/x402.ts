@@ -16,10 +16,12 @@
  * (Durable Object in production; memory for a single Node process).
  */
 
+import { howToPay } from "./pay_examples";
 import type { SaleEvent } from "./sales";
 import { clientLabel } from "./traffic";
 import { parsePaymentHeader, paymentHeaderHelp, paymentHeaderProblem, readPaymentHeader } from "./payment_header";
 import type { Config, DurableObjectNamespaceLike, IouOption, KVLike } from "./config";
+import { FIRST_HV_REFUND_TEXT } from "./config";
 import { isPaymentPayloadV2 } from "@x402/core/schemas";
 import { cdpAuthHeaders, decodeExtensionResponses } from "./cdp";
 import { IDEMPOTENCY_HEADER, IDEMPOTENCY_MAX_BODY, IDEMPOTENCY_TTL_MS, PAYMENT_IDENTIFIER, PAYMENT_IDENTIFIER_DECLARATION, idempotencyKey, sha256Hex, type IdempotencyStore } from "./idempotency";
@@ -446,17 +448,23 @@ export function assetLabel(req: PaymentRequirements): string {
 
 export async function buildPaymentRequired(cfg: Config, quote: Quote, error: string): Promise<PaymentRequired> {
   const invoiceId = await issueInvoiceId(cfg, quote);
+  const accepts = buildAccepts(cfg, quote, invoiceId);
+  // "Pay in 10 lines" pointer (src/pay_examples.ts): only when a Base USDC option is offered, since the examples pay on Base.
+  const howTo = accepts.some(isEvmRequirement) ? { how_to_pay: howToPay(cfg.publicBaseUrl ?? "https://api.lumitrades.io") } : {};
   return {
     x402Version: 2,
     error,
     resource: { url: quote.resourceUrl, description: quote.description, mimeType: "application/json", ...(quote.service ?? {}) },
-    accepts: buildAccepts(cfg, quote, invoiceId),
+    accepts,
     extensions: { bazaar: quote.bazaar ?? BAZAAR_GET_JSON, [PAYMENT_IDENTIFIER]: PAYMENT_IDENTIFIER_DECLARATION, ...(quote.extensions ?? {}) },
     // Top level (not in `resource`, which clients echo to the facilitator): a free, zero-cost next step for hesitant buyers.
     ...(quote.samplesUrl ? { samples: quote.samplesUrl } : {}),
     ...(quote.note ? { note: quote.note } : {}),
     ...(quote.trial ? { trial: quote.trial } : {}),
     ...(quote.exampleResult ? { example_result: quote.exampleResult } : {}),
+    ...howTo,
+    // First high-value check refund offer: only when FIRST_HV_REFUND=on (default off); words only, no money path.
+    ...(cfg.firstHvRefund && quoteRoute(quote) === "high_value_check" ? { first_check_refund: FIRST_HV_REFUND_TEXT } : {}),
   } as PaymentRequired;
 }
 

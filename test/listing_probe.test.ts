@@ -3,6 +3,8 @@
  * no redirects; a 405 is retried as POST with an empty JSON body. Up = 402 (or 200 for a free resource); retired = 410 with a
  * past Sunset (leaves the denominator); anything else (400, 404, bare 410, 5xx) is down. These are the 12 resource URLs the
  * catalog lists for api.lumitrades.io on 2026-10-28, exactly as listed.
+ * Since 2026-10-30 (first-customer plan) the listed :id report template answers 400 path_template_not_filled instead of a
+ * 402 quote, so this methodology counts it as down until the catalog lists a concrete vendor URL (kind "template" below).
  */
 import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
@@ -12,10 +14,10 @@ const BASE = "https://api.lumitrades.io";
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", PUBLIC_BASE_URL: BASE };
 
 const PROBE_DAY = Date.parse("2026-10-28T12:00:00Z"); // the day the catalog listing was read
-const LISTED: [string, "paid" | "free" | "retired"][] = [
+const LISTED: [string, "paid" | "free" | "retired" | "template"][] = [
   ["/v1/signal/:coin", "retired"],
   ["/v1/levels/:coin", "retired"],
-  ["/v1/trust/vendors/:id/report", "paid"],
+  ["/v1/trust/vendors/:id/report", "template"],
   ["/v1/trust/check", "free"],
   ["/v1/lite/:coin", "retired"],
   ["/v1/check/batch", "paid"],
@@ -44,7 +46,7 @@ function setup() {
   return { probe, fac, app };
 }
 
-function classify(r: Response, kind: "paid" | "free" | "retired"): "up" | "retired" | "down" {
+function classify(r: Response, kind: "paid" | "free" | "retired" | "template"): "up" | "retired" | "down" {
   if (r.status === 402) return "up";
   if (r.status === 200 && kind === "free") return "up";
   if (r.status === 410) {
@@ -61,22 +63,24 @@ describe("listing liveness probe on every listed resource URL", () => {
     for (const [p, kind] of LISTED) {
       const r = await probe(p);
       out[p] = `${r.status} ${classify(r, kind)}`;
+      if (kind === "template") { expect(r.status, p).toBe(400); continue; }
       expect(classify(r, kind), `${p} -> ${r.status}`).toBe(kind === "retired" ? "retired" : "up");
       if (r.status === 402) expect(r.headers.get("PAYMENT-REQUIRED"), p).toBeTruthy();
     }
-    const counted = Object.values(out).filter((v) => !v.endsWith("retired"));
+    const counted = Object.entries(out).filter(([p, v]) => !v.endsWith("retired") && !LISTED.some(([q, k]) => q === p && k === "template")).map(([, v]) => v);
     expect(counted.every((v) => v.endsWith(" up"))).toBe(true);
-    expect(counted).toHaveLength(9);
+    expect(counted).toHaveLength(8);
     expect(fac.calls).toHaveLength(0);
   });
 
-  it("the listed :id report template is quoted like {id}: same rails and prices, a note to fill the placeholder, payment refused", async () => {
+  it("the listed :id report template answers 400 with the fix (like {id}), never a 402; payment refused", async () => {
     const { probe, app } = setup();
-    const a = await (await probe("/v1/trust/vendors/:id/report")).json();
-    const b = await (await probe("/v1/trust/vendors/%7Bid%7D/report")).json();
-    const strip = (x: any[]) => x.map((y) => ({ network: y.network, asset: y.asset, amount: y.amount, payTo: y.payTo }));
-    expect(strip(a.accepts)).toEqual(strip(b.accepts));
-    expect(a.note).toMatch(/Replace :id .*refused and not charged/);
+    for (const p of ["/v1/trust/vendors/:id/report", "/v1/trust/vendors/%7Bid%7D/report"]) {
+      const r = await probe(p);
+      expect(r.status, p).toBe(400);
+      expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
+      expect(await r.json()).toMatchObject({ error: "path_template_not_filled", example: BASE + "/v1/trust/vendors/printmoneylab/report", note: "Not charged." });
+    }
     const paid = await app.fetch(new Request(BASE + "/v1/trust/vendors/:id/report", { headers: { "PAYMENT-SIGNATURE": "junk" } }));
     expect(paid.status).toBe(400);
     expect((await paid.json()).error).toBe("path_template_not_filled");

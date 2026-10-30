@@ -98,13 +98,16 @@ describe("discovery surfaces: no retired route, no trading copy, free trust chec
     expect(sc.repository.url).toBe("https://github.com/lumitrades/lumi-api");
   });
 
-  it("remote MCP: trust check first; no prices in tool titles or descriptions", async () => {
+  it("remote MCP: trust check first; no prices in free tool text; every paid tool states its dollar price", async () => {
     const { app } = setup();
     const r: any = await (await app.fetch(new Request(BASE + "/mcp", { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }) }))).json();
     const tools = r.result.tools;
     expect(tools[0].name).toBe("lumi_trust_check");
     for (const t of tools) {
-      expect(`${t.title} ${t.description}`, t.name).not.toMatch(/\$\s?\d|\d(\.\d+)?\s?%|\d+\s?(XRP|RLUSD|USDC)\b/);
+      // First-customer plan 2026-10-30: paid tools carry their dollar price; free tools stay price-free.
+      const PAID: Record<string, RegExp> = { lumi_verdict: /Paid: \$0\.01 per call/, lumi_high_value_check: /Paid: 0\.5% of the stated amount, min \$0\.005, max \$0\.25/, lumi_vendor_report: /Paid: \$0\.02 per call/ };
+      if (PAID[t.name]) expect(t.description, t.name).toMatch(PAID[t.name]);
+      else expect(`${t.title} ${t.description}`, t.name).not.toMatch(/\$\s?\d|\d(\.\d+)?\s?%|\d+\s?(XRP|RLUSD|USDC)\b/);
       expect(`${t.title} ${t.description}`, t.name).not.toMatch(TRADING_RE);
     }
   });

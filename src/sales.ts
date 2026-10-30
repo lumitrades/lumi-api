@@ -304,3 +304,35 @@ export async function sendPlainEmail(
     return false;
   }
 }
+
+/** One owed first-high-value-check refund (computed, never sent by code). */
+export interface FirstHvRefund {
+  payer: string;
+  network: string;
+  paid_usd: number | null;
+  refund_usd: number;
+  tx: string;
+  paid_at: string;
+}
+
+/**
+ * First high-value check refunds owed (FIRST_HV_REFUND=on): each non-test payer's earliest settled high_value_check,
+ * refund = min(paid, cap). Pure read of the sales ledger; this module has no way to move money.
+ */
+export function firstHighValueRefunds(rows: SaleRow[], capUsd: number): FirstHvRefund[] {
+  const first = new Map<string, SaleRow>();
+  for (const r of rows) {
+    if (r.route !== "high_value_check" || r.isTest || !r.payer) continue;
+    const k = r.payer.startsWith("0x") ? r.payer.toLowerCase() : r.payer;
+    const cur = first.get(k);
+    if (!cur || r.ts < cur.ts) first.set(k, r);
+  }
+  return [...first.values()].sort((a, b) => a.ts - b.ts).map((r) => ({
+    payer: r.payer!,
+    network: r.network,
+    paid_usd: r.usd,
+    refund_usd: Math.round(Math.min(r.usd ?? capUsd, capUsd) * 1e6) / 1e6,
+    tx: r.tx,
+    paid_at: new Date(r.ts).toISOString(),
+  }));
+}

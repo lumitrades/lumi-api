@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createApp, ensureFreshness } from "../src/app";
-import { BAZAAR_ROUTES, VENDOR_ID_PATTERN } from "../src/bazaar";
+import { BAZAAR_ROUTES, VENDOR_ID_PATTERN, bazaarExtension } from "../src/bazaar";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor } from "./helpers";
 
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret" };
@@ -89,8 +89,9 @@ describe("v1.1.1 policies and metadata", () => {
     expect(strip(await (await get("/v1/trust/check/high-value?url=https://a.example/x&amount=4")).json())).toEqual(strip(await (await get("/v1/trust/check/high-value?url=https://a.example/x&amount=4")).json()));
     const oa = await (await get("/openapi.json")).json();
     expect(oa.paths["/v1/trust/vendors/{id}/report"].get.parameters[0].schema.pattern).toBe(VENDOR_ID_PATTERN);
-    const r = await (await get("/v1/trust/vendors/%7Bid%7D/report")).json();
-    expect(JSON.stringify(r.extensions.bazaar)).toContain(JSON.stringify(VENDOR_ID_PATTERN).slice(1, -1));
+    // The template URL is a 400 now (first-customer plan); the report quote's bazaar extension carries the same pattern.
+    expect((await get("/v1/trust/vendors/%7Bid%7D/report")).status).toBe(400);
+    expect(JSON.stringify(bazaarExtension("vendor_report", "printmoneylab"))).toContain(JSON.stringify(VENDOR_ID_PATTERN).slice(1, -1));
   });
 
   it("invalid trust-check inputs: no Solana claim, no ?domain= suggestion, not charged", async () => {

@@ -14,7 +14,7 @@
 
 import { TRIAL_SHORT } from "./trial";
 import type { Config, PaidRoute } from "./config";
-import { atomicToUsdc, dropsToXrp, HIGH_VALUE, highValuePriceUsd } from "./config";
+import { atomicToUsdc, dropsToXrp, stroopsToUsdc, HIGH_VALUE, highValuePriceUsd } from "./config";
 import { usdToDrops } from "./pricing";
 import { PAID_ENDPOINTS, endpointFor } from "./catalog";
 import { indexDoc, VERSION } from "./docs";
@@ -62,16 +62,16 @@ const str = (v: unknown) => (typeof v === "string" ? v : undefined);
 export const VENDOR_REPORT_TOOL_DESCRIPTION =
   "Detailed report on one x402 vendor from Lumi's trust list: full observation history (every free 402-quote check over 90 days, every paid test-buy with tx hash and delivered yes/no), " +
   "latency stats and 7-day trend, uptime % (24h/7d/30d/90d) and daily series, quoted-price history, agent reports, vendor replies, sample sizes and confidence labels. " +
-  "Automated observations, not a rating. Paid (price in the x402 quote; see lumi_quote). The free summary is lumi_vendor_scores.";
+  "Automated observations, not a rating. Paid: $0.02 per call over x402 (USDC on Base, XRP / RLUSD / USDC on the XRP Ledger, or USDC on Stellar; the live quote is in lumi_quote). The free summary is lumi_vendor_scores.";
 
 export const TRUST_CHECK_TOOL_DESCRIPTION =
-  "Free (rate-limited per client and per day). Should I pay this x402 URL? allow / warn / block with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
+  "Free (rate-limited per client and per day). Should I pay this x402 URL? Start here before any paid tool. One label (checks_passed / check_first / checks_failed / no_data) plus the allow / warn / block verdict with coded reasons, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
   "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Links the free lookup and, for curated vendors, the paid full report. " +
-  "Observations, not a guarantee. Over the daily limit it names the paid high-value check (lumi_high_value_check).";
+  "Observations, not a guarantee. Near the top of the result, paid_option names the paid high-value check (lumi_high_value_check; its price is in its own description), which returns the same verdict and score.";
 
 export const HIGH_VALUE_CHECK_TOOL_DESCRIPTION =
-  "Before a larger x402 payment: the same allow / warn / block verdict and score as the free lumi_trust_check (paying never changes them), plus a live re-check of the seller at call time and a Lumi-signed receipt bound to the stated amount. " +
-  "Pass url and the USD amount you are about to pay (and optionally the payTo in its quote). Paid: priced as a small share of the stated amount, with a floor and a cap (exact price in the x402 quote; see lumi_quote).";
+  "Paid: 0.5% of the stated amount, min $0.005, max $0.25 (e.g. $0.05 for amount=10), per call over x402. Before a larger x402 payment: the same label, allow / warn / block verdict and score as the free lumi_trust_check (paying never changes them), plus a live re-check of the seller at call time and a Lumi-signed receipt bound to the stated amount. " +
+  "Pass url and the USD amount you are about to pay (and optionally the payTo in its quote). The exact price for your amount is in the x402 quote (see lumi_quote).";
 
 export const VENDOR_LOOKUP_DESCRIPTION =
   "Free. Check an x402 seller before you pay it: pass url (the resource you are about to buy), domain, or payTo (the address in its 402 quote, case-insensitive). Lumi ingests the full CDP x402 Bazaar catalog daily and runs free, unpaid 402-quote checks of listings on a rotating schedule (valid quote, price and payTo vs the listing, latency, domain age; live coverage counts in the response), labelled 'quote-checked, low confidence', plus Lumi's own test-buys confirmed on-chain, labelled 'test-bought' and counted per chain (Base USDC buys of Bazaar listings; XRPL buys of a small curated list, separately). Answer-only: the full coded verdict is in the free lumi_trust_check. Observations, not ratings; no match is not a negative finding. With no arguments: the curated XRPL vendor scores and catalog counts; vendor_id gives one curated vendor's summary (tx evidence is in the paid vendor report).";
@@ -155,7 +155,7 @@ function toolList() {
     {
       name: "lumi_catalog",
       title: "Lumi: endpoints and live prices (free)",
-      description: "Free. Lists Lumi API endpoints, live prices (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base), payment settings of this MCP server and the caller wallet address.",
+      description: "Free. Lists Lumi API endpoints, live prices (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base, USDC on Stellar), payment settings of this MCP server and the caller wallet address.",
       inputSchema: NO_ARGS,
       annotations: ro,
     },
@@ -171,7 +171,7 @@ function toolList() {
       name: "lumi_quote",
       title: "Lumi: price check without paying (free)",
       description:
-        "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base) for any Lumi paid path, e.g. /v1/trust/check/high-value?url=...&amount=10, without paying. A 503 means the data is not fresh right now and the call would not be sold.",
+        "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base, USDC on Stellar) for any Lumi paid path, e.g. /v1/trust/check/high-value?url=...&amount=10, without paying. A 503 means the data is not fresh right now and the call would not be sold.",
       inputSchema: { type: "object", properties: { path: { type: "string", pattern: "^/v1/", description: "Paid API path, e.g. /v1/trust/check/high-value?url=...&amount=10 or /v1/trust/vendors/printmoneylab/report" } }, required: ["path"] },
       annotations: ro,
     },
@@ -195,7 +195,7 @@ function toolList() {
       name: "lumi_verdict",
       title: "Lumi: one-label pre-payment check (paid)",
       description:
-        "Paid per call over x402 at GET /v1/verdict (this tool returns the price terms; the free signed /v1/check has the same data). Before paying an x402 URL or seller domain: one label from the same data and signing key as /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Paying Lumi never changes a result. Observations, not a guarantee.",
+        "Paid: $0.01 per call over x402 at GET /v1/verdict (this tool returns the price terms; the free lumi_trust_check and the free signed /v1/check have the same data, so try them first). Before paying an x402 URL or seller domain: one label from the same data and signing key as /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. Paying Lumi never changes a result. Observations, not a guarantee.",
       inputSchema: {
         type: "object",
         properties: {
@@ -235,7 +235,7 @@ function toolList() {
 }
 
 const INSTRUCTIONS =
-  "Lumi Trades (lumitrades.io): an x402 seller trust service. Start with lumi_trust_check (free, rate-limited): allow / warn / block with coded reasons before you pay an x402 seller. Then lumi_verdict (paid one-label pre-payment check: checks_passed / check_first / checks_failed / no_data), lumi_high_value_check (paid, priced as a share of the amount, adds a live re-check), lumi_vendor_scores and lumi_vendor_report, lumi_seller_monitoring, lumi_trust_feed. " +
+  "Lumi Trades (lumitrades.io): an x402 seller trust service. Start with lumi_trust_check (free, rate-limited): allow / warn / block with coded reasons before you pay an x402 seller. It returns the label (checks_passed / check_first / checks_failed / no_data) and an allow / warn / block verdict. Then, only if needed: lumi_verdict (paid, $0.01: the same one label, signed), lumi_high_value_check (paid, 0.5% of the amount, min $0.005, max $0.25: same verdict and score plus a live re-check and an amount-bound receipt), lumi_vendor_scores and lumi_vendor_report (paid, $0.02), lumi_seller_monitoring, lumi_trust_feed. " +
   "Free: lumi_catalog, lumi_samples (truncated previews of every paid product), lumi_quote, lumi_trust_check (rate-limited), lumi_wallet_check (rate-limited: which x402 sellers a public wallet paid, with Lumi's facts on each), lumi_vendor_scores (Lumi's observations of other x402 vendors), lumi_seller_monitoring (plans, packs, free tier and 14-day trial) and lumi_trust_feed (free key, Feed and Feed Pro); lumi_vendor_report is the paid full history for one vendor. " +
   "lumi_verdict is paid (on this remote server it returns the x402 terms; the free signed GET /v1/check has the same data). Paid tools are priced per call via x402 (live prices: lumi_catalog, lumi_quote); paid in XRP, RLUSD or USDC on the XRP Ledger or USDC on Base or Stellar; " + TRIAL_SHORT + "; without access they return the price and how to pay. " +
   PAID_TOOLS_NOTE + " Automated observations, not an endorsement or guarantee. Cite 'Lumi Trades (lumitrades.io)'.";
@@ -577,7 +577,7 @@ async function callTool(name: string, args: Args, ctx: Ctx): Promise<ToolResult>
           description: r.body?.resource?.description,
           options: (r.body?.accepts || []).map((a: any) => ({
             asset: a.asset === "XRP" ? "XRP" : a.extra?.symbol ?? a.asset,
-            amount: a.asset === "XRP" ? dropsToXrp(String(a.amount)) : String(a.network).startsWith("eip155:") ? atomicToUsdc(String(a.amount)) : a.amount,
+            amount: a.asset === "XRP" ? dropsToXrp(String(a.amount)) : String(a.network).startsWith("eip155:") ? atomicToUsdc(String(a.amount)) : String(a.network).startsWith("stellar:") ? stroopsToUsdc(String(a.amount)) : a.amount,
             network: a.network,
             payTo: a.payTo,
             ...(String(a.network).startsWith("eip155:") ? { token: a.asset } : {}),

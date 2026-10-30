@@ -34,7 +34,7 @@ export const PAID_TOOLS = [
     },
     description:
       "Before a larger x402 payment: the same allow / warn / block verdict and score as the free lumi_trust_check, plus a live re-check (Lumi contacts the seller once with an unpaid request; Lumi never pays the seller) comparing its current quote, price, payTo and TLS with Lumi's record, returned as live with signed live_evidence, and a signed receipt bound to the stated amount. " +
-      "Paid: priced as a small share of the stated amount, with a floor and a cap (exact price in the x402 quote; see lumi_quote), in USDC on Base or XRP/RLUSD/USDC on the XRP Ledger. Paying never changes a verdict or score. Observations, not a guarantee.",
+      "Paid: 0.5% of the stated amount, min $0.005, max $0.25 (e.g. $0.05 for amount=10; exact price in the x402 quote, see lumi_quote), in USDC on Base or XRP/RLUSD/USDC on the XRP Ledger. Paying never changes a verdict or score. Observations, not a guarantee.",
   },
   {
     name: "lumi_vendor_report",
@@ -43,7 +43,7 @@ export const PAID_TOOLS = [
     description:
       "Detailed report on one x402 vendor from Lumi's trust list: full observation history (every free 402-quote check over 90 days, every paid test-buy with tx hash and delivered yes/no), " +
       "latency stats and 7-day trend, uptime % (24h/7d/30d/90d) and daily series, quoted-price history, agent reports, vendor replies, sample sizes and confidence labels. " +
-      "Automated observations, not a rating. Paid per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger; price in the x402 quote, see lumi_quote). The free summary is lumi_vendor_scores.",
+      "Automated observations, not a rating. Paid: $0.02 per call (USDC on Base, or XRP/RLUSD/USDC on the XRP Ledger; live quote in lumi_quote). The free summary is lumi_vendor_scores.",
   },
 ];
 
@@ -59,8 +59,8 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: trust check before paying (free)",
       description:
-        "Free (rate-limited per client). Should I pay this x402 URL? allow / warn / block with coded reasons and next steps, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
-        "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Cached (shows data_age); for a live re-check before a larger payment use lumi_high_value_check. Over the free limit Lumi answers 429 free_limit_reached with the paid route. Observations, not a guarantee.",
+        "Free (rate-limited per client). Should I pay this x402 URL? Start here before any paid tool. One label (checks_passed / check_first / checks_failed / no_data) plus the allow / warn / block verdict with coded reasons and next steps, from Lumi's daily CDP Bazaar index, free 402-quote checks and Lumi's own test-buys (Base USDC for Bazaar listings; XRPL only for a small curated vendor list, counted separately). " +
+        "Pass url, and optionally the payTo and USD amount you were quoted, to catch address or price mismatches. Cached (shows data_age); for a live re-check before a larger payment use lumi_high_value_check (paid; its price is in its own description; same verdict and score). Over the free limit Lumi answers 429 free_limit_reached with the paid route. Observations, not a guarantee.",
       inputSchema: {
         url: z.string().describe("The x402 resource URL you are about to pay"),
         payTo: z.string().optional().describe("Optional: the payTo address in its 402 quote"),
@@ -102,7 +102,7 @@ export function buildServer(client, opts = {}) {
 
   server.registerTool(
     "lumi_catalog",
-    { title: "Lumi: endpoints and prices (free)", description: "Free. Lists Lumi API endpoints, live prices (USD; XRP / RLUSD / USDC on the XRP Ledger or USDC on Base), payment settings of this MCP server and the caller wallet address.", inputSchema: {} },
+    { title: "Lumi: endpoints and prices (free)", description: "Free. Lists Lumi API endpoints, live prices (USD; XRP / RLUSD / USDC on the XRP Ledger, USDC on Base, or USDC on Stellar at the REST URL), payment settings of this MCP server and the caller wallet address.", inputSchema: {} },
     async () => {
       const r = await client.free("/");
       const a = assetLabel(s.asset);
@@ -142,7 +142,7 @@ export function buildServer(client, opts = {}) {
     "lumi_quote",
     {
       title: "Lumi: price check without paying (free)",
-      description: "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base) for any Lumi paid path, e.g. /v1/verdict?url=..., without paying. A 503 means Lumi cannot answer right now and the call would not be sold.",
+      description: "Free. Shows the x402 price quote (XRP / RLUSD / USDC on the XRP Ledger, USDC on Base, USDC on Stellar) for any Lumi paid path, e.g. /v1/verdict?url=..., without paying. A 503 means Lumi cannot answer right now and the call would not be sold.",
       inputSchema: { path: z.string().regex(/^\/v1\//).describe("Paid API path, e.g. /v1/verdict?url=... or /v1/trust/check/high-value?url=...&amount=10") },
     },
     async ({ path }) => text(await client.quote(path)),
@@ -179,7 +179,7 @@ export function buildServer(client, opts = {}) {
     {
       title: "Lumi: one-label pre-payment check",
       description:
-        "Before paying an x402 URL or seller domain: one label from the same data and signing key as Lumi's free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. It is the one-word version of the live check: label_live is the label after Lumi contacts the seller at call time (an unpaid request) and compares its quote, price, payTo and TLS with Lumi's record, with signed live_evidence. Paid per call (price in the x402 quote, see lumi_quote), with your wallet within the configured caps. Paying Lumi never changes a result. Observations, not a guarantee.",
+        "Paid: $0.01 per call (try the free lumi_trust_check first; it has the same data). Before paying an x402 URL or seller domain: one label from the same data and signing key as Lumi's free /v1/check: checks_passed (Delivered in recent checks), check_first (Check first), checks_failed (Recent checks failed) or no_data (Not enough data), with as-of date, evidence window, conclusive test-buy count, last delivered/failed dates, reason codes, evidence and appeal links, and observed on-chain payments as ranges only. It is the one-word version of the live check: label_live is the label after Lumi contacts the seller at call time (an unpaid request) and compares its quote, price, payTo and TLS with Lumi's record, with signed live_evidence. Paid per call (price in the x402 quote, see lumi_quote), with your wallet within the configured caps. Paying Lumi never changes a result. Observations, not a guarantee.",
       inputSchema: {
         url: z.string().min(1).max(500).describe("The x402 resource URL (or the seller's domain) you are about to pay"),
         payTo: z.string().max(120).optional().describe("Optional: the payTo address in its 402 quote"),

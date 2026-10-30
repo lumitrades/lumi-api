@@ -8,8 +8,8 @@ import { testBuyWalletsDoc } from "./trust/wallets";
 import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCOME_FIELDS, OUTCOME_RETENTION_DAYS, OUTCOME_SUMMARY_RETENTION, type OutcomeStore } from "./trust/outcomes";
 import { createBadges } from "./trust/badge";
 import { setPrivateNames } from "./sanitize";
-import { FREE_WALLET_CHECK_LIMITS } from "./config";
-import { loadConfig, verdictPaid, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, usdcToAtomic, usdcToStroops, HIGH_VALUE, highValuePriceUsd, HIGH_VALUE_EXAMPLE, FREE_TRUST_CHECK_EXAMPLE, HIGH_VALUE_PRICING_TEXT, HIGH_VALUE_ADDS, EXAMPLE_VENDOR_ID, EXAMPLE_SELLER_URL, EXAMPLE_SELLER_DOMAIN, type Config, type Env, type PaidRoute } from "./config";
+import { FIRST_HV_REFUND_CAP_USD, FREE_WALLET_CHECK_LIMITS } from "./config";
+import { loadConfig, verdictPaid, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, usdcToAtomic, usdcToStroops, HIGH_VALUE, highValuePriceUsd, HIGH_VALUE_EXAMPLE, FREE_TRUST_CHECK_EXAMPLE, HIGH_VALUE_PRICING_TEXT, HIGH_VALUE_ADDS, paidOptionText, EXAMPLE_VENDOR_ID, EXAMPLE_SELLER_URL, EXAMPLE_SELLER_DOMAIN, type Config, type Env, type PaidRoute } from "./config";
 import { createFreeQuota, DurableObjectQuotaCounter, MemoryQuotaCounter, rateLimitHeaders, type QuotaCounter } from "./free_quota";
 import { usdToDrops } from "./pricing";
 import { STELLAR_HORIZON } from "./trust/verify";
@@ -73,7 +73,7 @@ import { registrableDomain } from "./trust/catalog";
 import { liveProbe, liveAlertView, LIVE_ALERT_PREFIX, LIVE_CHECK_NOTE, type LiveBaseline } from "./trust/live_check";
 import { createActivity, activityPublic, activityOwnerView, activityFlags, qualifyOrganicPayers, D1ActivityStore, MemoryActivityStore, type ActivityStore } from "./trust/activity";
 import { CONTACT_EMAIL } from "./trust/index";
-import { D1SalesStore, MemorySalesStore, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, DEFERRED_ALERT_ROUTES, DEFERRED_ALERT_WAIT_MS, REFUSED_ALERT_NOTE, type SalesStore, type AlertConfig, type SaleOutcome } from "./sales";
+import { D1SalesStore, MemorySalesStore, firstHighValueRefunds, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, DEFERRED_ALERT_ROUTES, DEFERRED_ALERT_WAIT_MS, REFUSED_ALERT_NOTE, type SalesStore, type AlertConfig, type SaleOutcome } from "./sales";
 
 export interface AppOptions {
   /** OFAC SDN address snapshot override (tests); default = bundled data/ofac_sdn_addresses.json (+ optional SANCTIONS_KV). */
@@ -893,7 +893,13 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const body = ensureFreshness(prep.body, now());
     const hv = (body as any).high_value_check?.url as string | undefined;
     const remaining = rl["RateLimit-Remaining"];
-    return json(200, { ...body, access: { mode: "free", charged: false, ...(remaining !== undefined ? { free_calls_remaining_today: Number(remaining) } : {}), free_limit_per_day: L.perDay } }, { ...noStore, ...rl, ...(hv ? { Link: `<${hv}>; rel="payment"` } : {}) });
+    const access = { mode: "free", charged: false, ...(remaining !== undefined ? { free_calls_remaining_today: Number(remaining) } : {}), free_limit_per_day: L.perDay };
+    // access and the one-line paid option sit near the top (after the summary), so an agent reading only the head sees both.
+    // The hint is honest: the paid check returns the same verdict, label and score (paying never changes them).
+    const amt = Number((url.searchParams.get("amount") ?? "").replace(/^\$/, ""));
+    const { kind, timestamp, source, summary, summary_facts, ...rest } = body as Record<string, unknown>;
+    const ordered = { kind, timestamp, source, summary, summary_facts, access, paid_option: paidOptionText(Number.isFinite(amt) && amt > 0 ? amt : undefined), ...rest };
+    return json(200, ordered, { ...noStore, ...rl, ...(hv ? { Link: `<${hv}>; rel="payment"` } : {}) });
   }
 
   async function freeCheck(request: Request, url: URL, base: string, ctx?: WaitUntil): Promise<Response> {
@@ -1697,6 +1703,21 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         rows: await outcomes.store.list(since(days), 1000), summaries: await outcomes.store.summaries(since(sdays), 5000),
       }, { "Cache-Control": "no-store" });
     }
+    // Owner-only list of first-high-value-check refunds owed (FIRST_HV_REFUND=on; 404 while off, before any auth or read).
+    // Computed from the sales ledger; nothing here (or anywhere in the code) sends a refund: the operator pays them by hand.
+    if (path === "/v1/owner/refunds/first-high-value") {
+      if (!config.firstHvRefund) return json(404, { error: "not_found", hint: `See ${base}/ for the endpoint list.` });
+      const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.get("Authorization") ?? "")?.[1]?.trim();
+      if (!bearer || !(await isOwnerKey(bearer, env.OWNER_MCP_KEY))) {
+        return json(401, { error: "owner_key_required", hint: "Authorization: Bearer <OWNER_MCP_KEY>" }, { "Cache-Control": "no-store", "WWW-Authenticate": "Bearer" });
+      }
+      const owed = firstHighValueRefunds(await sales.since(0), FIRST_HV_REFUND_CAP_USD);
+      return json(200, {
+        kind: "lumi_first_hv_refunds", enabled: true, cap_usd: FIRST_HV_REFUND_CAP_USD, count: owed.length,
+        total_usd: Math.round(owed.reduce((a, r) => a + r.refund_usd, 0) * 1e6) / 1e6, owed,
+        note: "Computed from the sales ledger. Lumi never sends refunds automatically; pay each one by hand to the payer address on the same network.",
+      }, { "Cache-Control": "no-store" });
+    }
     // Owner-only sales ledger summary (Authorization: Bearer <OWNER_MCP_KEY>). Excludes Lumi's own test wallets.
     if (path === "/v1/owner/sales") {
       const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.get("Authorization") ?? "")?.[1]?.trim();
@@ -1802,12 +1823,10 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (!m) return json(404, { error: "not_found", hint: `See ${base}/ for the endpoint list.` });
     const route = m[1] as PaidRoute;
 
-    // An unfilled path template (/v1/trust/vendors/%7Bid%7D/report, /v1/trust/vendors/:id/report, ...):
-    // - any placeholder style ({id}, :id, <id>, ${id}, ...) without a payment header: the normal 402 price quote for the route
-    //   (same accepts/prices/payTo as a concrete value), because discovery crawlers (x402scan / @agentcash/discovery, Bazaar)
-    //   and listing liveness probes request the catalog URL verbatim (some catalogs list it as :id) and count anything but
-    //   402 as down; the quote carries a note to fill the placeholder;
-    // - any template with a payment header: 400, never charged.
+    // An unfilled path template (/v1/trust/vendors/%7Bid%7D/report, /v1/trust/vendors/:id/report, <id>, ${id}, ...): always a
+    // 400 path_template_not_filled with the fix and an example, never a 402 and never charged (first-customer plan 2026-10-30:
+    // a quote for a placeholder URL invited agents to pay for nothing). Trade-off: catalogs that probe the template URL
+    // verbatim now see 400 there instead of a 402; the concrete example URL still answers the normal 402.
     const rawArg = m[2] !== undefined ? safeDecode(m[2]) : undefined;
     // A person opening a vendor report link in a browser (Accept ranks text/html first, GET, no payment header): a small page
     // explaining the $0.02 x402 call, with links to the free summary and the docs. Agents (JSON or */* Accept) still get the 402.
@@ -1822,25 +1841,6 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     if (rawArg !== undefined && PATH_TEMPLATE_RE.test(rawArg)) {
       const isReport = route === "vendor_report";
       const example = isReport ? `${base}/v1/trust/vendors/${EXAMPLE_VENDOR_ID}/report` : `${base}/v1/${route}/xrp`;
-      const hasPayment = !!(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT));
-      if (!hasPayment) {
-        const endpoint = endpointFor(route);
-        return paymentRequiredResponse(config, {
-          routeKey: `${route}:template`,
-          amountDrops: config.pricesDrops[route],
-          ...(config.xrpPricing === "live" ? { liveDrops: true } : {}),
-          xrpUsd: config.xrpRate?.usd ?? config.xrpUsdFallback,
-          samplesUrl: `${base}/v1/samples`,
-          amountsIou: Object.fromEntries(config.ious.map((o) => [o.symbol, o.prices[route]])),
-          amountEvm: config.evm?.amounts[route],
-          amountStellar: config.stellar?.amounts[route],
-          description: resourceDescription(route, `Lumi API ${endpoint.template}: ${endpoint.summary}`, { usd: config.evm?.prices[route] ?? config.ious.find((o) => o.symbol === "RLUSD")?.prices[route] }),
-          resourceUrl: `${base}${path}`,
-          bazaar: bazaarExtension(route, isReport ? EXAMPLE_VENDOR_ID : "xrp", undefined, config.evm?.prices[route]),
-          service: serviceMeta(route),
-          note: `Replace ${rawArg} with ${isReport ? "a vendor id from GET /v1/trust/vendors (free)" : "a real value"} and request that URL for a fresh quote before paying: ${example}. A payment sent to this placeholder URL is refused and not charged.`,
-        }, "PAYMENT-SIGNATURE header is required");
-      }
       return json(400, {
         error: "path_template_not_filled",
         detail: `Replace ${rawArg} with a real value. ${isReport ? "Vendor ids: GET /v1/trust/vendors (free)." : "See /openapi.json."}`,

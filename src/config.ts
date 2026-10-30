@@ -54,6 +54,10 @@ export interface Env {
   BADGE_MIN_PAID_TESTS?: string;
   /** /v1/verdict pricing: "free" (alias of /v1/check) or "paid" (x402 at DEFAULT_PRICES.verdict, $0.01; owner approved 2026-10-25). Default VERDICT_PRICING below. */
   VERDICT_PRICING?: string;
+  /** First high-value check refund offer (first-customer plan 2026-10-30): "on" announces it in the high-value 402 and enables
+   *  the owner-only list GET /v1/owner/refunds/first-high-value. Default OFF. Nothing in the code ever sends money: the list
+   *  is computed from the sales ledger and refunds are paid by hand by the operator. See docs/first-hv-refund.md. */
+  FIRST_HV_REFUND?: string;
   /** Label thresholds (src/trust/verdict.ts VERDICT_DEFAULTS): checks_passed needs a delivered test-buy within N days (default 30);
    * observed on-chain payments: fewest payer groups shown (default 5, never lower), concentration flag at top-payer share >= N%
    * (default 60), rows older than N days are marked stale (default 14). */
@@ -216,6 +220,11 @@ export const DEFAULT_PRICES: Record<PaidRoute, { xrp: string; usd: string }> = {
  */
 export const VERDICT_PRICING: "free" | "paid" = "paid";
 export const VERDICT_MAX_USD = 0.01;
+/** First high-value check refund: at most this much per buyer (the high-value price cap), once per payer address. */
+export const FIRST_HV_REFUND_CAP_USD = 0.25;
+/** Only the exact value "on" enables the offer; unset, empty, "off" or anything else keeps it off. */
+export const firstHvRefundOn = (env: { FIRST_HV_REFUND?: string } = {}) => (env.FIRST_HV_REFUND ?? "").trim().toLowerCase() === "on";
+export const FIRST_HV_REFUND_TEXT = `Your first paid high-value check is refunded, up to $${FIRST_HV_REFUND_CAP_USD.toFixed(2)}, once per payer address, to the address that paid (sent by hand within 7 days; Lumi's own test wallets excluded). The verdict, label and score are the same either way.`;
 export const verdictPaid = (env: { VERDICT_PRICING?: string } = {}) => ((env.VERDICT_PRICING ?? "").trim().toLowerCase() || VERDICT_PRICING) === "paid";
 export const PAID_ROUTES = Object.keys(DEFAULT_PRICES) as PaidRoute[];
 
@@ -271,6 +280,8 @@ export interface Config {
   stellar?: StellarOption;
   /** GET /v1/verdict sold over x402 (VERDICT_PRICING = "paid"); false = free alias of /v1/check, not listed as a paid resource. */
   verdictPaid?: boolean;
+  /** FIRST_HV_REFUND === "on" (default off). */
+  firstHvRefund?: boolean;
   /** USD list price per route (the stablecoin price); live XRP pricing targets exactly this. */
   usdPrices: Record<PaidRoute, string>;
   /** fixed = PRICE_<R>_XRP; live = usdPrices / live XRP-USD rate (pricesDrops is updated in place per request). */
@@ -584,6 +595,7 @@ export function loadConfig(env: Env): Config {
 
   return {
     verdictPaid: verdictPaid(env as any),
+    firstHvRefund: firstHvRefundOn(env as any),
     network,
     networkName,
     payTo,
@@ -662,3 +674,16 @@ export const HIGH_VALUE_PRICING_TEXT = `${HIGH_VALUE.rate * 100}% of the stated 
 const FIXED_PRICES_USD = (Object.keys(DEFAULT_PRICES) as PaidRoute[]).filter((r) => r !== "high_value_check").map((r) => Number(DEFAULT_PRICES[r].usd));
 export const PAID_PRICE_SUMMARY = `Paid routes from $${Math.min(HIGH_VALUE.minUsd, ...FIXED_PRICES_USD)} per call (most $${Math.min(...FIXED_PRICES_USD)} to $${Math.max(...FIXED_PRICES_USD)}; the high-value check is ${HIGH_VALUE.rate * 100}% of the payment, capped at $${HIGH_VALUE.maxUsd})`;
 export const HIGH_VALUE_ADDS = "Same verdict, label and score as the free check (paying never changes them), plus a live re-check of the seller at call time and a Lumi-signed receipt bound to the stated amount (paid: true).";
+/** Short high-value price, e.g. "0.5% of the amount (min $0.005, max $0.25)". */
+export const HIGH_VALUE_PRICE_SHORT = `${HIGH_VALUE.rate * 100}% of the amount (min $${HIGH_VALUE.minUsd}, max $${HIGH_VALUE.maxUsd})`;
+/**
+ * The one-line upgrade hint near the top of the free check (REST `paid_option` and the MCP free result). Honest by
+ * construction: it names what the paid check adds and its price, and says the verdict, label and score stay the same.
+ */
+export function paidOptionText(amountUsd?: number): string {
+  const forAmount = amountUsd !== undefined && Number.isFinite(amountUsd) && amountUsd > 0 && amountUsd <= HIGH_VALUE.maxAmountUsd
+    ? `, $${highValuePriceUsd(amountUsd)} for amount=${amountUsd}` : "";
+  return `high_value_check adds a live re-check and an amount-bound receipt; price ${HIGH_VALUE_PRICE_SHORT}${forAmount}; same verdict, label and score (paying never changes them)`;
+}
+/** Default dollar price of a fixed-price paid route, e.g. "$0.01" (the live 402 quote is binding). */
+export const usdPriceText = (route: Exclude<PaidRoute, "high_value_check">) => `$${DEFAULT_PRICES[route].usd}`;

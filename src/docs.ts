@@ -3,7 +3,7 @@
 import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPriceTable, planResources } from "./commerce/discovery";
 import { PLATFORM_LICENCE, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
-import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, PAID_PRICE_SUMMARY, highValuePriceUsd, usdcToAtomic } from "./config";
+import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICE_SHORT, HIGH_VALUE_PRICING_TEXT, PAID_PRICE_SUMMARY, highValuePriceUsd, usdcToAtomic } from "./config";
 import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable } from "./catalog";
 import { XRPL_DESTINATION_TAGS } from "./xrpl_destination_tags";
 import { BAZAAR_ROUTES, TRUST_ROUTES, VENDOR_ID_PATTERN, errorDocs, serviceNameFor } from "./bazaar";
@@ -15,6 +15,7 @@ import { testedBadgeSummary } from "./trust/check";
 import { notScoredDoc, PRICE_LABEL_MULTIPLE } from "./trust/price_market";
 import { MONITORED_BADGE_SUMMARY } from "./commerce/counting";
 import { SIWX_HEADER, SIWX_KEY, TRIAL_LIMITS, TRIAL_OPT_IN_HEADER, TRIAL_SHORT, TRIAL_SUMMARY, XRPL_SIWX_TYPE, trialChains, trialEligible } from "./trial";
+import { PAY_NODE, PAY_PYTHON } from "./pay_examples";
 
 /** Free-trial terms (x402 sign-in-with-x), shown in the index, /.well-known/x402, OpenAPI, skill.md and the home page. */
 
@@ -463,7 +464,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
           },
           "402": { description: "Payment required. x402 v2 PaymentRequired in the body and the PAYMENT-REQUIRED header. accepts[] order: Base USDC, XRP, then XRPL IOUs." },
           ...(e.template.includes("{")
-            ? { "400": { description: "Path template not filled in (e.g. :id, <id>, ${id}), or any unfilled path sent with a payment header; the body gives an example URL (never charged). Without a payment header, the literal OpenAPI template path ({id}, as discovery crawlers request it) returns the route's normal 402 quote with a note to fill the placeholder; a payment sent to it is refused with this 400." } }
+            ? { "400": { description: "Path template not filled in (e.g. {id}, %7Bid%7D, :id, <id>, ${id}), with or without a payment header: the body gives the fix and an example URL. Never a 402, never charged." } }
             : e.route === "high_value_check" || e.route === "verdict"
             ? { "400": { description: `url missing, empty or not an absolute http(s) URL, or payTo/amount malformed${e.route === "high_value_check" ? " or amount missing" : ""} (never charged). A request with no query string at all, as discovery crawlers send it, returns the normal 402 quote${e.route === "high_value_check" ? " (at the floor price)" : ""}; a payment sent without url is refused with this 400.`, content: { "application/json": { example: { error: "invalid_query", detail: "url is required: the x402 resource URL (or the seller's domain) you are about to pay.", example: e.route === "verdict" ? `${base}/v1/verdict?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}` : `${base}${HIGH_VALUE_EXAMPLE}`, note: "Not charged." } } } } }
             : e.route === "receipts" || e.route === "batch_check"
@@ -744,7 +745,7 @@ export function skillMd(cfg: Config, base: string, coins: CoinRef[]): string {
   const maxDrops = Math.max(...Object.values(cfg.pricesDrops).map(Number));
   return `---
 name: lumi-api
-description: Lumi Trades, an x402 seller trust service. Check an x402 seller before you pay - start with the free GET /v1/trust/check (allow / warn / block with coded reasons); paid checks in ${settledIn(cfg)} via x402 add a one-label verdict, vendor reports and signed test-buy receipts.
+description: Lumi Trades, an x402 seller trust service. Check an x402 seller before you pay - start with the free GET /v1/trust/check (label checks_passed / check_first / checks_failed / no_data, with allow / warn / block and coded reasons); paid checks in ${settledIn(cfg)} via x402 add a one-label verdict, vendor reports and signed test-buy receipts.
 ---
 
 # Lumi API (agent guide)
@@ -759,8 +760,9 @@ A2A agent card: ${base}/.well-known/agent-card.json. MCP: ${base}/mcp.
 
 ## Start here: the free trust check
 
-\`GET ${base}${FREE_TRUST_CHECK_EXAMPLE}\` (free, no payment, ${FREE_TRUST_CHECK_LIMITS.perDay} a day per IP and per key) returns \`allow\` / \`warn\` / \`block\` with coded reasons.
+\`GET ${base}${FREE_TRUST_CHECK_EXAMPLE}\` (free, no payment, ${FREE_TRUST_CHECK_LIMITS.perDay} a day per IP and per key) returns one label, \`checks_passed\` / \`check_first\` / \`checks_failed\` / \`no_data\`, with \`allow\` / \`warn\` / \`block\` and coded reasons.
 Add \`payTo=<address in its quote>\` and \`amount=<USD>\` to compare the quote with the listing. Automated observations, not an endorsement or guarantee.
+Call it before any paid route: the paid \`/v1/verdict\` (${cfg.verdictPaid ? `$${Number(usdPrice(cfg, "verdict"))} per call` : "free"}) reads the same data. Near the top of every answer, \`paid_option\` names the paid high-value check, priced at ${HIGH_VALUE_PRICE_SHORT}: it adds a live re-check and an amount-bound receipt, and returns the same label and score; paying never changes them.
 
 ## Paid checks
 
@@ -826,7 +828,21 @@ XRP Ledger:
 ${xrplTrialSnippet(base, cfg.network)}
 \`\`\`
 
-## How payment works
+${cfg.evm ? `## Pay in 10 lines (USDC on Base)
+
+The shortest working buyer for any paid route here: x402 v2, one EIP-3009 USDC authorization on ${cfg.evm.networkName} (\`${cfg.evm.network}\`), no ETH needed. Each script picks the Base option from the 402, refuses anything over $0.25 (Lumi's highest per-call price), signs, retries with \`PAYMENT-SIGNATURE\` and prints the answer and the decoded \`PAYMENT-RESPONSE\` receipt.${cfg.evm.network === "eip155:8453" ? "" : ` This deployment is on ${cfg.evm.networkName}: set \`X402_NETWORK=${cfg.evm.network}\`.`} Try the free \`/v1/trust/check\` first. Example URL: \`${base}${HIGH_VALUE_EXAMPLE}\`.
+
+Node (\`pay-in-10-lines.mjs\`):
+
+\`\`\`js
+${PAY_NODE}\`\`\`
+
+Python (\`pay_in_10_lines.py\`):
+
+\`\`\`python
+${PAY_PYTHON}\`\`\`
+
+` : ""}## How payment works
 
 \`accepts[]\` order: ${acceptsOrder(cfg)}. Choose by \`network\` + \`asset\`, not by position; all options share one invoice that can be paid once.
 **Pay address:** always take Lumi's pay address (\`payTo\`) from the live 402 payment response or \`${base}/.well-known/x402\`, never from transaction history or a past transfer.
@@ -1036,7 +1052,7 @@ ${commerceSkillMd(base)}
 const LOGO = "https://lumitrades.io/assets/icon-512.png";
 /** Social / x402scan card for api.lumitrades.io (the page <title> stays descriptive). */
 export const OG_TITLE = "Lumi Trades: check x402 sellers before you pay";
-export const OG_DESC = "Lumi Check: free signed allow/warn/block for x402 sellers, backed by paid test-buys on XRPL, Base and Stellar.";
+export const OG_DESC = "Lumi Check: free signed checks_passed / check_first / checks_failed labels for x402 sellers, backed by paid test-buys on XRPL, Base and Stellar.";
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** Human quickstart served at `/` when the client asks for text/html (browsers, x402scan's page fetcher). */

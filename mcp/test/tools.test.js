@@ -72,7 +72,7 @@ test("0.10.0: lumi_trust_check is free (no payment, no wallet); lumi_high_value_
   const { tools } = await c.listTools();
   const by = Object.fromEntries(tools.map((t) => [t.name, t]));
   assert.match(by.lumi_trust_check.description, /^Free/);
-  assert.match(by.lumi_high_value_check.description, /small share of the stated amount, with a floor and a cap/); // prices live in the 402 quote (2026-10-28)
+  assert.match(by.lumi_high_value_check.description, /Paid: 0\.5% of the stated amount, min \$0\.005, max \$0\.25/); // first-customer plan 2026-10-30: paid tools state their dollar price
   assert.deepEqual([...by.lumi_high_value_check.inputSchema.required].sort(), ["amount", "url"]);
   const r = await c.callTool({ name: "lumi_trust_check", arguments: { url: "https://api.example.com/x", amount: "0.01" } });
   await c.close();
@@ -103,9 +103,17 @@ test("README tool table matches tools/list (same names, same order) and marks lo
   assert.doesNotMatch(readme, /same tools are also served remotely/);
 });
 
-test("tool titles and descriptions carry no prices", async () => {
+// 2026-10-30 (first-customer plan): paid tools state their dollar price up front; free tools stay price-free.
+const PAID_PRICE = {
+  lumi_verdict: /Paid: \$0\.01 per call/,
+  lumi_high_value_check: /Paid: 0\.5% of the stated amount, min \$0\.005, max \$0\.25/,
+  lumi_vendor_report: /Paid: \$0\.02 per call/,
+};
+test("paid tools carry their dollar price; free tool titles and descriptions carry no prices", async () => {
   for (const t of await listTools()) {
-    assert.doesNotMatch(`${t.title ?? ""} ${t.description}`, /\$\s?\d|\d(\.\d+)?\s?%|\d+\s?(XRP|RLUSD|USDC)\b/, t.name);
+    const s = `${t.title ?? ""} ${t.description}`;
+    if (PAID_PRICE[t.name]) assert.match(s, PAID_PRICE[t.name], t.name);
+    else assert.doesNotMatch(s, /\$\s?\d|\d(\.\d+)?\s?%|\d+\s?(XRP|RLUSD|USDC)\b/, t.name);
   }
 });
 
