@@ -27,7 +27,7 @@ XRPL_NETWORK = "xrpl:0"                                  # mainnet
 PAY_TO = "rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM"             # Lumi's receiving wallet (address only)
 FACILITATOR_URL = "https://xrpl-facilitator-mainnet.t54.ai"
 SOURCE_TAG = "5864"                                     # Lumi's own tag ("LUMI" on a keypad), the pre-Oct-22 value
-XRPL_DEST_TAG_ROUTES = "receipts"                         # per-product extra.destinationTag rollout: "" off, "receipts,..." or "all" (docs/xrpl-destination-tags.md)
+XRPL_DEST_TAG_ROUTES = "all"                              # per-product extra.destinationTag rollout: "" off, "receipts,..." or "all" (docs/xrpl-destination-tags.md)
 XRPL_DEST_TAG_SOURCE_TAG = "804681468"                 # sourceTag on destination-tagged quotes: "none" or a uint32
 PRICE_VENDOR_REPORT_XRP = "0.015"                        # $0.02 at XRP ~= $1.32 (Oct 22 2026); fixed, not repriced live
 # Stablecoins (XRPL issued tokens), offered as accepts[1] RLUSD and accepts[2] USDC. Issuers default to the
