@@ -725,7 +725,7 @@ function iouNote(cfg: Config): string {
   const lines = cfg.ious
     .map(
       (o, i) =>
-        `   \`accepts[${ix.iou(i)}]\` is the same quote in **${o.symbol}** (${IOU_NAMES[o.symbol]}): \`{ asset: "${o.currency}", amount: "<value, e.g. 0.01>", extra: { issuer: "${o.issuer}", invoiceId, ${cfg.xrplDestTagRoutes === "all" ? "destinationTag" : "sourceTag"}, symbol: "${o.symbol}" } }\`.`,
+        `   \`accepts[${ix.iou(i)}]\` is the same quote in **${o.symbol}** (${IOU_NAMES[o.symbol]}): \`{ asset: "${o.currency}", amount: "<value, e.g. 0.01>", extra: { issuer: "${o.issuer}", invoiceId, ${cfg.xrplDestTagRoutes === "all" ? (cfg.xrplDestTagSourceTag !== undefined ? "sourceTag, destinationTag" : "destinationTag") : "sourceTag"}, symbol: "${o.symbol}" } }\`.`,
     )
     .join("\n");
   return `${lines}
@@ -833,7 +833,7 @@ ${xrplTrialSnippet(base, cfg.network)}
 ${cfg.evm ? `Most x402 clients (\`@x402/fetch\` + \`@x402/evm\`) simply take \`accepts[0]\`, USDC on ${cfg.evm.networkName}: see "Paying with USDC" below. The XRPL flow:
 ` : ""}
 1. \`GET ${base}/v1/trust/check/high-value?url=<resource>&amount=<USD>\` with no payment -> **HTTP 402**. The body (and the base64 \`PAYMENT-REQUIRED\` header) is an x402 v2 \`PaymentRequired\`:
-   \`accepts[${acceptsIndex(cfg).xrp}] = { scheme: "exact", network: "${net}", asset: "XRP", amount: "<drops>", payTo: "${cfg.payTo}", maxTimeoutSeconds: ${cfg.invoiceTtlSeconds}, extra: { invoiceId, ${cfg.xrplDestTagRoutes === "all" ? "destinationTag: <per product>" : `sourceTag: ${cfg.sourceTag}`} } }\`
+   \`accepts[${acceptsIndex(cfg).xrp}] = { scheme: "exact", network: "${net}", asset: "XRP", amount: "<drops>", payTo: "${cfg.payTo}", maxTimeoutSeconds: ${cfg.invoiceTtlSeconds}, extra: { invoiceId, ${cfg.xrplDestTagRoutes === "all" ? ((cfg.xrplDestTagSourceTag !== undefined ? `sourceTag: ${cfg.xrplDestTagSourceTag}, ` : "") + "destinationTag: <per product>") : `sourceTag: ${cfg.sourceTag}`} } }\`
 ${iouNote(cfg)}2. Sign (do not submit) an XRPL \`Payment\` for exactly \`amount\` drops to \`payTo\`, with \`SourceTag\`, a \`LastLedgerSequence\`,
    and the invoice bound via a Memo (\`MemoData = hex(utf8(invoiceId))\`) and/or \`InvoiceID = SHA-256(invoiceId)\`.
 3. Retry the same request with header \`PAYMENT-SIGNATURE: base64(JSON{ x402Version: 2, accepted: <accepts[${acceptsIndex(cfg).xrp}]>, payload: { signedTxBlob, invoiceId } })\`.
