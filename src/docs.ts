@@ -5,6 +5,7 @@ import { PLATFORM_LICENCE, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL
 import type { Config, PaidRoute } from "./config";
 import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, PAID_PRICE_SUMMARY, highValuePriceUsd, usdcToAtomic } from "./config";
 import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable } from "./catalog";
+import { XRPL_DESTINATION_TAGS } from "./xrpl_destination_tags";
 import { BAZAAR_ROUTES, TRUST_ROUTES, VENDOR_ID_PATTERN, errorDocs, serviceNameFor } from "./bazaar";
 import { DISCLAIMER, SOURCE, type CoinRef } from "./views";
 import { RECEIPT_OUTCOMES } from "./trust/receipts";
@@ -148,7 +149,7 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       assets: assetsInfo(cfg),
       pay_to: cfg.payTo,
       facilitator: cfg.facilitatorUrl,
-      source_tag: cfg.sourceTag,
+      ...docsTagFields(cfg),
       headers: { challenge: "PAYMENT-REQUIRED", payment: "PAYMENT-SIGNATURE", receipt: "PAYMENT-RESPONSE" },
       explorer: EXPLORERS[cfg.network],
       networks: paymentNetworks(cfg),
@@ -639,7 +640,7 @@ export function paymentNetworks(cfg: Config) {
       accepts_index: ix.xrplRange,
       pay_to: cfg.payTo,
       facilitator: cfg.facilitatorUrl,
-      source_tag: cfg.sourceTag,
+      ...docsTagFields(cfg),
       payload: "presigned XRPL Payment blob (x402-xrpl)",
     },
   ];
@@ -724,7 +725,7 @@ function iouNote(cfg: Config): string {
   const lines = cfg.ious
     .map(
       (o, i) =>
-        `   \`accepts[${ix.iou(i)}]\` is the same quote in **${o.symbol}** (${IOU_NAMES[o.symbol]}): \`{ asset: "${o.currency}", amount: "<value, e.g. 0.01>", extra: { issuer: "${o.issuer}", invoiceId, sourceTag, symbol: "${o.symbol}" } }\`.`,
+        `   \`accepts[${ix.iou(i)}]\` is the same quote in **${o.symbol}** (${IOU_NAMES[o.symbol]}): \`{ asset: "${o.currency}", amount: "<value, e.g. 0.01>", extra: { issuer: "${o.issuer}", invoiceId, ${cfg.xrplDestTagRoutes === "all" ? "destinationTag" : "sourceTag"}, symbol: "${o.symbol}" } }\`.`,
     )
     .join("\n");
   return `${lines}
@@ -832,7 +833,7 @@ ${xrplTrialSnippet(base, cfg.network)}
 ${cfg.evm ? `Most x402 clients (\`@x402/fetch\` + \`@x402/evm\`) simply take \`accepts[0]\`, USDC on ${cfg.evm.networkName}: see "Paying with USDC" below. The XRPL flow:
 ` : ""}
 1. \`GET ${base}/v1/trust/check/high-value?url=<resource>&amount=<USD>\` with no payment -> **HTTP 402**. The body (and the base64 \`PAYMENT-REQUIRED\` header) is an x402 v2 \`PaymentRequired\`:
-   \`accepts[${acceptsIndex(cfg).xrp}] = { scheme: "exact", network: "${net}", asset: "XRP", amount: "<drops>", payTo: "${cfg.payTo}", maxTimeoutSeconds: ${cfg.invoiceTtlSeconds}, extra: { invoiceId, sourceTag: ${cfg.sourceTag} } }\`
+   \`accepts[${acceptsIndex(cfg).xrp}] = { scheme: "exact", network: "${net}", asset: "XRP", amount: "<drops>", payTo: "${cfg.payTo}", maxTimeoutSeconds: ${cfg.invoiceTtlSeconds}, extra: { invoiceId, ${cfg.xrplDestTagRoutes === "all" ? "destinationTag: <per product>" : `sourceTag: ${cfg.sourceTag}`} } }\`
 ${iouNote(cfg)}2. Sign (do not submit) an XRPL \`Payment\` for exactly \`amount\` drops to \`payTo\`, with \`SourceTag\`, a \`LastLedgerSequence\`,
    and the invoice bound via a Memo (\`MemoData = hex(utf8(invoiceId))\`) and/or \`InvoiceID = SHA-256(invoiceId)\`.
 3. Retry the same request with header \`PAYMENT-SIGNATURE: base64(JSON{ x402Version: 2, accepted: <accepts[${acceptsIndex(cfg).xrp}]>, payload: { signedTxBlob, invoiceId } })\`.
@@ -1250,4 +1251,15 @@ export function vendorReportHtml(cfg: Config, base: string, id: string, name: st
 <p><small>Paying Lumi never changes a vendor's score or label.</small></p>
 </body></html>
 `;
+}
+
+/** Machine-readable XRPL tag fields for the discovery docs: legacy source_tag, or the per-product destination tags once rolled out. */
+function docsTagFields(cfg: Config): Record<string, unknown> {
+  const r = cfg.xrplDestTagRoutes;
+  if (r !== "all" && !(Array.isArray(r) && r.length)) return { source_tag: cfg.sourceTag };
+  const tags = Object.fromEntries(
+    Object.entries(XRPL_DESTINATION_TAGS).filter(([k]) => r === "all" || r.includes(k)),
+  );
+  if (r === "all") return { ...(cfg.xrplDestTagSourceTag !== undefined ? { source_tag: cfg.xrplDestTagSourceTag } : {}), destination_tags: tags };
+  return { source_tag: cfg.sourceTag, destination_tags: tags };
 }

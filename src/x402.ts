@@ -23,6 +23,7 @@ import type { Config, DurableObjectNamespaceLike, IouOption, KVLike } from "./co
 import { isPaymentPayloadV2 } from "@x402/core/schemas";
 import { cdpAuthHeaders, decodeExtensionResponses } from "./cdp";
 import { IDEMPOTENCY_HEADER, IDEMPOTENCY_MAX_BODY, IDEMPOTENCY_TTL_MS, PAYMENT_IDENTIFIER, PAYMENT_IDENTIFIER_DECLARATION, idempotencyKey, sha256Hex, type IdempotencyStore } from "./idempotency";
+import { destinationTagFor, productOfRouteKey } from "./xrpl_destination_tags";
 
 export const HEADER_PAYMENT_REQUIRED = "PAYMENT-REQUIRED";
 export const HEADER_PAYMENT_SIGNATURE = "PAYMENT-SIGNATURE";
@@ -341,7 +342,24 @@ export function buildRequirements(cfg: Config, quote: Quote, invoiceId: string):
     asset: "XRP",
     payTo: cfg.payTo,
     maxTimeoutSeconds: cfg.invoiceTtlSeconds,
-    extra: { invoiceId, sourceTag: cfg.sourceTag },
+    extra: xrplTagExtra(cfg, quote, invoiceId),
+  };
+}
+
+/** True when this quote's XRPL accepts carry extra.destinationTag (per-product routing) instead of Lumi's sourceTag. */
+export function usesDestinationTag(cfg: Config, routeKey: string): boolean {
+  const r = cfg.xrplDestTagRoutes;
+  if (!r) return false;
+  return r === "all" || r.includes(productOfRouteKey(routeKey));
+}
+
+/** XRPL accept `extra` tag fields: legacy { sourceTag } or, for rolled-out products, { destinationTag [, sourceTag override] }. */
+export function xrplTagExtra(cfg: Config, quote: Pick<Quote, "routeKey">, invoiceId: string): Record<string, unknown> {
+  if (!usesDestinationTag(cfg, quote.routeKey)) return { invoiceId, sourceTag: cfg.sourceTag };
+  return {
+    invoiceId,
+    ...(cfg.xrplDestTagSourceTag !== undefined ? { sourceTag: cfg.xrplDestTagSourceTag } : {}),
+    destinationTag: destinationTagFor(quote.routeKey),
   };
 }
 
@@ -362,7 +380,7 @@ export function buildAccepts(cfg: Config, quote: Quote, invoiceId: string): Paym
       asset: o.currency,
       payTo: cfg.payTo,
       maxTimeoutSeconds: cfg.invoiceTtlSeconds,
-      extra: { invoiceId, sourceTag: cfg.sourceTag, issuer: o.issuer, symbol: o.symbol },
+      extra: { ...xrplTagExtra(cfg, quote, invoiceId), issuer: o.issuer, symbol: o.symbol },
     });
   }
   const st = buildStellarRequirement(cfg, quote, invoiceId);

@@ -21,6 +21,10 @@ export interface Env {
   INVOICE_SECRET?: string;
   /** XRPL SourceTag stamped on every payment to this API (on-ledger usage metrics). */
   SOURCE_TAG?: string;
+  /** Per-product XRPL DestinationTag rollout: "" / unset = off, "all", or a comma list of product keys (routeKey prefixes). */
+  XRPL_DEST_TAG_ROUTES?: string;
+  /** SourceTag on quotes that carry a destinationTag: "none" (default, omit extra.sourceTag) or a uint32 to state explicitly. */
+  XRPL_DEST_TAG_SOURCE_TAG?: string;
   /** Any PRICE_<ROUTE>_<XRP|RLUSD|USDC> override (decimal strings), e.g. PRICE_VERDICT_XRP. */
   [price: `PRICE_${string}`]: string | undefined;
   /** Accept RLUSD (Ripple USD, XRPL issued token) as a second asset. "false" disables. Default on. */
@@ -249,6 +253,10 @@ export interface Config {
   invoiceSecret: string;
   invoiceSecretIsDevDefault: boolean;
   sourceTag: number;
+  /** Products (routeKey prefixes) whose XRPL accepts carry extra.destinationTag instead of extra.sourceTag; "all" = every product. */
+  xrplDestTagRoutes?: "all" | string[];
+  /** extra.sourceTag on destination-tagged quotes: undefined = omitted (the facilitator then expects its default tag). */
+  xrplDestTagSourceTag?: number;
   pricesDrops: Record<PaidRoute, string>;
   /** Accepted XRPL issued-token (IOU) stablecoins, offered after XRP in every 402. */
   ious: IouOption[];
@@ -563,6 +571,17 @@ export function loadConfig(env: Env): Config {
     throw new Error("SOURCE_TAG must be a uint32");
   }
 
+  const dtRaw = (env.XRPL_DEST_TAG_ROUTES ?? "").trim();
+  const xrplDestTagRoutes: "all" | string[] = dtRaw.toLowerCase() === "all" ? "all" : dtRaw.split(",").map((x) => x.trim()).filter(Boolean);
+  const dtSt = (env.XRPL_DEST_TAG_SOURCE_TAG ?? "").trim().toLowerCase();
+  let xrplDestTagSourceTag: number | undefined;
+  if (dtSt && dtSt !== "none") {
+    xrplDestTagSourceTag = Number(dtSt);
+    if (!Number.isInteger(xrplDestTagSourceTag) || xrplDestTagSourceTag < 0 || xrplDestTagSourceTag > 0xffffffff) {
+      throw new Error("XRPL_DEST_TAG_SOURCE_TAG must be \"none\" or a uint32");
+    }
+  }
+
   return {
     verdictPaid: verdictPaid(env as any),
     network,
@@ -572,6 +591,8 @@ export function loadConfig(env: Env): Config {
     invoiceSecret,
     invoiceSecretIsDevDefault,
     sourceTag,
+    xrplDestTagRoutes,
+    ...(xrplDestTagSourceTag !== undefined ? { xrplDestTagSourceTag } : {}),
     pricesDrops: Object.fromEntries(
       PAID_ROUTES.map((r) => {
         const x = (env as Record<string, string | undefined>)[`PRICE_${r.toUpperCase()}_XRP`] || DEFAULT_PRICES[r].xrp;
