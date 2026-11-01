@@ -25,6 +25,7 @@ invocation_logs = false   # no automatic per-request logs (request URLs/headers)
 [vars]
 XRPL_NETWORK = "xrpl:0"                                  # mainnet
 PAY_TO = "rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM"             # Lumi's receiving wallet (address only)
+TRUST_BUYER_ADDRESSES = "rM8kmmnz5qPMg7V3r7SHYXgDGvm8PhzLvM,rpvsTYDZmX1j1ndmEFG6YjjZZwp6VRtQRz"  # accepted Lumi XRPL test-buy payers: main + demo buyer (Bobby 2026-11-01 9:35 CT)
 FACILITATOR_URL = "https://xrpl-facilitator-mainnet.t54.ai"
 SOURCE_TAG = "5864"                                     # Lumi's own tag ("LUMI" on a keypad), the pre-Oct-22 value
 XRPL_DEST_TAG_ROUTES = "all"                              # per-product extra.destinationTag rollout: "" off, "receipts,..." or "all" (docs/xrpl-destination-tags.md)
