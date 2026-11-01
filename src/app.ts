@@ -182,6 +182,9 @@ export function trustlineMerchantTxt(cfg: { payTo: string }): string {
   return `xrpl:${cfg.payTo}\n`;
 }
 
+/** /.well-known/agenteconomy-verify.txt: agenteconomy.report domain-claim token (public by design; owner approved 2026-11-01). Static, one line. */
+export const AGENTECONOMY_VERIFY_TXT = "aer-49b4b45013fe9c7c266a87eadd6d095f\n";
+
 /** /.well-known/security.txt (RFC 9116) for the API host. Same contact as the site; Expires within a year. */
 export const API_SECURITY_TXT = [
   "Contact: mailto:hello@lumitrades.io",
@@ -1794,6 +1797,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         });
       case "/.well-known/security.txt":
         return new Response(API_SECURITY_TXT, { headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=86400" } });
+      case "/.well-known/agenteconomy-verify.txt":
+        if (config.network !== "xrpl:0") return json(404, { error: "not_found" });
+        return new Response(AGENTECONOMY_VERIFY_TXT, { headers: { "Content-Type": "text/plain; charset=utf-8", "X-Content-Type-Options": "nosniff", "Cache-Control": "public, max-age=300" } });
       case "/.well-known/trustline-merchant.txt":
         // t54 Trustline merchant file (t54 / XRPL AI Hub convention): one `xrpl:<r-address>` line per receiving wallet.
         // Plain text, no signature. Mainnet only: a testnet deployment has no Hub listing to bind.
