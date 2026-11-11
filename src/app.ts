@@ -18,7 +18,7 @@ import { D1TrialStore, MemoryTrialStore, SIWX_HEADER, SIWX_KEY, TRIAL_LIMITS, tr
 import { makeReplayGuard, json, oversizePaymentHeader, requirePayment, paymentRequiredResponse, staleRefusal, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, assetLabel, isEvmRequirement, isStellarRequirement, type PaywallDeps, type PaymentRequirements, type Quote, type Settlement } from "./x402";
 import { PAID_ENDPOINTS, endpointFor } from "./catalog";
 import { bazaarExtension, resourceDescription, serviceMeta } from "./bazaar";
-import { indexDoc, indexHtml, openApi, skillMd, wellKnownX402, vendorReportHtml, VERSION } from "./docs";
+import { indexDoc, indexHtml, openApi, skillMd, wellKnownX402, vendorReportHtml, VERSION, agentSkillsIndex } from "./docs";
 import { agentCard, handleA2a, A2A_CORS } from "./a2a";
 import {
   coinList, resolveCoin, DISCLAIMER, SOURCE, type CoinRef,
@@ -1817,6 +1817,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         return json(200, mcpServerCard(base), { "Cache-Control": "public, max-age=300" });
       case "/.well-known/agents.json":
         return json(200, agentsJson(base), { "Cache-Control": "public, max-age=300" });
+      case "/.well-known/agent-skills/index.json":
+        return json(200, await agentSkillsIndex(base, skillMd(config, base, await coins())), { "Cache-Control": "public, max-age=300" });
       case "/openapi.json":
         return json(200, openApi(config, base, await coins()), { "Cache-Control": "public, max-age=300" });
       case "/v1/samples":
@@ -2189,7 +2191,7 @@ export function prefersHtml(accept: string | null | undefined): boolean {
 
 /** API sitemap: the human and machine-readable entry points (paid routes are listed in /openapi.json, not here). */
 export function sitemapXml(base: string): string {
-  const paths = ["/", "/llms.txt", "/skill.md", "/openapi.json", "/.well-known/x402", "/.well-known/agent-card.json", "/.well-known/mcp/server-card.json", "/.well-known/agents.json", "/v1/samples", "/v1/check", "/v1/trust/vendors", "/v1/trust/methodology", "/v1/trust/catalog", "/v1/badge", "/v1/monitor", "/v1/monitor/sellers", "/v1/monitor/corrections", "/v1/feed", "/v1/feed/license"];
+  const paths = ["/", "/llms.txt", "/skill.md", "/openapi.json", "/.well-known/x402", "/.well-known/agent-card.json", "/.well-known/mcp/server-card.json", "/.well-known/agents.json", "/.well-known/agent-skills/index.json", "/v1/samples", "/v1/check", "/v1/trust/vendors", "/v1/trust/methodology", "/v1/trust/catalog", "/v1/badge", "/v1/monitor", "/v1/monitor/sellers", "/v1/monitor/corrections", "/v1/feed", "/v1/feed/license"];
   const day = new Date().toISOString().slice(0, 10);
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
     paths.map((p) => `  <url><loc>${base}${p}</loc><lastmod>${day}</lastmod><changefreq>daily</changefreq></url>`).join("\n") +

@@ -4,6 +4,7 @@ import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPri
 import { PLATFORM_LICENCE, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
 import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICE_SHORT, HIGH_VALUE_PRICING_TEXT, PAID_PRICE_SUMMARY, highValuePriceUsd, usdcToAtomic } from "./config";
+import { sha256Hex } from "./idempotency";
 import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable } from "./catalog";
 import { XRPL_DESTINATION_TAGS } from "./xrpl_destination_tags";
 import { BAZAAR_ROUTES, TRUST_ROUTES, VENDOR_ID_PATTERN, errorDocs, serviceNameFor } from "./bazaar";
@@ -102,6 +103,27 @@ export const RECEIPT_DELIVERY_SCHEMA = {
 
 export const VERSION = "1.2.0";
 
+/** Agent Skills discovery index (/.well-known/agent-skills/index.json), schema 0.2.0. */
+export const AGENT_SKILL_NAME = "check-x402-seller-before-paying";
+export const AGENT_SKILL_DESCRIPTION = "Before paying an x402 seller, call Lumi's free check and read its one-line summary: test-buys, delivered, last check date. Lumi never says a seller is safe.";
+
+export async function agentSkillsIndex(base: string, skillBody: string) {
+  const digest = await sha256Hex(skillBody);
+  return {
+    $schema: "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
+    skills: [
+      {
+        name: AGENT_SKILL_NAME,
+        type: "skill-md",
+        description: AGENT_SKILL_DESCRIPTION,
+        url: `${base}/skill.md`,
+        digest: `sha256:${digest}`,
+      },
+    ],
+  };
+}
+
+
 /** accepts[] indices: USDC on Base first (when configured), then XRP, then the XRPL stablecoins. */
 export function acceptsIndex(cfg: Config) {
   const off = cfg.evm ? 1 : 0;
@@ -170,6 +192,7 @@ export function indexDoc(cfg: Config, base: string, coins: CoinRef[]) {
       { method: "GET", path: "/", summary: "This index" },
       { method: "GET", path: "/health", summary: "Liveness + config summary" },
       { method: "GET", path: "/skill.md", summary: "Agent guide: what is offered, prices, how to pay, example code" },
+      { method: "GET", path: "/.well-known/agent-skills/index.json", summary: "Agent Skills discovery index (check-x402-seller-before-paying)" },
       { method: "GET", path: "/.well-known/x402", summary: "x402 discovery manifest" },
       { method: "GET", path: "/.well-known/agent-card.json", summary: "A2A agent card (alias /.well-known/agent.json)" },
       { method: "GET", path: "/.well-known/mcp/server-card.json", summary: "MCP Server Card for the remote MCP server (alias /.well-known/mcp.json)" },
@@ -791,7 +814,7 @@ Every paid response carries \`as_of\` (when the observations were produced).
 \`{ "error": "data_unavailable", "retry_after_seconds", "note": "Not charged." }\` and **no 402 quote**, so no payment can be signed or settled. The response body is built *before* the payment is settled and is
 served right after a validated \`tesSUCCESS\`: a settled payment always returns the answer you paid for.
 
-Free: \`GET /v1/trust/check?url=\` (the trust check, rate-limited), \`GET /\`, \`GET /health\`, \`GET /skill.md\`, \`GET /v1/check?url=\`, \`GET /v1/samples\`, \`GET /v1/trust/vendors\` (\`?url=|domain=|payTo=\` lookup), \`GET /v1/trust/catalog\`, \`GET /v1/trust/vendors/{id}\`, \`GET /v1/trust/methodology\`, \`GET /v1/badge/{key}.svg|.json\` (legacy \`/badge\` paths 301 there), \`GET /trust/v/{key}\`, \`GET|POST /v1/trust/receipts/verify\`, \`GET /.well-known/x402\`, \`GET /.well-known/agent-card.json\`, \`GET /.well-known/mcp/server-card.json\`, \`GET /.well-known/agents.json\`, \`GET /openapi.json\`, \`POST /mcp\`, \`POST /a2a\`.
+Free: \`GET /v1/trust/check?url=\` (the trust check, rate-limited), \`GET /\`, \`GET /health\`, \`GET /skill.md\`, \`GET /v1/check?url=\`, \`GET /v1/samples\`, \`GET /v1/trust/vendors\` (\`?url=|domain=|payTo=\` lookup), \`GET /v1/trust/catalog\`, \`GET /v1/trust/vendors/{id}\`, \`GET /v1/trust/methodology\`, \`GET /v1/badge/{key}.svg|.json\` (legacy \`/badge\` paths 301 there), \`GET /trust/v/{key}\`, \`GET|POST /v1/trust/receipts/verify\`, \`GET /.well-known/x402\`, \`GET /.well-known/agent-card.json\`, \`GET /.well-known/mcp/server-card.json\`, \`GET /.well-known/agents.json\`, \`GET /.well-known/agent-skills/index.json\`, \`GET /openapi.json\`, \`POST /mcp\`, \`POST /a2a\`.
 
 Every paid response is JSON with \`kind\`, \`timestamp\`, \`source: "${SOURCE}"\`, \`as_of\`, a \`payment\` block (network, tx hash, explorer link) and a \`disclaimer\`. All timestamps are ISO 8601 UTC.
 
@@ -1129,6 +1152,7 @@ console.log(await res.json());`;
   const quick: [string, string, string][] = [
     ["skill.md", `${base}/skill.md`, "Agent instructions"],
     ["openapi.json", `${base}/openapi.json`, "OpenAPI 3.1 with x-payment-info"],
+    [".well-known/agent-skills/index.json", `${base}/.well-known/agent-skills/index.json`, "Agent Skills index"],
     [".well-known/x402", `${base}/.well-known/x402`, "x402 discovery"],
     ["/mcp", `${base}/mcp`, "Remote MCP (streamable HTTP)"],
     ["agent card", `${base}/.well-known/agent-card.json`, "A2A agent card"],
