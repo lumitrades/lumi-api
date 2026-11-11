@@ -664,6 +664,16 @@ function iouConfig(
 export const EXAMPLE_VENDOR_ID = "printmoneylab";
 export const EXAMPLE_SELLER_URL = "https://api.agentweather.io/v1/pulse/facilitator";
 export const EXAMPLE_SELLER_DOMAIN = "api.agentweather.io";
+/** Seller used in receipts discovery listings. A curated vendor Lumi test-buys, so the listed URL is a 402 in production (not a 404). */
+export const EXAMPLE_RECEIPTS_SELLER = "api.printmoneylab.com";
+export const RECEIPTS_EXAMPLE = `/v1/trust/receipts?seller=${EXAMPLE_RECEIPTS_SELLER}`;
+/** resource.url for a receipts 402: the request URL including ?seller= when present, otherwise the listed example. */
+export function receiptsResourceUrl(base: string, search = ""): string {
+  const q = search.startsWith("?") ? search.slice(1) : search;
+  const seller = new URLSearchParams(q).get("seller")?.trim();
+  if (seller) return `${base}/v1/trust/receipts?${q}`;
+  return `${base}${RECEIPTS_EXAMPLE}`;
+}
 export const FREE_TRUST_CHECK_EXAMPLE = `/v1/trust/check?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}`;
 export const HIGH_VALUE_EXAMPLE = `/v1/trust/check/high-value?url=${encodeURIComponent(EXAMPLE_SELLER_URL)}&amount=10`;
 export const HIGH_VALUE_PRICING_TEXT = `${HIGH_VALUE.rate * 100}% of the stated payment amount (amount, USD), minimum $${HIGH_VALUE.minUsd}, maximum $${HIGH_VALUE.maxUsd}; e.g. amount=10 costs $${highValuePriceUsd(10)}.`;

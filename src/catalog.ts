@@ -1,7 +1,7 @@
 /** Single source of truth for endpoints, prices and descriptions (used by docs, discovery and the paywall). */
 
 import type { Config, PaidRoute } from "./config";
-import { dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_LIMITS, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT } from "./config";
+import { dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_LIMITS, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICING_TEXT, RECEIPTS_EXAMPLE } from "./config";
 import { LINE_LABEL, productLine } from "./lines";
 
 export interface PaidEndpoint {
@@ -55,7 +55,7 @@ export const PAID_ENDPOINTS: PaidEndpoint[] = [
     template: "/v1/trust/receipts",
     summary:
       "Use this when you want the record behind a seller check: the signed test-buy receipts Lumi holds for one x402 seller, newest first (up to 50). Query: seller (required): a domain, an x402 resource URL or a payTo address. Each receipt has date, endpoint, network (Base, XRP Ledger, Stellar), amount, transaction hash, explorer link and outcome (delivered, not delivered or inconclusive), plus the signed counterparty_delivery_receipt that anyone can verify for free at /v1/trust/receipts/verify. Only Lumi's own test-buys from its published wallets (/v1/check/wallets). Not charged on bad input or when Lumi has no test-buy of the seller (404). Paying never changes a score or label. Observations, not a guarantee.",
-    example: `/v1/trust/receipts?seller=${EXAMPLE_SELLER_DOMAIN}`,
+    example: RECEIPTS_EXAMPLE,
   },
   {
     route: "batch_check",

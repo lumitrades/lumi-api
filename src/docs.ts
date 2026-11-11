@@ -3,7 +3,7 @@
 import { COMMERCE_FREE_ENDPOINTS, commerceOpenApiPaths, commerceSkillMd, planPriceTable, planResources } from "./commerce/discovery";
 import { PLATFORM_LICENCE, WATCH_DISCOUNTS, WATCH_FREE, WATCH_TRIAL, WATCH_TRIAL_END } from "./commerce/plans";
 import type { Config, PaidRoute } from "./config";
-import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICE_SHORT, HIGH_VALUE_PRICING_TEXT, PAID_PRICE_SUMMARY, highValuePriceUsd, usdcToAtomic } from "./config";
+import { EXPLORERS, dropsToXrp, EXAMPLE_SELLER_DOMAIN, EXAMPLE_SELLER_URL, EXAMPLE_VENDOR_ID, EXAMPLE_RECEIPTS_SELLER, FREE_TRUST_CHECK_EXAMPLE, FREE_TRUST_CHECK_LIMITS, FREE_WALLET_CHECK_LIMITS, HIGH_VALUE, HIGH_VALUE_EXAMPLE, HIGH_VALUE_PRICE_SHORT, HIGH_VALUE_PRICING_TEXT, PAID_PRICE_SUMMARY, highValuePriceUsd, usdcToAtomic } from "./config";
 import { sha256Hex } from "./idempotency";
 import { PAID_ENDPOINTS, VERDICT_ENDPOINT, paidEndpoints, priceTable } from "./catalog";
 import { XRPL_DESTINATION_TAGS } from "./xrpl_destination_tags";
@@ -253,9 +253,9 @@ export function wellKnownX402(cfg: Config, base: string) {
     description: `Lumi Trades (lumitrades.io), an x402 seller trust service: check an x402 seller before you pay. Start with the free trust check, GET ${base}${FREE_TRUST_CHECK_EXAMPLE} (no payment, rate-limited): allow / warn / block with coded reasons. The resources below are the paid checks, settled in ${settledIn(cfg)}: a high-value pre-payment check, a one-label verdict, seller reputation reports, signed test-buy receipts and batch checks, all from Lumi's trust observations. Each resource carries product_line. Automated observations, not an endorsement or guarantee. Also: seller monitoring plans (Watch $5, Watch Pro $20 per endpoint per 30d; Audit $99; Re-test pack $6.50 for 30 seller-funded test-buys; Founder pack $5 for 24 seller-funded test-buys, first 10 sellers; free tier and 14-day trial; seller-funded buys never change a public score) and a licensed trust data feed (free 1,000 lookups/month; $1.50 per 1,000; Feed $99/30d; Feed Pro $199/30d).`,
     resources: paidEndpoints(cfg).map((e) => ({
       name: e.name,
-      // receipts: the doc example seller may have no test-buy (a 404, never charged), so crawlers get the bare path (402).
+      // receipts lists e.example (?seller=EXAMPLE_RECEIPTS_SELLER, a vendor Lumi test-buys) so a client that pays the listed URL gets a 402, not 400 invalid_query.
       // vendor_report: a real curated vendor id (EXAMPLE_VENDOR_ID), never the literal {id} template (2026-10-28).
-      url: `${base}${e.route === "receipts" ? e.path : e.example}`,
+      url: `${base}${e.example}`,
       template: `${base}${e.template}`,
       mimeType: "application/json",
       method: e.method,
@@ -441,7 +441,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
               { name: "payTo", in: "query", required: false, description: "The payTo address in its 402 quote (EVM 0x... or XRPL r...), to check against the listing", schema: { type: "string" } },
             ]
           : e.route === "receipts"
-          ? [{ name: "seller", in: "query", required: true, description: "The seller: a domain (api.example.com), an x402 resource URL or a payTo address", schema: { type: "string", maxLength: 500 }, example: EXAMPLE_SELLER_DOMAIN }]
+          ? [{ name: "seller", in: "query", required: true, description: "The seller: a domain (api.example.com), an x402 resource URL or a payTo address", schema: { type: "string", maxLength: 500 }, example: EXAMPLE_RECEIPTS_SELLER }]
           : e.route === "batch_check"
           ? [{ name: "urls", in: "query", required: true, description: "1 to 10 comma-separated x402 resource URLs or seller domains", schema: { type: "string", maxLength: 5000 }, example: `${EXAMPLE_SELLER_URL},${EXAMPLE_SELLER_DOMAIN}` }]
           : []), IDEMPOTENCY_PARAM],

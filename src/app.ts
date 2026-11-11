@@ -9,7 +9,7 @@ import { createOutcomes, parseOutcome, MemoryOutcomeStore, D1OutcomeStore, OUTCO
 import { createBadges } from "./trust/badge";
 import { setPrivateNames } from "./sanitize";
 import { FIRST_HV_REFUND_CAP_USD, FREE_WALLET_CHECK_LIMITS } from "./config";
-import { loadConfig, verdictPaid, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, usdcToAtomic, usdcToStroops, HIGH_VALUE, highValuePriceUsd, HIGH_VALUE_EXAMPLE, FREE_TRUST_CHECK_EXAMPLE, HIGH_VALUE_PRICING_TEXT, HIGH_VALUE_ADDS, paidOptionText, EXAMPLE_VENDOR_ID, EXAMPLE_SELLER_URL, EXAMPLE_SELLER_DOMAIN, type Config, type Env, type PaidRoute } from "./config";
+import { loadConfig, verdictPaid, EXPLORERS, dropsToXrp, atomicToUsdc, LUMI_STELLAR_ADDRESS, stroopsToUsdc, usdcToAtomic, usdcToStroops, HIGH_VALUE, highValuePriceUsd, HIGH_VALUE_EXAMPLE, FREE_TRUST_CHECK_EXAMPLE, HIGH_VALUE_PRICING_TEXT, HIGH_VALUE_ADDS, paidOptionText, EXAMPLE_VENDOR_ID, EXAMPLE_SELLER_URL, EXAMPLE_SELLER_DOMAIN, EXAMPLE_RECEIPTS_SELLER, receiptsResourceUrl, type Config, type Env, type PaidRoute } from "./config";
 import { createFreeQuota, DurableObjectQuotaCounter, MemoryQuotaCounter, rateLimitHeaders, type QuotaCounter } from "./free_quota";
 import { usdToDrops } from "./pricing";
 import { STELLAR_HORIZON } from "./trust/verify";
@@ -877,7 +877,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           resets_at: new Date(r.resetAt).toISOString(),
           retry_after_seconds: Number(retry),
           paid_route: { name: "high_value_check", method: "GET", url: hvUrl, pricing: HIGH_VALUE_PRICING_TEXT, price_usd: highValuePriceUsd(q.amountUsd && q.amountUsd > 0 ? q.amountUsd : 10), adds: HIGH_VALUE_ADDS, payment: "x402 v2: USDC on Base, XRP / RLUSD / USDC on the XRP Ledger, USDC on Stellar; no account" },
-          other_paid_routes: { batch_check: `${base}/v1/check/batch?urls=${encodeURIComponent(EXAMPLE_SELLER_URL)}`, receipts: `${base}/v1/trust/receipts?seller=${encodeURIComponent(EXAMPLE_SELLER_DOMAIN)}`, vendor_report: `${base}/v1/trust/vendors/${EXAMPLE_VENDOR_ID}/report` },
+          other_paid_routes: { batch_check: `${base}/v1/check/batch?urls=${encodeURIComponent(EXAMPLE_SELLER_URL)}`, receipts: `${base}/v1/trust/receipts?seller=${encodeURIComponent(EXAMPLE_RECEIPTS_SELLER)}`, vendor_report: `${base}/v1/trust/vendors/${EXAMPLE_VENDOR_ID}/report` },
           note: "Not charged. Safety findings for this URL are still included below.",
         },
       };
@@ -1868,10 +1868,10 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const usd = pf.usd;
       const enc = encodeURIComponent(EXAMPLE_SELLER_URL);
       const example = route === "verdict" ? `${base}/v1/verdict?url=${enc}`
-        : route === "receipts" ? `${base}/v1/trust/receipts?seller=${EXAMPLE_SELLER_DOMAIN}`
+        : route === "receipts" ? receiptsResourceUrl(base)
         : route === "batch_check" ? `${base}/v1/check/batch?urls=${enc},${EXAMPLE_SELLER_DOMAIN}`
         : `${base}${HIGH_VALUE_EXAMPLE}`;
-      const probeQuery: Record<string, string> = route === "receipts" ? { seller: EXAMPLE_SELLER_DOMAIN } : route === "batch_check" ? { urls: `${EXAMPLE_SELLER_URL},${EXAMPLE_SELLER_DOMAIN}` } : route === "high_value_check" ? { url: EXAMPLE_SELLER_URL, amount: "1" } : { url: EXAMPLE_SELLER_URL };
+      const probeQuery: Record<string, string> = route === "receipts" ? { seller: EXAMPLE_RECEIPTS_SELLER } : route === "batch_check" ? { urls: `${EXAMPLE_SELLER_URL},${EXAMPLE_SELLER_DOMAIN}` } : route === "high_value_check" ? { url: EXAMPLE_SELLER_URL, amount: "1" } : { url: EXAMPLE_SELLER_URL };
       return paymentRequiredResponse(config, {
         routeKey: `${route}:probe`,
         amountDrops: pf.amountDrops,
@@ -1882,7 +1882,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         amountEvm: pf.amountEvm,
         amountStellar: pf.amountStellar,
         description: resourceDescription(route, `Lumi API ${endpoint.template}: ${endpoint.summary}`, { usd }),
-        resourceUrl: `${base}${path}`,
+        resourceUrl: route === "receipts" ? receiptsResourceUrl(base) : `${base}${path}`,
         bazaar: bazaarExtension(route, undefined, probeQuery, usd),
         service: serviceMeta(route),
         ...(exampleResultFor(route) ? { exampleResult: exampleResultFor(route) } : {}),
@@ -1925,7 +1925,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         `Lumi API ${endpoint.template}: ${endpoint.summary}`,
         { subject: coin?.symbol ?? vendorId, usd: pf.usd },
       ),
-      resourceUrl: `${base}${path}`,
+      resourceUrl: route === "receipts" ? receiptsResourceUrl(base, url.search) : `${base}${path}`,
       bazaar: bazaarExtension(
         route,
         coin?.symbol ?? vendorId,
