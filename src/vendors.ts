@@ -148,7 +148,7 @@ export const VENDORS: Vendor[] = [
     name: "onchain-risk-oracle (evebrief)",
     homepage: "https://oracle.evebrief.org",
     pay_to: { xrpl: ["rH2tcNh56xoLUssRubra7DSDCgrReSZodW"] },
-    endpoints: [{ url: "https://oracle.evebrief.org/", method: "POST", body: {"address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "chain": "ethereum"}, listed_price: "0.01", listed_asset: "RLUSD", test_buy: true }],
+    endpoints: [{ url: "https://oracle.evebrief.org/", method: "POST", body: {"address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "chain": "ethereum"}, listed_price: "0.005", listed_asset: "RLUSD", test_buy: true }],
   },
   {
     id: "vextorium",
