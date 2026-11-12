@@ -15,6 +15,7 @@ import { usdToDrops } from "./pricing";
 import { STELLAR_HORIZON } from "./trust/verify";
 import { DataSource, type DataFile } from "./data";
 import { D1TrialStore, MemoryTrialStore, SIWX_HEADER, SIWX_KEY, TRIAL_LIMITS, trialHint, wantsTrial, decodeSiwx, siwxChallenge, trialEligible, trialIpHash, usdcBalance, verifySiwx, trialChains, xrplTrialAccount, type TrialStore } from "./trial";
+import { D1DemandTrialStore, MemoryDemandTrialStore, DEMAND_TRIAL_HEADER, demandTrialEligible, readDemandTrialKey, hashDemandTrialKey, demandTrialAccess, type DemandTrialStore } from "./demand_trial";
 import { makeReplayGuard, json, oversizePaymentHeader, requirePayment, paymentRequiredResponse, staleRefusal, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, assetLabel, isEvmRequirement, isStellarRequirement, type PaywallDeps, type PaymentRequirements, type Quote, type Settlement } from "./x402";
 import { PAID_ENDPOINTS, endpointFor } from "./catalog";
 import { bazaarExtension, resourceDescription, serviceMeta } from "./bazaar";
@@ -107,6 +108,8 @@ export interface AppOptions {
   feedStore?: FeedStore;
   /** Free-trial ledger override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   trialStore?: TrialStore;
+  /** Demand-test trial-key ledger override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
+  demandTrialStore?: DemandTrialStore;
   /** Seller-monitoring + feed store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   commerceStore?: CommerceStore;
   /** Idempotent-retry cache override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
@@ -302,6 +305,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
   const trafficErr = (e: unknown) => console.error(JSON.stringify({ event: "traffic_log_error", error: String(e).slice(0, 200) }));
   const trials: TrialStore = opts.trialStore ?? (env.TRUST_DB ? new D1TrialStore(env.TRUST_DB) : new MemoryTrialStore());
   const trialsOn = env.TRIALS !== "0";
+  const demandTrials: DemandTrialStore = opts.demandTrialStore ?? (env.TRUST_DB ? new D1DemandTrialStore(env.TRUST_DB) : new MemoryDemandTrialStore());
   const live: LiveStore = opts.liveStore ?? (env.TRUST_DB ? new D1LiveStore(env.TRUST_DB) : new MemoryLiveStore());
   const feeds: FeedStore = opts.feedStore ?? (env.TRUST_DB ? new D1FeedStore(env.TRUST_DB) : new MemoryFeedStore());
   const alertCfg: AlertConfig = {
@@ -1512,7 +1516,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           : {
               "Access-Control-Allow-Origin": "*",
               "Access-Control-Allow-Methods": "GET, OPTIONS",
-              "Access-Control-Allow-Headers": "PAYMENT-SIGNATURE, X-PAYMENT, SIGN-IN-WITH-X, X-Lumi-Trial, Idempotency-Key, Content-Type",
+              "Access-Control-Allow-Headers": "PAYMENT-SIGNATURE, X-PAYMENT, SIGN-IN-WITH-X, X-Lumi-Trial, X-Lumi-Trial-Key, Idempotency-Key, Content-Type",
               "Access-Control-Max-Age": "86400",
             },
       });
@@ -1841,7 +1845,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     // A person opening a vendor report link in a browser (Accept ranks text/html first, GET, no payment header): a small page
     // explaining the $0.02 x402 call, with links to the free summary and the docs. Agents (JSON or */* Accept) still get the 402.
     if (route === "vendor_report" && request.method === "GET" && rawArg !== undefined && !PATH_TEMPLATE_RE.test(rawArg)
-      && prefersHtml(request.headers.get("accept")) && !(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT))) {
+      && prefersHtml(request.headers.get("accept")) && !(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT) || request.headers.get(DEMAND_TRIAL_HEADER))) {
       const v = VENDORS.find((x) => x.id === rawArg.toLowerCase()) ?? null;
       return new Response(vendorReportHtml(config, base, v?.id ?? rawArg.slice(0, 64), v?.name ?? null), {
         status: 200,
@@ -1974,6 +1978,34 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         }
         quote.trial = { granted: false, reason: r.reason, detail: "Free trial not granted for this request; pay with any accepts[] option instead. Not charged." };
       }
+    }
+
+    // Demand-test trial key (X-Lumi-Trial-Key): waives payment on the paid trust routes until 21 Nov 2026.
+    // A payment header always wins (the caller is paying). Unknown, expired or exhausted keys fall through
+    // to the normal 402. Nothing is written to the sales ledger.
+    const hasPaymentForDemand = !!(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT));
+    const demandKey = !hasPaymentForDemand && demandTrialEligible(route) ? readDemandTrialKey(request) : null;
+    if (demandKey) {
+      const stale = staleRefusal(quote);
+      if (stale) return stale;
+      const keyHash = await hashDemandTrialKey(demandKey);
+      const claimed = await demandTrials.claim(keyHash, route, path, now()).catch((e) => {
+        deps.log?.({ event: "demand_trial_store_error", error: String(e) });
+        return { ok: false as const, reason: "store_unavailable" as const };
+      });
+      if (claimed.ok) {
+        deps.log?.({ event: "demand_trial_call", route, used: claimed.used, remaining: claimed.remaining, label: claimed.label });
+        if (prep.onServed) {
+          const p = prep.onServed().catch((e) => deps.log?.({ event: "buy_queue_error", error: String(e) }));
+          if (ctx) ctx.waitUntil(p); else await p;
+        }
+        const extra = prep.enrich ? await prep.enrich().catch((e) => ({ live: null, live_error: String((e as Error)?.message ?? e) })) : {};
+        return json(200, { ...body, ...extra, access: demandTrialAccess(claimed) }, { "Cache-Control": "no-store" });
+      }
+      if (claimed.reason === "expired" || claimed.reason === "exhausted") {
+        quote.trial_key = { granted: false, reason: claimed.reason, detail: "This trial key is no longer valid for a free call; pay with any accepts[] option instead. Not charged." };
+      }
+      // unknown_key / store_unavailable: silent fall-through to the normal 402.
     }
 
     return requirePayment(request, config, paywallDeps(ctx), quote, async (s: Settlement, paid: PaymentRequirements) => {

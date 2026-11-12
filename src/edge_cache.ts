@@ -80,7 +80,7 @@ export function edgeKey(url: URL): string {
 export function isEdgeCacheable(request: Request, url: URL): boolean {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
   if (!PUBLIC_CACHED.test(url.pathname)) return false;
-  for (const h of ["Authorization", "PAYMENT-SIGNATURE", "X-PAYMENT", "SIGN-IN-WITH-X", "X-Lumi-Trial"]) if (request.headers.has(h)) return false;
+  for (const h of ["Authorization", "PAYMENT-SIGNATURE", "X-PAYMENT", "SIGN-IN-WITH-X", "X-Lumi-Trial", "X-Lumi-Trial-Key"]) if (request.headers.has(h)) return false;
   return true;
 }
 

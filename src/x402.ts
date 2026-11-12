@@ -136,6 +136,8 @@ export interface Quote {
   extensions?: Record<string, unknown>;
   /** Optional top-level free-trial status (e.g. why a SIGN-IN-WITH-X trial attempt was not granted). */
   trial?: Record<string, unknown>;
+  /** Demand-test trial key status (expired/exhausted). Absent for unknown keys so they look like a normal 402. */
+  trial_key?: Record<string, unknown>;
   /** Trust routes: a short, labelled sample of what the paid answer looks like (top-level `example_result`; see example_result.ts). */
   exampleResult?: { label: string; result: Record<string, unknown> };
 }
@@ -461,6 +463,7 @@ export async function buildPaymentRequired(cfg: Config, quote: Quote, error: str
     ...(quote.samplesUrl ? { samples: quote.samplesUrl } : {}),
     ...(quote.note ? { note: quote.note } : {}),
     ...(quote.trial ? { trial: quote.trial } : {}),
+    ...(quote.trial_key ? { trial_key: quote.trial_key } : {}),
     ...(quote.exampleResult ? { example_result: quote.exampleResult } : {}),
     ...howTo,
     // First high-value check refund offer: only when FIRST_HV_REFUND=on (default off); words only, no money path.
