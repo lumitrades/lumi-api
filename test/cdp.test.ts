@@ -6,7 +6,7 @@ import { cdpJwt, decodeExtensionResponses, CDP_FACILITATOR_URL } from "../src/cd
 import { BAZAAR_ROUTES, BAZAAR_MAX_DESCRIPTION, bazaarExtension, ROUTE_TAGS, SERVICE_NAME, SERVICE_ICON, serviceNameFor } from "../src/bazaar";
 import { PAID_ENDPOINTS } from "../src/catalog";
 import { PAID_ROUTES } from "../src/config";
-import { validateDiscoveryExtension, extractDiscoveryInfo, isValidRouteTemplate, sanitizeResourceServiceMetadata } from "@x402/extensions/bazaar";
+import { validateDiscoveryExtension, extractDiscoveryInfo, sanitizeResourceServiceMetadata } from "@x402/extensions/bazaar";
 import { registerExactEvmScheme } from "@x402/evm/exact/client";
 import { x402Client } from "@x402/fetch";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
@@ -70,7 +70,7 @@ describe("CDP JWT", () => {
 });
 
 describe("Bazaar metadata", () => {
-  it("covers every paid route with a valid declaration, short description and routeTemplate where parameterised", () => {
+  it("covers every paid route with a valid declaration and a short description; vendor report has no routeTemplate", () => {
     expect(Object.keys(BAZAAR_ROUTES).sort()).toEqual([...PAID_ROUTES].sort());
     for (const e of PAID_ENDPOINTS) {
       const meta = BAZAAR_ROUTES[e.route];
@@ -80,7 +80,8 @@ describe("Bazaar metadata", () => {
       const v = validateDiscoveryExtension(ext);
       expect(v, `${e.route}: ${JSON.stringify(v.errors)}`).toEqual({ valid: true });
       expect(ext.info.output.example.kind).toBeTruthy();
-      if (arg) expect(isValidRouteTemplate(ext.routeTemplate)).toBe(true);
+      // routeTemplate would make CDP list origin+/v1/trust/vendors/:id/report, which is not payable.
+      expect(ext.routeTemplate).toBeUndefined();
       // a value outside the declared schema is rejected (schema is real, not decorative)
       if (arg) expect(validateDiscoveryExtension(bazaarExtension(e.route, "../x") as any).valid).toBe(false);
     }
@@ -188,10 +189,11 @@ describe("Base settlement via CDP with keyless fallback", () => {
       const pp = c.body.paymentPayload;
       expect(pp.resource).toMatchObject({ url: "http://lumi.test/v1/trust/vendors/heurist-mesh/report", mimeType: "application/json" });
       expect(pp.resource.description.length).toBeLessThanOrEqual(500);
-      expect(pp.extensions.bazaar.routeTemplate).toBe("/v1/trust/vendors/:id/report");
+      expect(pp.extensions.bazaar.routeTemplate).toBeUndefined();
       expect(pp.extensions.bazaar.info.input.pathParams).toEqual({ id: "heurist-mesh" });
       const info = extractDiscoveryInfo(pp, c.body.paymentRequirements);
-      expect(info?.resourceUrl).toBe("http://lumi.test/v1/trust/vendors/:id/report");
+      // Listed URL must be the concrete settled resource, not the :id template.
+      expect(info?.resourceUrl).toBe("http://lumi.test/v1/trust/vendors/heurist-mesh/report");
     }
     expect(s.logs).toContainEqual(expect.objectContaining({ event: "x402_bazaar", phase: "settle", status: "success" }));
     expect(s.logs).toContainEqual(expect.objectContaining({ event: "x402_settled", facilitator: "cdp" }));

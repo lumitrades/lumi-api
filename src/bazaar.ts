@@ -3,9 +3,13 @@
  *
  * The CDP facilitator indexes a resource after its first successful settlement, using `paymentPayload.resource`
  * (url, description <= 500 chars, mimeType) and `paymentPayload.extensions.bazaar` (`info` validated against
- * `schema` with JSON Schema 2020-12). The shape matches `declareDiscoveryExtension()` from @x402/extensions, with
- * `routeTemplate` + `pathParams` for the parameterised routes so all coins / vendors collapse into one listing.
- * Examples are deliberately short: the whole PaymentRequired also travels base64-encoded in a response header.
+ * `schema` with JSON Schema 2020-12). The shape matches `declareDiscoveryExtension()` from @x402/extensions.
+ * We do not emit `routeTemplate`: `@x402/extensions` `extractDiscoveryInfo` would then set the listed URL to
+ * `origin + routeTemplate` (e.g. `/v1/trust/vendors/:id/report`), which returns 400 path_template_not_filled
+ * and cannot be paid. The listed URL is the concrete `resource.url` that was settled (for the vendor report,
+ * a real vendor id such as printmoneylab). `pathParams` stay on `info.input` so the schema still describes
+ * the parameter. Examples are deliberately short: the whole PaymentRequired also travels base64-encoded in
+ * a response header.
  */
 
 import { DEFAULT_PRICES, EXAMPLE_SELLER_URL, type PaidRoute } from "./config";
@@ -287,7 +291,8 @@ export function bazaarExtension(route: PaidRoute, arg?: string, query?: Record<s
       },
       required: ["input"],
     },
-    ...(meta.routeTemplate && arg !== undefined ? { routeTemplate: meta.routeTemplate } : {}),
+    // Intentionally omit routeTemplate. CDP/Bazaar canonicalizes the listed resource to
+    // origin+routeTemplate, and `/v1/trust/vendors/:id/report` is not a payable URL.
   };
 }
 
