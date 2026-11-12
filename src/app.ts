@@ -990,6 +990,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     catalogStore,
     evidence: evidenceStore,
     receipts: receiptStore,
+    activityFor: async (host, payTos) => activityPublic(await activity.lookup(host, payTos), now(), verdictTh),
     paywall: (ctx) => paywallDeps(ctx),
     saleOutcome,
     email: { from: alertCfg.emailFrom, binding: alertCfg.emailBinding },

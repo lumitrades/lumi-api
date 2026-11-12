@@ -23,6 +23,8 @@ export interface CommerceDeps {
   catalogStore: CatalogStore;
   evidence?: EvidenceStore;
   receipts?: ReceiptStore;
+  /** Banded seller-activity flags for paid feed rows (same public view as vendor lookup). */
+  activityFor?: (host: string | null, payTos: string[]) => Promise<unknown | null>;
   paywall: (ctx?: WaitUntil) => PaywallDeps;
   /** Reports whether a settled payment was credited, for alerts deferred until then (Founder pack; see sales.ts). */
   saleOutcome?: (tx: string, o: SaleOutcome) => void;

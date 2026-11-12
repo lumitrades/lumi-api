@@ -217,8 +217,11 @@ describe("evidence: lookups and trust/check", () => {
     expect(blob).not.toContain(H(1));
     expect(blob).not.toMatch(/"organic_payers"|"organic_payments"|"organic_usd"|"sample_payer"|"excluded_payers"/);
     expect(free.body.catalog.entries[0].bazaar_quality).toBeUndefined();
-    expect(free.body.catalog.entries[0].source).toBe("cdp_bazaar");
-    expect(free.body.catalog.entries[0].source_licence).toBe("lumi_observations");
+    expect(free.body.catalog.entries[0].service_name).toBeUndefined();
+    expect(free.body.catalog.entries[0].description).toBeUndefined();
+    expect(free.body.catalog.entries[0].source).toBe("unverified");
+    expect(free.body.catalog.entries[0].seller_confirmed).toBe(false);
+    expect(free.body.catalog.entries[0].discovery_seed).toBe("cdp_bazaar");
     const paid = await buy("/v1/trust/check/high-value?amount=4&url=" + encodeURIComponent("https://api.xseller.com/v1/q"));
     expect(paid.status).toBe(200);
     expect(paid.body.reasons.map((r: any) => r.code)).toEqual(expect.arrayContaining(["organic_payers"]));

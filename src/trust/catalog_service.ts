@@ -810,7 +810,7 @@ export function createCatalog(deps: CatalogDeps) {
       ...(st ? { coverage: coverageLine(st, await xrplAgg()) } : {}),
       labels: LABEL_NOTES,
       curated,
-      catalog: { total_matches: total, shown: entries.length, ordering: "Bazaar 30-day calls, most used first", tiers_shown: tiers, entries },
+      catalog: { total_matches: total, shown: entries.length, ordering: "seller-confirmed first (recent valid unpaid 402), then recent probe, then id", tiers_shown: tiers, entries },
       ...(census.length ? { payto_census: census } : {}),
       methodology: `${base}/v1/trust/methodology`,
       ...(free ? { evidence: freeEvidenceNote(base, q) } : {}),
@@ -833,7 +833,7 @@ export function createCatalog(deps: CatalogDeps) {
     return {
       source: "Discovery seeds (CDP x402 Bazaar and free directories) plus Lumi quote-checks and test-buys; Coinbase quality fields are not published. x402scan's resource API is paid, so it is not ingested",
       lookup: `${base}/v1/trust/vendors?url=<resource url> | ?domain=<host> | ?payTo=<address>`,
-      browse: `${base}/v1/trust/catalog (free teaser: the ${FREE_BROWSE_MAX} most-used listings, ${FREE_BROWSE_PAGE} per page)`,
+      browse: `${base}/v1/trust/catalog (free teaser: the ${FREE_BROWSE_MAX} most recently seller-confirmed listings, ${FREE_BROWSE_PAGE} per page)`,
       labels: LABEL_NOTES,
       coverage: s ? coverageLine(s, x) : null,
       counts: s ? { catalogued: s.catalogued, active: s.active, quote_checked: s.quote_checked, quote_checked_24h: s.quote_checked_24h, quote_verified: s.quote_verified, purchase_verified: s.by_network?.[BASE_NET]?.purchase_verified ?? s.purchase_verified, test_buys: s.by_network?.[BASE_NET]?.test_buys ?? s.test_buys, purchase_verified_note: "Bazaar catalog resources only (Base USDC). XRPL test-buys of the curated list are in purchase_verified_by_chain.xrpl, counted separately.", domains: s.domains, as_of: iso(s.computed_at) } : null,
@@ -853,7 +853,7 @@ export function createCatalog(deps: CatalogDeps) {
     return rows;
   }
 
-  /** Free teaser browse: the FREE_BROWSE_MAX most-used listings, FREE_BROWSE_PAGE per page, answer-only entries. */
+  /** Free teaser browse: the FREE_BROWSE_MAX most recently seller-confirmed listings, FREE_BROWSE_PAGE per page, answer-only entries. */
   async function browseDoc(url: URL, base: string) {
     const t = now();
     const popular = url.searchParams.get("popular") === "1";
@@ -875,7 +875,7 @@ export function createCatalog(deps: CatalogDeps) {
     return {
       kind: "trust_catalog", generated_at: iso(t), summary: await summary(base),
       free_tier: {
-        shows: `the ${FREE_BROWSE_MAX} most-used listings (Bazaar 30-day calls), ${FREE_BROWSE_PAGE} per page, pages 1-${pages}${popular ? "; popular=1 returns the top cheap listings only" : ""}`,
+        shows: `the ${FREE_BROWSE_MAX} most recently seller-confirmed listings, ${FREE_BROWSE_PAGE} per page, pages 1-${pages}${popular ? "; popular=1 returns cheap listings Lumi has confirmed, not a Coinbase usage ranking" : ""}`,
         ...(url.searchParams.has("after") ? { ignored: "after= is no longer supported: the free catalog is not a full export" } : {}),
         ...(!popular && (page - 1) * limit >= FREE_BROWSE_MAX ? { beyond_free_pages: `page ${page} is past the free teaser` } : {}),
         lookup: `Any specific listing is free to look up: ${base}/v1/trust/vendors?url=<resource url> | ?domain=<host> | ?payTo=<address>`,

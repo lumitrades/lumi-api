@@ -5,7 +5,7 @@
  * Feed and Feed Pro include full evidence and signed receipts.
  */
 import { json, requirePayment, assetLabel, paymentRequiredResponse, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, type Settlement, type PaymentRequirements } from "../x402";
-import { catalogFreeView, catalogView, urlVariants, X402LIST_ATTRIBUTION, X402LIST_LICENCE_URL, type CatalogRow } from "../trust/catalog";
+import { catalogFreeView, feedEntryView, classifySellerConfirmation, urlVariants, X402LIST_ATTRIBUTION, X402LIST_LICENCE_URL, type CatalogRow, type DropReason } from "../trust/catalog";
 import { vet402View, VET402 } from "../trust/evidence";
 import { VENDORS } from "../vendors";
 import { XRPL_ADDR_RE, EVM_ADDR_RE } from "../trust/verify";
@@ -67,7 +67,7 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
   function doc(base: string) {
     return {
       kind: "lumi_trust_feed",
-      summary: "Licensed, keyed access to Lumi's own x402 trust observations (quote checks, test-buys and receipts, and banded seller-activity flags). No payer identities, no seller income, and no Coinbase Bazaar quality fields.",
+      summary: "Licensed, keyed access to seller-confirmed x402 endpoints (URL, domain, and the network/price the seller itself advertised) plus Lumi's quote-checks, test-buys, receipts, and banded seller-activity flags. Rows are included only when confirmed against the seller's own live unpaid 402 or /.well-known/x402. No payer identities, no seller income, no copied directory descriptions, and no Coinbase Bazaar quality or usage numbers.",
       plans: [
         { plan: "free", price_usd: "0", lookups: `${FEED_LIMITS.freePerMonth}/month`, evidence: "answer-only", rate_limit_per_min: FEED_LIMITS.perMinute.free, signup: `GET ${base}/v1/feed/challenge?wallet=<address>, sign it, POST ${base}/v1/feed/keys` },
         { plan: "feed_credits", price_usd: PLANS.feed_credits.usd, lookups: `${FEED_LIMITS.creditsPerPurchase} prepaid, never expire`, evidence: "answer-only", auto_renew: false, rate_limit_per_min: FEED_LIMITS.perMinute.credits, pay: `${base}/v1/feed/credits?key_id=<key id>` },
@@ -81,7 +81,7 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
       endpoints: {
         lookup: `POST ${base}/v1/feed/lookup {items:[{url}|{payTo}], max ${FEED_LIMITS.maxBatch}} (also GET ?url= or ?payTo=)`,
         delta: `GET ${base}/v1/feed/delta?since=<ISO time>&after_id=<id> (Feed, Feed Pro): status changes (quote validity, pays listed payTo, price match)`,
-        snapshot: `GET ${base}/v1/feed/snapshot?cursor=<id> (Feed Pro): paginated full catalog export, licensed`,
+        snapshot: `GET ${base}/v1/feed/snapshot?cursor=<id> (Feed Pro): paginated export of seller-confirmed rows only, licensed`,
         webhook: `POST ${base}/v1/feed/webhook {url} (Feed Pro): status-change webhooks, HMAC-signed`,
         usage: `GET ${base}/v1/feed/usage`,
       },
@@ -161,9 +161,24 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
     ]);
     const vmap = new Map(vet.map((v) => [v.resource_key, v]));
     const vetFor = (r: CatalogRow) => vmap.get(r.resource) ?? vmap.get(r.resource.replace(/^https?:\/\//, ""));
-    const views = rows.map((r) => {
+    const confirmed = rows.filter((r) => classifySellerConfirmation(r, t).confirmed);
+    const dropped = rows.filter((r) => !classifySellerConfirmation(r, t).confirmed).map((r) => {
+      const c = classifySellerConfirmation(r, t);
+      return { resource: r.resource, domain: r.domain, drop_reason: c.drop_reason as DropReason, seller_confirmed: false as const };
+    });
+    const activityOf = new Map<string, unknown | null>();
+    if (deps.activityFor) {
+      const hosts = [...new Set(confirmed.map((r) => r.domain).filter(Boolean))];
+      await Promise.all(hosts.map(async (h) => {
+        const payTos = confirmed.filter((r) => r.domain === h).flatMap((r) => (r.pay_tos ?? "").split(",").filter(Boolean));
+        activityOf.set(h, await deps.activityFor!(h, payTos).catch(() => null));
+      }));
+    }
+    const views = confirmed.map((r) => {
       const b = buys.filter((x) => x.resource === r.resource);
-      const v: Record<string, any> = full ? catalogView(r, b, undefined, t) : catalogFreeView(r, b, t);
+      const v: Record<string, any> = full
+        ? (feedEntryView(r, b, undefined, t, { activity: (activityOf.get(r.domain) as any) ?? null }) ?? {})
+        : (() => { const fv: any = catalogFreeView(r, b, t); const { listed_price_usd: _lp, service_name: _n, description: _d, ...rest } = fv; return { ...rest, observed_onchain_payments: activityOf.get(r.domain) ?? null }; })();
       const vt = vetFor(r);
       if (vt) v.third_party = { vet402: { ...vet402View(vt, !full), attribution: VET402.cite(iso(vt.retrieved_at)!.slice(0, 10)) } };
       return v;
@@ -185,7 +200,16 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
         .slice(0, 3).map((v) => ({ vendor_id: v.id, name: v.name, page: `${base}/v1/trust/vendors/${v.id}` }));
       const payTos = new Set([...(i.payTo ? [i.payTo.trim().toLowerCase()] : []), ...matches.flatMap((m) => (m.pay_to ?? []).map((p: any) => String(p.pay_to).toLowerCase()))]);
       const cr = [...payTos].map((p) => rel.get(p)).filter(Boolean);
-      return { query: i, observed: matches.length > 0 || curated.length > 0, entries: matches, ...(curated.length ? { curated } : {}), ...(cr.length ? { commercial_relationship: cr } : {}) };
+      const missed = dropped.filter((d) => {
+        if (i.url) return new Set(urlVariants(i.url)).has(d.resource);
+        if (i.payTo) {
+          const p = i.payTo.trim().toLowerCase();
+          const row = rows.find((r) => r.resource === d.resource);
+          return !!(row && (row.pay_tos ?? "").split(",").some((x) => x.toLowerCase() === p));
+        }
+        return false;
+      });
+      return { query: i, observed: matches.length > 0 || curated.length > 0, entries: matches, ...(missed.length ? { excluded_unverified: missed } : {}), ...(curated.length ? { curated } : {}), ...(cr.length ? { commercial_relationship: cr } : {}) };
     });
     return out;
   }
@@ -244,14 +268,23 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
     const cursor = Math.max(0, Number(url.searchParams.get("cursor") ?? 0) || 0);
     const deny = await meter(k, 1, base);
     if (deny) return deny;
-    const rows = await deps.catalogStore.range(cursor, 200);
     const t = now();
+    const rows = await deps.catalogStore.rangeSellerConfirmed(cursor, 200, t);
     const buys = rows.length ? await deps.catalogStore.buysFor(rows.map((r) => r.resource).slice(0, 90)) : [];
-    const max = await deps.catalogStore.maxId();
-    const next = cursor + 200 <= max ? cursor + 200 : null;
+    const coverage = await deps.catalogStore.sellerConfirmationStats(t);
+    const activityOf = new Map<string, unknown | null>();
+    if (deps.activityFor && rows.length) {
+      const hosts = [...new Set(rows.map((r) => r.domain).filter(Boolean))];
+      await Promise.all(hosts.map(async (h) => {
+        const payTos = rows.filter((r) => r.domain === h).flatMap((r) => (r.pay_tos ?? "").split(",").filter(Boolean));
+        activityOf.set(h, await deps.activityFor!(h, payTos).catch(() => null));
+      }));
+    }
+    const next = rows.length === 200 ? rows[rows.length - 1].id : null;
     return json(200, {
       kind: "lumi_feed_snapshot", cursor, next_cursor: next, generated_at: iso(t),
-      entries: rows.map((r) => catalogView(r, buys.filter((b) => b.resource === r.resource), undefined, t)),
+      coverage: { total: coverage.total, verified: coverage.verified, dropped: coverage.dropped, drop_reasons: coverage.reasons, included_in_feed: "seller-confirmed rows only (valid unpaid 402 or /.well-known/x402 within 48 h)" },
+      entries: rows.map((r) => feedEntryView(r, buys.filter((b) => b.resource === r.resource), undefined, t, { activity: (activityOf.get(r.domain) as any) ?? null })),
       license: { terms: `${base}/v1/feed/license`, summary: "Licensed to this key as the current plan states (Feed Pro snapshots are for internal use during the term; a platform licence is required to display Licensed Fields inside a named product). No resale of the raw snapshot. Marked vet402 and x402-list fields stay under CC BY 4.0 and are not subject to the no-resale rule. Attribution required where shown.", attribution: { lumi: ATTRIBUTION, vet402: `${VET402.source}, ${VET402.license}`, x402_list: X402LIST_ATTRIBUTION } },
     }, NO_STORE);
   }

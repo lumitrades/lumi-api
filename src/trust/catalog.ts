@@ -93,8 +93,133 @@ export const LABEL_NOTES = {
   "quote-checked, low confidence":
     "A free, unpaid request returned a readable x402 402 quote in the last 48 h. This shows the endpoint is up and asks for payment as listed; it says nothing about what a paid call returns.",
   "test-bought": "Lumi paid for one call from its own wallet; the payment is confirmed on-chain and the outcome (data returned or not) is recorded.",
-  "catalogued, not yet checked": "Listed in the CDP x402 Bazaar; no quote check yet.",
+  "catalogued, not yet checked": "Discovered as a public endpoint; Lumi has not yet confirmed it against the seller's own live 402 or /.well-known/x402.",
 };
+
+
+/** A seller row is confirmed when Lumi has a valid unpaid 402 quote (or a matching /.well-known/x402) in this window. Same window as the quote-verified label. */
+export const SELLER_CONFIRM_MS = 2 * DAY;
+export type SellerConfirmHow = "unpaid_402_probe" | "well_known_x402";
+export type DropReason = "not_quote_checked" | "invalid_or_unreadable_402" | "stale_confirmation";
+export type WellKnownConfirmation = { listed: true; at: number; url: string };
+export type ConfirmationStats = {
+  total: number;
+  verified: number;
+  dropped: number;
+  reasons: Record<DropReason, number>;
+};
+
+export function sellerWellKnownUrl(resource: string): string | null {
+  try {
+    const u = new URL(resource);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return `${u.protocol}//${u.host}/.well-known/x402`;
+  } catch { return null; }
+}
+
+const RESOURCE_KEYS = new Set(["url", "resource", "endpoint", "href", "path"]);
+function urlsInWellKnown(node: unknown, out: string[]) {
+  if (node == null) return;
+  if (typeof node === "string") {
+    if (/^https?:\/\//i.test(node)) out.push(node);
+    return;
+  }
+  if (Array.isArray(node)) { for (const x of node) urlsInWellKnown(x, out); return; }
+  if (typeof node === "object") {
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (RESOURCE_KEYS.has(k.toLowerCase()) && typeof v === "string") out.push(v);
+      else urlsInWellKnown(v, out);
+    }
+  }
+}
+const normRes = (u: string) => u.trim().replace(/\/+$/, "").toLowerCase();
+
+/** Whether a seller's /.well-known/x402 document lists this resource URL. */
+export function wellKnownListsResource(doc: unknown, resource: string): boolean {
+  if (doc == null) return false;
+  const want = normRes(resource);
+  const found: string[] = [];
+  urlsInWellKnown(doc, found);
+  if (found.some((u) => /^https?:\/\//i.test(u) && normRes(u) === want)) return true;
+  // Path-only entries ("/v1/q") are resolved against the resource's own origin.
+  try {
+    const origin = new URL(resource).origin.toLowerCase();
+    return found.some((u) => {
+      if (/^https?:\/\//i.test(u)) return false;
+      try { return normRes(new URL(u, resource).href) === want && new URL(u, resource).origin.toLowerCase() === origin; }
+      catch { return false; }
+    });
+  } catch { return false; }
+}
+
+export function classifySellerConfirmation(
+  row: Pick<CatalogRow, "probe_ts" | "probe_valid" | "resource">,
+  now: number,
+  wellKnown?: WellKnownConfirmation | null,
+): { confirmed: boolean; how?: SellerConfirmHow; at?: number; source_url?: string; drop_reason?: DropReason } {
+  const probeOk = row.probe_valid === 1 && row.probe_ts != null && row.probe_ts > now - SELLER_CONFIRM_MS;
+  const wkOk = !!(wellKnown?.listed && wellKnown.at > now - SELLER_CONFIRM_MS);
+  if (probeOk && row.probe_ts != null) {
+    return { confirmed: true, how: "unpaid_402_probe", at: row.probe_ts, source_url: row.resource };
+  }
+  if (wkOk && wellKnown) {
+    return { confirmed: true, how: "well_known_x402", at: wellKnown.at, source_url: wellKnown.url };
+  }
+  if (row.probe_ts == null && !wellKnown?.listed) return { confirmed: false, drop_reason: "not_quote_checked" };
+  if (row.probe_valid === 1 && row.probe_ts != null) return { confirmed: false, drop_reason: "stale_confirmation", at: row.probe_ts, source_url: row.resource };
+  if (row.probe_ts != null) return { confirmed: false, drop_reason: "invalid_or_unreadable_402", at: row.probe_ts, source_url: row.resource };
+  return { confirmed: false, drop_reason: "stale_confirmation", at: wellKnown?.at, source_url: wellKnown?.url };
+}
+
+export function sellerConfirmed(row: Pick<CatalogRow, "probe_ts" | "probe_valid" | "resource">, now: number, wellKnown?: WellKnownConfirmation | null) {
+  return classifySellerConfirmation(row, now, wellKnown).confirmed;
+}
+
+export function confirmationStatsFromRows(rows: Pick<CatalogRow, "probe_ts" | "probe_valid" | "resource">[], now: number, wellKnownByResource?: Map<string, WellKnownConfirmation>): ConfirmationStats {
+  const reasons: Record<DropReason, number> = { not_quote_checked: 0, invalid_or_unreadable_402: 0, stale_confirmation: 0 };
+  let verified = 0;
+  for (const r of rows) {
+    const c = classifySellerConfirmation(r, now, wellKnownByResource?.get(r.resource));
+    if (c.confirmed) verified++;
+    else if (c.drop_reason) reasons[c.drop_reason]++;
+  }
+  return { total: rows.length, verified, dropped: rows.length - verified, reasons };
+}
+
+/** Public catalog / feed order: seller-confirmed first, then most recently probed, then higher id. Never Coinbase usage. */
+export function comparePublicCatalog(a: CatalogRow, b: CatalogRow, now = Date.now()) {
+  const ac = sellerConfirmed(a, now) ? 1 : 0;
+  const bc = sellerConfirmed(b, now) ? 1 : 0;
+  return bc - ac || (b.probe_ts ?? 0) - (a.probe_ts ?? 0) || b.id - a.id;
+}
+
+function sellerCite(c: ReturnType<typeof classifySellerConfirmation>, row: CatalogRow) {
+  const attr = row.source === X402LIST_SOURCE
+    ? { credit: X402LIST_ATTRIBUTION, source_licence: "CC BY 4.0" as const, source_licence_url: X402LIST_LICENCE_URL, source_attribution: X402LIST_ATTRIBUTION, no_resale_does_not_apply: true as const, discovery_seed: X402LIST_SOURCE }
+    : row.source && row.source !== CDP_SOURCE
+      ? { discovery_seed: row.source }
+      : row.source === CDP_SOURCE ? { discovery_seed: "cdp_bazaar" as const } : {};
+  if (c.confirmed) {
+    return {
+      seller_confirmed: true as const,
+      source: "seller_endpoint",
+      source_label: "Confirmed against the seller's own live endpoint",
+      source_licence: "lumi_observations",
+      confirmed_how: c.how,
+      confirmed_at: iso(c.at),
+      confirmed_from: c.source_url,
+      ...attr,
+    };
+  }
+  return {
+    seller_confirmed: false as const,
+    source: "unverified",
+    source_label: "Not confirmed against the seller's own live endpoint; excluded from the paid feed",
+    drop_reason: c.drop_reason,
+    ...(c.at ? { last_checked_at: iso(c.at) } : {}),
+    ...attr,
+  };
+}
 
 // ---------------------------------------------------------------- listing parsing
 
@@ -333,6 +458,9 @@ export interface CatalogStore {
   upsert(rows: Listing[], now: number, source?: string): Promise<number>;
   maxId(): Promise<number>;
   range(afterId: number, limit: number): Promise<CatalogRow[]>;
+  /** Paid-feed snapshot pages: seller-confirmed rows with id > afterId, oldest id first. */
+  rangeSellerConfirmed(afterId: number, limit: number, now: number): Promise<CatalogRow[]>;
+  sellerConfirmationStats(now: number): Promise<ConfirmationStats>;
   saveProbes(rows: ProbeResult[]): Promise<number>;
   /** Reachability state per listing (one UPDATE per listing, batched). Returns rows written. */
   saveReach(rows: ({ id: number } & ReachState)[]): Promise<number>;
@@ -340,7 +468,7 @@ export interface CatalogStore {
   byResource(resource: string): Promise<CatalogRow | null>;
   /** Batched exact-resource lookup (licence feed). */
   byResources(resources: string[]): Promise<CatalogRow[]>;
-  /** Listings paying any of these payTos (lowercase), most used first (licence feed / audits). */
+  /** Listings paying any of these payTos (lowercase). Public order is seller-confirmed first, then recent probe, then id. */
   byPayTos(payTosLc: string[], limit: number): Promise<CatalogRow[]>;
   buysFor(resources: string[]): Promise<BuyRow[]>;
   /** Badge read path (read-only, catalog_buys_domain index): the newest `limit` test-buys on this exact host. */
@@ -350,7 +478,7 @@ export interface CatalogStore {
   markInconclusive(tx: string, reason: string, summary: string, at: number): Promise<BuyRow | null>;
   boughtResources(): Promise<string[]>;
   popular(maxUsd: number, limit: number, network: string): Promise<CatalogRow[]>;
-  /** Most-used listings first (Bazaar 30-day calls), for the free teaser browse. */
+  /** Free teaser browse: recently seller-confirmed first, then recent probe, then id. Never ordered by Coinbase usage. */
   top(offset: number, limit: number): Promise<CatalogRow[]>;
   saveDomain(row: DomainRow): Promise<void>;
   domainInfo(domains: string[]): Promise<DomainRow[]>;
@@ -383,6 +511,8 @@ export function excludingStore(s: CatalogStore): CatalogStore {
     upsert: (ls, now, source) => s.upsert(keep(ls), now, source),
     maxId: () => s.maxId(),
     range: async (a, l) => keep(await s.range(a, l)),
+    rangeSellerConfirmed: async (a, l, now) => keep(await s.rangeSellerConfirmed(a, l, now)),
+    sellerConfirmationStats: (now) => s.sellerConfirmationStats(now),
     saveProbes: (ps) => s.saveProbes(ps),
     saveReach: (rs) => s.saveReach(rs),
     lookup: async (q, l) => { const r = await s.lookup(q, l); const rows = keep(r.rows); return { total: Math.max(0, r.total - (r.rows.length - rows.length)), rows }; },
@@ -430,6 +560,10 @@ export class MemoryCatalogStore implements CatalogStore {
   }
   async maxId() { return this.rows.length ? Math.max(...this.rows.map((r) => r.id)) : 0; }
   async range(after: number, limit: number) { return this.rows.filter((r) => r.id > after && r.id <= after + limit); }
+  async rangeSellerConfirmed(after: number, limit: number, now: number) {
+    return this.rows.filter((r) => r.id > after && sellerConfirmed(r, now)).sort((a, b) => a.id - b.id).slice(0, limit);
+  }
+  async sellerConfirmationStats(now: number) { return confirmationStatsFromRows(this.rows, now); }
   async saveProbes(ps: ProbeResult[]) {
     let n = 0;
     for (const p of ps) {
@@ -464,13 +598,13 @@ export class MemoryCatalogStore implements CatalogStore {
       (urls.length && urls.includes(r.resource)) || (d && r.reg_domain === reg && (r.reg_domain === d || r.domain === d)) || (pt && (r.pay_tos ?? "").split(",").includes(pt)));
   }
   async lookup(q: LookupQuery, limit: number) {
-    const m = this.match(q).sort((a, b) => (b.calls_30d ?? 0) - (a.calls_30d ?? 0));
+    const m = this.match(q).sort(comparePublicCatalog);
     return { total: m.length, rows: m.slice(0, limit) };
   }
   async byResource(resource: string) { return this.rows.find((r) => r.resource === resource) ?? null; }
   async byResources(rs: string[]) { return this.rows.filter((r) => rs.includes(r.resource)); }
   async byPayTos(ps: string[], limit: number) {
-    return this.rows.filter((r) => (r.pay_tos ?? "").split(",").some((p) => ps.includes(p.toLowerCase()))).sort((a, b) => (b.calls_30d ?? 0) - (a.calls_30d ?? 0)).slice(0, limit);
+    return this.rows.filter((r) => (r.pay_tos ?? "").split(",").some((p) => ps.includes(p.toLowerCase()))).sort(comparePublicCatalog).slice(0, limit);
   }
   async buysFor(resources: string[]) { return this.buys.filter((b) => resources.includes(b.resource)).sort((a, b) => b.ts - a.ts); }
   async buysByDomain(domain: string, limit: number) { return this.buys.filter((b) => b.domain === domain).sort((a, b) => b.ts - a.ts).slice(0, limit).map((b) => ({ ...b })); }
@@ -488,12 +622,12 @@ export class MemoryCatalogStore implements CatalogStore {
   }
   async boughtResources() { return [...new Set(this.buys.map((b) => b.resource))]; }
   async top(offset: number, limit: number) {
-    return [...this.rows].sort((a, b) => (b.calls_30d ?? 0) - (a.calls_30d ?? 0) || a.id - b.id).slice(offset, offset + limit);
+    return [...this.rows].sort(comparePublicCatalog).slice(offset, offset + limit);
   }
   async popular(maxUsd: number, limit: number, network: string) {
     return this.rows
       .filter((r) => r.price_usd != null && Number(r.price_usd) > 0 && Number(r.price_usd) <= maxUsd && (r.networks ?? "").split(",").includes(network) && r.method !== "MCP")
-      .sort((a, b) => (b.calls_30d ?? 0) - (a.calls_30d ?? 0))
+      .sort(comparePublicCatalog)
       .slice(0, limit);
   }
   async saveDomain(row: DomainRow) { const p = this.domains.get(row.domain); this.domains.set(row.domain, { ...row, registered_at: row.registered_at ?? p?.registered_at ?? null }); } // a failed lookup never erases a known date
@@ -585,6 +719,31 @@ export class D1CatalogStore implements CatalogStore {
   async range(after: number, limit: number) {
     return (await this.db.prepare(`SELECT ${CAT_COLS} FROM catalog WHERE id > ?1 AND id <= ?2`).bind(after, after + limit).all<CatalogRow>()).results;
   }
+  async rangeSellerConfirmed(after: number, limit: number, now: number) {
+    const since = now - SELLER_CONFIRM_MS;
+    return (await this.db.prepare(
+      `SELECT ${CAT_COLS} FROM catalog WHERE id > ?1 AND probe_valid = 1 AND probe_ts > ?2 ORDER BY id ASC LIMIT ?3`,
+    ).bind(after, since, Math.max(1, Math.min(500, limit))).all<CatalogRow>()).results;
+  }
+  async sellerConfirmationStats(now: number) {
+    const since = now - SELLER_CONFIRM_MS;
+    const r = await this.db.prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN probe_valid = 1 AND probe_ts > ?1 THEN 1 ELSE 0 END) AS verified,
+              SUM(CASE WHEN probe_ts IS NULL THEN 1 ELSE 0 END) AS not_quote_checked,
+              SUM(CASE WHEN probe_ts IS NOT NULL AND IFNULL(probe_valid, 0) != 1 THEN 1 ELSE 0 END) AS invalid_or_unreadable_402,
+              SUM(CASE WHEN probe_valid = 1 AND probe_ts <= ?1 THEN 1 ELSE 0 END) AS stale_confirmation
+         FROM catalog`,
+    ).bind(since).first<{ total: number; verified: number | null; not_quote_checked: number | null; invalid_or_unreadable_402: number | null; stale_confirmation: number | null }>();
+    const reasons = {
+      not_quote_checked: Number(r?.not_quote_checked ?? 0),
+      invalid_or_unreadable_402: Number(r?.invalid_or_unreadable_402 ?? 0),
+      stale_confirmation: Number(r?.stale_confirmation ?? 0),
+    };
+    const total = Number(r?.total ?? 0);
+    const verified = Number(r?.verified ?? 0);
+    return { total, verified, dropped: total - verified, reasons };
+  }
   async saveProbes(ps: ProbeResult[]) {
     if (!ps.length) return 0;
     const res = await this.db.batch(
@@ -623,7 +782,7 @@ export class D1CatalogStore implements CatalogStore {
     if (!where.length) return { total: 0, rows: [] };
     const w = where.join(" OR ");
     const total = (await this.db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM catalog WHERE ${w} LIMIT 10001)`).bind(...args).first<{ n: number }>())?.n ?? 0;
-    const rows = (await this.db.prepare(`SELECT ${CAT_COLS} FROM catalog WHERE ${w} ORDER BY calls_30d DESC NULLS LAST, id LIMIT ${Math.max(1, Math.min(100, limit))}`).bind(...args).all<CatalogRow>()).results;
+    const rows = (await this.db.prepare(`SELECT ${CAT_COLS} FROM catalog WHERE ${w} ORDER BY (probe_valid = 1 AND probe_ts > (CAST(strftime('%s','now') AS INTEGER) * 1000 - 172800000)) DESC, probe_ts DESC NULLS LAST, id DESC LIMIT ${Math.max(1, Math.min(100, limit))}`).bind(...args).all<CatalogRow>()).results;
     return { total, rows };
   }
   async byResource(resource: string) {
@@ -638,7 +797,7 @@ export class D1CatalogStore implements CatalogStore {
     const l = [...new Set(ps)].slice(0, 50);
     if (!l.length) return [];
     return (await this.db
-      .prepare(`SELECT ${CAT_COLS} FROM catalog WHERE resource IN (SELECT resource FROM catalog_payto WHERE pay_to_lc IN (${l.map((_, i) => `?${i + 1}`).join(",")})) ORDER BY calls_30d DESC NULLS LAST, id LIMIT ${Math.max(1, Math.min(200, limit))}`)
+      .prepare(`SELECT ${CAT_COLS} FROM catalog WHERE resource IN (SELECT resource FROM catalog_payto WHERE pay_to_lc IN (${l.map((_, i) => `?${i + 1}`).join(",")})) ORDER BY (probe_valid = 1 AND probe_ts > (CAST(strftime('%s','now') AS INTEGER) * 1000 - 172800000)) DESC, probe_ts DESC NULLS LAST, id DESC LIMIT ${Math.max(1, Math.min(200, limit))}`)
       .bind(...l).all<CatalogRow>()).results;
   }
   async buysFor(resources: string[]) {
@@ -675,7 +834,7 @@ export class D1CatalogStore implements CatalogStore {
   }
   async top(offset: number, limit: number) {
     return (
-      await this.db.prepare(`SELECT ${CAT_COLS} FROM catalog ORDER BY calls_30d DESC NULLS LAST, id ASC LIMIT ?1 OFFSET ?2`).bind(limit, offset).all<CatalogRow>()
+      await this.db.prepare(`SELECT ${CAT_COLS} FROM catalog ORDER BY (probe_valid = 1 AND probe_ts > (CAST(strftime('%s','now') AS INTEGER) * 1000 - 172800000)) DESC, probe_ts DESC NULLS LAST, id DESC LIMIT ?1 OFFSET ?2`).bind(limit, offset).all<CatalogRow>()
     ).results;
   }
   async popular(maxUsd: number, limit: number, network: string) {
@@ -683,7 +842,7 @@ export class D1CatalogStore implements CatalogStore {
       await this.db
         .prepare(
           `SELECT ${CAT_COLS} FROM catalog WHERE price_usd IS NOT NULL AND CAST(price_usd AS REAL) > 0 AND CAST(price_usd AS REAL) <= ?1
-             AND (',' || networks || ',') LIKE ?2 AND method != 'MCP' ORDER BY calls_30d DESC NULLS LAST LIMIT ?3`,
+             AND (',' || networks || ',') LIKE ?2 AND method != 'MCP' ORDER BY (probe_valid = 1 AND probe_ts > (CAST(strftime('%s','now') AS INTEGER) * 1000 - 172800000)) DESC, probe_ts DESC NULLS LAST, id DESC LIMIT ?3`,
         )
         .bind(maxUsd, `%,${network},%`, limit)
         .all<CatalogRow>()
@@ -860,16 +1019,20 @@ export function catalogView(row: CatalogRow, buys: BuyRow[], dom: DomainRow | un
   const lat = (row.probe_lat_hist ?? "").split(",").filter(Boolean).map(Number);
   let accepts: any[] = [];
   try { accepts = JSON.parse(row.accepts ?? "[]"); } catch { /* ignore */ }
+  const confirm = classifySellerConfirmation(row, now);
+  const advertisedPayTo = row.probe_pay_to_match === 0
+    ? []
+    : [...new Map(accepts.filter((a) => a.p).map((a) => [`${a.n}|${String(a.p).toLowerCase()}`, { network: a.n, pay_to: a.p }])).values()];
   return {
     resource: row.resource,
     domain: row.domain,
-    ...(SEED_ONLY_SOURCES.has(row.source) ? {} : { service_name: row.service_name, description: row.description }),
     method: row.method,
     listed_price_usd: row.price_usd,
+    advertised_price_usd: row.probe_valid === 1 ? row.probe_price_usd : null,
     networks: (row.networks ?? "").split(",").filter(Boolean),
-    // One entry per (network, address): Bazaar listings repeat payTo once per accepted asset/scheme.
-    pay_to: [...new Map(accepts.filter((a) => a.p).map((a) => [`${a.n}|${String(a.p).toLowerCase()}`, { network: a.n, pay_to: a.p }])).values()],
-    ...sourceMeta(row.source),
+    // One entry per (network, address). Omitted when the last valid quote paid a different address than the listing.
+    pay_to: advertisedPayTo,
+    ...sellerCite(confirm, row),
     tier: tierOf(row, buys, now),
     quote_checks: row.probe_ts == null
       ? null
@@ -915,15 +1078,19 @@ export function catalogFreeView(row: CatalogRow, buys: BuyRow[], now: number) {
   let accepts: any[] = [];
   try { accepts = JSON.parse(row.accepts ?? "[]"); } catch { /* ignore */ }
   const last = buys[0];
+  const confirm = classifySellerConfirmation(row, now);
+  const advertisedPayTo = row.probe_pay_to_match === 0
+    ? []
+    : [...new Map(accepts.filter((a) => a.p).map((a) => [`${a.n}|${String(a.p).toLowerCase()}`, { network: a.n, pay_to: a.p }])).values()];
   return {
     resource: row.resource,
     domain: row.domain,
-    ...(SEED_ONLY_SOURCES.has(row.source) ? {} : { service_name: row.service_name }),
     method: row.method,
     listed_price_usd: row.price_usd,
+    advertised_price_usd: row.probe_valid === 1 ? row.probe_price_usd : null,
     networks: (row.networks ?? "").split(",").filter(Boolean),
-    pay_to: [...new Map(accepts.filter((a) => a.p).map((a) => [`${a.n}|${String(a.p).toLowerCase()}`, { network: a.n, pay_to: a.p }])).values()],
-    ...sourceMeta(row.source),
+    pay_to: advertisedPayTo,
+    ...sellerCite(confirm, row),
     tier: tierOf(row, buys, now),
     last_quote_check: row.probe_ts == null
       ? null
@@ -940,3 +1107,32 @@ export function catalogFreeView(row: CatalogRow, buys: BuyRow[], now: number) {
     listed_until: row.last_seen < now - DELISTED_AFTER_MS ? iso(row.last_seen) : null,
   };
 }
+
+/**
+ * Paid-feed row: seller-confirmed facts only (URL, domain, price/network as advertised by the seller's
+ * own unpaid 402 or /.well-known/x402), plus Lumi's quote-checks, test-buys, receipts, reachability and
+ * banded activityPublic. Returns null when the row is not confirmed (caller must exclude it).
+ */
+export function feedEntryView(
+  row: CatalogRow,
+  buys: BuyRow[],
+  dom: DomainRow | undefined,
+  now: number,
+  opts?: { activity?: unknown | null; wellKnown?: WellKnownConfirmation | null },
+): Record<string, unknown> | null {
+  const confirm = classifySellerConfirmation(row, now, opts?.wellKnown);
+  if (!confirm.confirmed) return null;
+  const full = catalogView(row, buys, dom, now) as Record<string, unknown>;
+  // Paid feed is plain facts from the seller plus Lumi observations. Never republish directory blurbs
+  // or the directory listing price as if the seller advertised it to Lumi.
+  const {
+    service_name: _n, description: _d, listed_price_usd: _lp, bazaar_quality: _bq, bazaar_calls_30d: _bc,
+    payto_census: _c, ...rest
+  } = full as any;
+  return {
+    ...rest,
+    advertised_price_usd: row.probe_price_usd ?? rest.advertised_price_usd ?? null,
+    ...(opts && "activity" in (opts) ? { observed_onchain_payments: opts.activity ?? null } : {}),
+  };
+}
+

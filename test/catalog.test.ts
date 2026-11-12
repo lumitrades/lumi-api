@@ -297,12 +297,12 @@ describe("free catalog teaser (v1.0.1)", () => {
   }
   const getIp = (app: any, path: string, ip: string) => app.fetch(new Request(BASE + path, { headers: { "CF-Connecting-IP": ip } })).then(async (r: Response) => ({ status: r.status, body: await r.json() as any }));
 
-  it("serves only the top 100 most-used, 25 per page, answer-only, with fresh counts", async () => {
+  it("serves only the top 100 recently seller-confirmed, 25 per page, answer-only, with fresh counts", async () => {
     const { app } = mkApp(bigStore(150));
     const p1 = await getIp(app, "/v1/trust/catalog?limit=500", "203.0.113.1");
     expect(p1.status).toBe(200);
     expect(p1.body.entries).toHaveLength(25);
-    expect(p1.body.entries[0].resource).toBe("https://api.seller149.com/v1/x"); // most-used first
+    expect(p1.body.entries[0].resource).toBe("https://api.seller149.com/v1/x"); // newest id first when probe recency ties
     expect(p1.body.entries[0].test_buys).toMatchObject({ count: 1, last_data_returned: true });
     expect(JSON.stringify(p1.body)).not.toMatch(/b{64}|basescan|"tx_hash"|"explorer"|"purchases"|median_latency/);
     expect(p1.body.next).toContain("page=2");
