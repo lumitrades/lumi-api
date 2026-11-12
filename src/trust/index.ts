@@ -21,6 +21,7 @@ import { isLumiTestBuyWallet, normaliseWallets } from "./wallets";
 import { dataReturnedView, deliveryCounts, deliveryState, deliveryText, guardBuy, inconclusiveReason, INCONCLUSIVE_REASONS, isInconclusiveReason } from "./delivery";
 import { isStorageQuotaError, storageUnavailableBody } from "./storage_errors";
 import type { LookupQuery } from "./catalog";
+import { withPublicActivity, type ActivityPublic } from "./activity";
 import type { ObservationRow, ProbeRow, ProbeSummary, ReportRow, TrustStore, UnsettledAttemptRow } from "./store";
 import {
   lookupXrplPayment, lookupBaseUsdc, lookupStellarUsdc, STELLAR_HORIZON, verifyXrplSignature, xrplAddressOf, xrplRegularKey, recoverEvmSigner, sha256Hex,
@@ -74,10 +75,19 @@ export interface TrustDeps {
   stellarHorizon?: string;
   /** Adds disclosure fields (seller monitoring = commercial relationship) to lookup docs. Never changes scores. */
   annotate?: (doc: Record<string, unknown>, payTos: string[]) => Promise<Record<string, unknown>>;
+  /** Banded public activity view for a host / listed payTos (never exact counts, payer wallets, or dollar totals). */
+  activityFor?: (host: string | null, payTos: string[]) => Promise<ActivityPublic | null>;
   /** A free lookup was served (after rate limits): the same test-buy priority signal as a paid trust/check. Never changes the answer. */
   onFreeCheck?: (q: LookupQuery, base: string) => Promise<unknown>;
   /** Active safety findings for a lookup, attached to a free-limit 429 (safety is never withheld, only the normal answer is). */
   safetyFor?: (q: LookupQuery, base: string) => Promise<Record<string, unknown>>;
+}
+
+/** Host for an activity lookup: the queried domain, or the hostname of the queried URL. */
+export function lookupHost(q: { domain?: string; url?: string }): string | null {
+  if (q.domain) return q.domain.trim().toLowerCase() || null;
+  if (q.url) { try { return new URL(q.url).hostname.toLowerCase(); } catch { return null; } }
+  return null;
 }
 
 /** Every payTo-looking string under `pay_to` keys of a lookup doc (catalog entries + curated vendors). */
@@ -392,7 +402,8 @@ export function methodologyDoc(base: string) {
       not_scored: "Catalog entries get labels, not scores; scores apply only to the curated XRPL list below.",
       free_evidence: {
         bazaar_quality: "Coinbase CDP Bazaar publishes per-listing quality fields (30-day call count, 30-day unique payers, last called). Lumi stores them at most every 20 h and shows them as bazaar_quality, attributed to Coinbase Bazaar and dated (as_of).",
-        payto_census: "For payTo lookups and trust/check, Lumi reads the payTo's incoming payments: on XRPL the latest 200 ledger transactions (x402-style = SourceTag 804681468 or an InvoiceID); on Base the USDC Transfer logs into Bazaar-listed payTos, indexed forward from the index start date (no back history). Lumi's own wallets, known test wallets and the seller's payTos are excluded, payers are grouped by the account that funded them (a funder that funded 20+ indexed payers, e.g. an exchange, is not used for grouping), and payers funded by excluded wallets are dropped. Output: organic payer clusters, payments, last organic date. Free lookups show counts and dates only; tx hashes and samples are in the paid trust/check.",
+        seller_activity: "Public lookups and checks publish only the banded seller-activity view (observed_onchain_payments): ranges for payer groups and payments, recency in weeks, and flags (concentrated, self_funded_loop), and only when Lumi has at least five independent payer groups after excluding Lumi, known test, and seller-funded wallets. Exact payment counts, payer counts, dollar totals, payer wallets, sample payers and incoming-payment transaction hashes are not published. This matches the Privacy Policy (ranges and flags only).",
+        payto_census: "Internally, Lumi still reads a payTo's incoming payments to build those flags and the check reasons: on XRPL the latest 200 ledger transactions (x402-style = SourceTag 804681468 or an InvoiceID); on Base the USDC Transfer logs into Bazaar-listed payTos, indexed forward from the index start date (no back history). Lumi's own wallets, known test wallets and the seller's payTos are excluded, payers are grouped by the account that funded them (a funder that funded 20+ indexed payers, e.g. an exchange, is not used for grouping), and payers funded by excluded wallets are dropped. That raw census is not returned on public HTTP surfaces.",
         third_party: "vet402 observatory test results (KIZUNA Creation, CC BY 4.0, https://vet402.com/observatory) are imported for catalogued resources and shown separately as third_party.vet402 with a link, licence and retrieval date. They are never added to Lumi's own test-bought counts.",
         demand_driven_buys: "When a trust check (free or high-value) hits a listing with no Lumi purchase in 30 days and a warning, the listing is queued for Lumi's daily test-buy routine (same caps); nothing is bought during the check.",
       },
@@ -1442,11 +1453,13 @@ export function createTrust(deps: TrustDeps): Trust {
           const lim = await lookupLimit(request);
           if (lim) return deps.safetyFor ? withSafety(lim, await deps.safetyFor(q, base)) : lim;
           const doc = await lookup(q, base, { free: true });
+          const activity = deps.activityFor ? await deps.activityFor(lookupHost(q), payTosIn(doc, q)).catch(() => null) : null;
+          const publicDoc = withPublicActivity(doc, activity);
           if (deps.onFreeCheck) {
             const p = deps.onFreeCheck(q, base).catch((e) => deps.log({ event: "buy_queue_error", source: "free_lookup", error: String(e) }));
             if (ctx) ctx.waitUntil(p); else await p;
           }
-          return json(200, doc, { "Cache-Control": "public, max-age=300" });
+          return json(200, publicDoc, { "Cache-Control": "public, max-age=300" });
         }
         const v = await cachedVendorsDoc(base);
         return json(200, v.doc, { "Cache-Control": "public, max-age=120", "X-Lumi-Cache": v.cache });

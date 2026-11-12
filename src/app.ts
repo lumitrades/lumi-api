@@ -489,6 +489,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     stellarBuyers,
     stellarHorizon,
     annotate: (doc, payTos) => commerce.annotate(doc, payTos),
+    activityFor: async (host, payTos) => activityPublic(await activity.lookup(host, payTos), now(), verdictTh),
     // Free lookups by exact URL feed the same test-buy priority signal as the paid trust/check (payment never changes the order).
     safetyFor: (q, base) => safetyFindings(q.url ? { url: q.url, payTo: q.payTo } : q.domain ? { url: `https://${q.domain}/`, payTo: q.payTo } : { payTo: q.payTo }, base),
     onFreeCheck: (q, base) => (q.url ? checkSignal({ url: q.url, ...(q.payTo ? { payTo: q.payTo } : {}) }, base, "free_lookup") : Promise.resolve(null)),

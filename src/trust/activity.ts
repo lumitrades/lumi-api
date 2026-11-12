@@ -160,6 +160,12 @@ export function activityPublic(r: ActivityRow | null, now: number, th: VerdictTh
   };
 }
 
+/** Public vendor-lookup overlay. Privacy Policy: publish only ranges and flags, never exact census counts, payer wallets, or dollar amounts. */
+export function withPublicActivity(doc: Record<string, unknown>, activity: ActivityPublic | null): Record<string, unknown> {
+  const { payto_census: _omitted, ...rest } = doc;
+  return { ...rest, observed_onchain_payments: activity };
+}
+
 export function activityOwnerView(r: ActivityRow, now: number, th: VerdictThresholds) {
   return { public: activityPublic(r, now, th), payer_groups_30d: r.payers_30d, payments_30d: r.payments_30d, last_payment_at: r.last_payment_at == null ? null : new Date(r.last_payment_at).toISOString(), seller: r.seller, domains: r.domains, pay_to: r.pay_to, total_usd_30d: r.total_usd_30d, top_payer_share: r.top_payer_share, self_funded_share: r.self_funded_share, source: r.source, updated_at: new Date(r.updated_at).toISOString() };
 }

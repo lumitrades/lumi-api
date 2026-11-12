@@ -526,19 +526,20 @@ export function createCatalog(deps: CatalogDeps) {
     return { funders: out.length, of: due.length };
   }
 
-  /** Census view (free: counts only; paid: plus cluster samples with tx hashes). */
-  function censusView(network: string, payTo: string, payers: PayerAgg[], ctx: { seller: string[]; lumi: string[]; testers: string[]; hubs: Set<string> }, meta: Record<string, unknown>, free: boolean) {
+  /**
+   * Census used internally to build check reasons (organic_payers / no_organic_payers).
+   * Exact counts stay on this object for that internal use only. Public HTTP surfaces must not
+   * return it: the free vendor lookup publishes activityPublic ranges/flags instead
+   * (withPublicActivity). Never attach payer wallets, sample payers, incoming tx hashes, or
+   * dollar totals (organic_usd) — those leaked on the paid view and contradict the Privacy Policy.
+   */
+  function censusView(network: string, payTo: string, payers: PayerAgg[], ctx: { seller: string[]; lumi: string[]; testers: string[]; hubs: Set<string> }, meta: Record<string, unknown>, _free: boolean) {
     const c = classifyPayers(payers, { payTo, sellerPayTos: ctx.seller, lumi: ctx.lumi, testers: ctx.testers, hubs: ctx.hubs });
-    const exp = (tx: string | null) => (tx ? explorerFor(network, tx) : null);
     return {
       network, pay_to: payTo, status: "ok", ...meta,
       organic_payers: c.organic_payers, organic_wallets: c.organic_wallets, organic_payments: c.organic_payments, last_organic_at: c.last_organic_at,
       payers_seen: c.payers_seen, excluded_payers: c.excluded, funder_unresolved: c.funder_unresolved,
       method: "organic_payers = distinct funding clusters: payers funded by the same account count once; Lumi's own wallets, known test wallets, proof/test wallets the seller itself declared (seller_declared), the seller's payTos and wallets they funded are excluded. Funders that funded " + HUB_MIN + "+ indexed payers (exchanges, bridges) are not used for clustering.",
-      ...(free ? {} : {
-        ...(network === BASE_NET ? { organic_usd: c.organic_usd } : {}),
-        top_clusters: c.clusters.slice(0, 5).map((k) => ({ wallets: k.payers.length, sample_payer: k.payers[0], funder: k.funder, payments: k.n, last_at: new Date(k.last_ts).toISOString(), last_tx: k.last_tx, explorer: exp(k.last_tx) })),
-      }),
     };
   }
 

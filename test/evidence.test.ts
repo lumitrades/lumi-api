@@ -207,18 +207,48 @@ describe("evidence: lookups and trust/check", () => {
     return { app, ev, req, get, buy };
   }
 
-  it("free XRPL payTo lookup: census counts only; paid trust/check: clusters with tx hashes", async () => {
+  it("free XRPL payTo lookup: banded activity only; no exact census counts or payer samples", async () => {
     const { get, buy } = await setup();
     const free = await get("/v1/trust/vendors?payTo=" + XR);
-    const c = free.body.payto_census[0];
-    expect(c).toMatchObject({ network: "xrpl:0", status: "ok", organic_payers: 1, organic_payments: 3, x402_payments: 5 });
-    expect(c.top_clusters).toBeUndefined();
-    expect(JSON.stringify(free.body)).not.toContain(H(1));
+    expect(free.status).toBe(200);
+    expect(free.body.payto_census).toBeUndefined();
+    expect(free.body.observed_onchain_payments).toBeNull();
+    const blob = JSON.stringify(free.body);
+    expect(blob).not.toContain(H(1));
+    expect(blob).not.toMatch(/"organic_payers"|"organic_payments"|"organic_usd"|"sample_payer"|"excluded_payers"/);
     expect(free.body.catalog.entries[0].bazaar_quality).toMatchObject({ calls_30d: 50, unique_payers_30d: 4 });
     const paid = await buy("/v1/trust/check/high-value?amount=4&url=" + encodeURIComponent("https://api.xseller.com/v1/q"));
     expect(paid.status).toBe(200);
     expect(paid.body.reasons.map((r: any) => r.code)).toEqual(expect.arrayContaining(["bazaar_usage", "organic_payers"]));
+    const org = paid.body.reasons.find((r: any) => r.code === "organic_payers");
+    expect(org.detail).toMatch(/1–9 organic payer cluster/);
+    expect(org.detail).toMatch(/1–9 payment/);
+    expect(org.detail).not.toMatch(/\b3 payment/);
+    expect(JSON.stringify(paid.body)).not.toMatch(/sample_payer|organic_usd/);
+    expect(JSON.stringify(paid.body)).not.toContain(H(1));
     expect(JSON.stringify(paid.body)).not.toMatch(/\bscam\b/i);
+  });
+
+  it("free vendor lookup attaches banded activityPublic when a row is present and still hides census", async () => {
+    const store = new MemoryActivityStore();
+    const ing = await createActivity(store, () => NOW).ingest({ rows: [{ seller: "xseller", domains: ["api.xseller.com"], pay_to: [XR], payer_groups_30d: 40, payments_30d: 900, window_end: NOW - 86_400_000 }] });
+    expect(ing).toMatchObject({ valid: 1 });
+    const { get } = await setup(store);
+    const free = await get("/v1/trust/vendors?payTo=" + XR);
+    expect(free.status).toBe(200);
+    expect(free.body.payto_census).toBeUndefined();
+    expect(free.body.observed_onchain_payments).toMatchObject({
+      shown: true,
+      payer_groups_30d: "10–99",
+      payments_30d: "100–999",
+    });
+    expect(typeof free.body.observed_onchain_payments.payer_groups_30d).toBe("string");
+    const blob = JSON.stringify(free.body);
+    expect(blob).not.toMatch(/"organic_payers"|"organic_payments"|"organic_usd"|"sample_payer"|"excluded_payers"|total_usd_30d/);
+    const meth = await get("/v1/trust/methodology");
+    expect(meth.body.x402_catalog.free_evidence.seller_activity).toMatch(/ranges and flags/i);
+    expect(meth.body.x402_catalog.free_evidence.payto_census).toMatch(/not returned on public HTTP/);
+    expect(JSON.stringify(meth.body)).not.toMatch(/Free lookups show counts and dates only/);
   });
 
   it("organic_payers is qualified (not counted as independent demand) when the seller is flagged self_funded_loop", async () => {

@@ -9,6 +9,7 @@ import { band } from "./feeds";
 import { VENDORS, vendorById, vendorPayTos } from "./vendors";
 import { sanctionedReason, type SanctionsScreen } from "./sanctions";
 import { failureStreak, FAILED_RULE, EVIDENCE_AGE } from "./trust/verdict";
+import { activityBand, weeksAgo } from "./trust/activity";
 
 type Json = any;
 const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : null);
@@ -212,10 +213,12 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
   for (const c of (exact?.payto_census ?? []) as Json[]) {
     if (c.status !== "ok") { if (c.status === "queued") add("payto_census_queued", "info", `A ledger read of payTo ${c.pay_to} is queued; check again in a few minutes.`); continue; }
     const chain = c.network === "xrpl:0" ? "XRPL" : "Base";
-    const win = c.window?.from ? ` between ${day(c.window.from)} and ${day(c.window.to)}` : "";
-    if (c.organic_payers > 0) add("organic_payers", "info", `${chain} payTo ${c.pay_to}: ${c.organic_payers} organic payer cluster(s), ${c.organic_payments} payment(s)${win}, last ${day(c.last_organic_at)} (Lumi, known test wallets and self-funded payers excluded).`);
-    else if (c.payers_seen > 0) add("no_organic_payers", "warn", `${chain} payTo ${c.pay_to}: ${c.payers_seen} payer(s) seen${win}, but all were Lumi, known test wallets, or funded by the seller.`);
-    else add("no_organic_payers", "info", `${chain} payTo ${c.pay_to}: no incoming x402-style payments seen${win}.`);
+    const lastMs = typeof c.last_organic_at === "number" ? c.last_organic_at : Date.parse(String(c.last_organic_at ?? ""));
+    const last = Number.isFinite(lastMs) ? weeksAgo(lastMs, now) : null;
+    const recency = last ? `, last payment ${last}` : "";
+    if (c.organic_payers > 0) add("organic_payers", "info", `${chain} payTo ${c.pay_to}: ${activityBand(c.organic_payers)} organic payer cluster(s), ${activityBand(c.organic_payments)} payment(s)${recency} (Lumi, known test wallets and self-funded payers excluded).`);
+    else if (c.payers_seen > 0) add("no_organic_payers", "warn", `${chain} payTo ${c.pay_to}: payers were seen, but all were Lumi, known test wallets, or funded by the seller.`);
+    else add("no_organic_payers", "info", `${chain} payTo ${c.pay_to}: no incoming x402-style payments seen.`);
   }
   const v = e?.third_party?.vet402;
   if (v) {
