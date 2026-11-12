@@ -639,7 +639,7 @@ export function createCatalog(deps: CatalogDeps) {
     const idx = await metaJson<{ started_at: number; last_run: number; skipped_blocks: number; gaps: unknown[] }>("base_index");
     const v = await metaJson<{ at: number; retrieved_at: string; matched: number }>("vet402_import");
     return {
-      bazaar_quality: "Coinbase CDP Bazaar quality fields (30-day calls, unique payers, last called) are stored per listing at most every 20 h and shown, attributed and dated, in lookups and trust/check.",
+      bazaar_quality: "Coinbase CDP Bazaar quality fields may be stored internally but are not published on lookups, the catalog, the feed, or trust/check.",
       base_forward_index: idx ? { since: iso(idx.started_at), last_run: iso(idx.last_run), skipped_blocks: idx.skipped_blocks, gaps: idx.gaps?.length ?? 0 } : "not started",
       xrpl_census: "XRPL ledger reads of catalog and curated payTos (latest 200 transactions), refreshed daily; on demand for looked-up r-addresses.",
       third_party: v ? { source: VET402.source, license: VET402.license, link: VET402.link, retrieved_at: v.retrieved_at, resources_matched: v.matched } : null,
@@ -831,7 +831,7 @@ export function createCatalog(deps: CatalogDeps) {
     const x = await xrplAgg();
     const ing = await store.getMeta("ingest_last");
     return {
-      source: "CDP x402 Bazaar discovery (free); x402scan's resource API is paid, so it is not ingested",
+      source: "Discovery seeds (CDP x402 Bazaar and free directories) plus Lumi quote-checks and test-buys; Coinbase quality fields are not published. x402scan's resource API is paid, so it is not ingested",
       lookup: `${base}/v1/trust/vendors?url=<resource url> | ?domain=<host> | ?payTo=<address>`,
       browse: `${base}/v1/trust/catalog (free teaser: the ${FREE_BROWSE_MAX} most-used listings, ${FREE_BROWSE_PAGE} per page)`,
       labels: LABEL_NOTES,

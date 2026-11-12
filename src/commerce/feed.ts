@@ -5,7 +5,7 @@
  * Feed and Feed Pro include full evidence and signed receipts.
  */
 import { json, requirePayment, assetLabel, paymentRequiredResponse, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, type Settlement, type PaymentRequirements } from "../x402";
-import { catalogFreeView, catalogView, urlVariants, type CatalogRow } from "../trust/catalog";
+import { catalogFreeView, catalogView, urlVariants, X402LIST_ATTRIBUTION, X402LIST_LICENCE_URL, type CatalogRow } from "../trust/catalog";
 import { vet402View, VET402 } from "../trust/evidence";
 import { VENDORS } from "../vendors";
 import { XRPL_ADDR_RE, EVM_ADDR_RE } from "../trust/verify";
@@ -38,6 +38,7 @@ export function quotaFor(k: FeedKey, used: number, n: number, now: number): { ok
 function licenseHtml(base: string): string {
   const li = FEED_LICENSE.terms.map((t) => `<li>${t.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</li>`).join("");
   const plans = ["feed_credits", "feed", "feed_pro"].map((id) => { const p = PLANS[id as PlanId]; return `<tr><td>${p.name}</td><td>$${p.usd}${p.days ? ` / ${p.days} days` : ""}</td><td>${p.summary}</td></tr>`; }).join("");
+  const platform = `<tr><td>${PLATFORM_LICENCE.name}</td><td>from $${PLATFORM_LICENCE.from_usd} / ${PLATFORM_LICENCE.term_days} days</td><td>${PLATFORM_LICENCE.summary} Contact ${PLATFORM_LICENCE.contact} (not sold over x402).</td></tr>`;
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${FEED_LICENSE.title} · Lumi</title><link rel="icon" href="https://lumitrades.io/assets/favicon-32.png">
 <style>:root{color-scheme:dark}body{margin:0;background:#070a12;color:#e5e7eb;font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
@@ -49,11 +50,12 @@ li{margin:8px 0}a{color:#93c5fd}table{width:100%;border-collapse:collapse}td{pad
 .pill{display:inline-block;padding:3px 10px;border-radius:999px;background:linear-gradient(90deg,#3b82f6,#8b5cf6);color:#fff;font-size:12px;font-weight:600}
 footer{margin-top:30px;font-size:14px}</style></head><body><div class="wrap">
 <header><a href="https://lumitrades.io"><img src="https://lumitrades.io/assets/apple-touch-icon.png" alt="Lumi"></a><div><div class="brand">Lumi</div><div class="muted">x402 trust data</div></div></header>
-<span class="pill">Licence terms</span><h1>${FEED_LICENSE.title}</h1><p class="muted">Version ${FEED_LICENSE.version}</p>
+<span class="pill">Licence terms</span><h1>${FEED_LICENSE.title}</h1><p class="muted">Version ${FEED_LICENSE.version} (replaces v${FEED_LICENSE.replaces})</p><p class="muted">${FEED_LICENSE.effective_note}</p>
 <div class="card"><ol>${li}</ol></div>
 <div class="card"><b>Plans</b> (x402 on XRPL XRP/RLUSD/USDC or Base USDC; no auto-renew)<table>
-<tr><td>Free</td><td>$0</td><td>${FEED_LIMITS.freePerMonth.toLocaleString("en-US")} lookups / month per key (wallet signature signup); answer-only.</td></tr>${plans}</table></div>
-<div class="card"><b>Attribution.</b> Show <code>${ATTRIBUTION}</code> where results are displayed. vet402 data: ${VET402.source}, ${VET402.license} (<a href="${VET402.license_url}">licence</a>), cite as in each result's <code>attribution</code> field.</div>
+<tr><td>Free</td><td>$0</td><td>${FEED_LIMITS.freePerMonth.toLocaleString("en-US")} lookups / month per key (wallet signature signup); answer-only.</td></tr>${plans}${platform}</table>
+<p class="muted">30-day plans, no auto-renew; renewing means paying again. Refunds: unused credits remain available, or the unprovided part of a 30-day term is refunded as the licence states.</p></div>
+<div class="card"><b>Attribution.</b> Show <code>${ATTRIBUTION}</code> where results are displayed. vet402 data: ${VET402.source}, ${VET402.license} (<a href="${VET402.license_url}">licence</a>), cite as in each result's <code>attribution</code> field. x402-list.com directory data: ${X402LIST_ATTRIBUTION} (<a href="${X402LIST_LICENCE_URL}">licence</a>). Lumi's no-resale rule does not apply to marked vet402 or x402-list fields.</div>
 <p>API: <a href="${base}/v1/feed">${base}/v1/feed</a> · Methodology: <a href="${base}/v1/trust/methodology">${base}/v1/trust/methodology</a></p>
 <footer class="muted">Observations, not ratings or advice. Not financial advice. · <a href="https://lumitrades.io">lumitrades.io</a></footer>
 </div></body></html>`;
@@ -65,13 +67,13 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
   function doc(base: string) {
     return {
       kind: "lumi_trust_feed",
-      summary: "Licensed, keyed access to Lumi's x402 trust observations (quote checks, test-buys, payTo census) for facilitators, wallets and agent frameworks.",
+      summary: "Licensed, keyed access to Lumi's own x402 trust observations (quote checks, test-buys and receipts, and banded seller-activity flags). No payer identities, no seller income, and no Coinbase Bazaar quality fields.",
       plans: [
         { plan: "free", price_usd: "0", lookups: `${FEED_LIMITS.freePerMonth}/month`, evidence: "answer-only", rate_limit_per_min: FEED_LIMITS.perMinute.free, signup: `GET ${base}/v1/feed/challenge?wallet=<address>, sign it, POST ${base}/v1/feed/keys` },
-        { plan: "feed_credits", price_usd: PLANS.feed_credits.usd, lookups: `${FEED_LIMITS.creditsPerPurchase} prepaid, never expire`, evidence: "answer-only", rate_limit_per_min: FEED_LIMITS.perMinute.credits, pay: `${base}/v1/feed/credits?key_id=<key id>` },
-        { plan: "feed", price_usd: PLANS.feed.usd, term_days: 30, lookups: `${FEED_LIMITS.included.feed.toLocaleString("en-US")} per term`, evidence: "full (tx hashes, receipts)", delta: true, rate_limit_per_min: FEED_LIMITS.perMinute.feed, pay: `${base}/v1/feed/subscribe/feed?key_id=<key id> (omit key_id to get a new key)` },
-        { plan: "feed_pro", price_usd: PLANS.feed_pro.usd, term_days: 30, lookups: `${FEED_LIMITS.included.feed_pro.toLocaleString("en-US")} per term`, evidence: "full (tx hashes, receipts)", delta: true, snapshot: true, webhooks: true, rate_limit_per_min: FEED_LIMITS.perMinute.feed_pro, pay: `${base}/v1/feed/subscribe/feed_pro?key_id=<key id>` },
-        { plan: PLATFORM_LICENCE.id, price_from_usd: PLATFORM_LICENCE.from_usd, term_days: PLATFORM_LICENCE.term_days, how_to_buy: `contact ${PLATFORM_LICENCE.contact}`, summary: PLATFORM_LICENCE.summary },
+        { plan: "feed_credits", price_usd: PLANS.feed_credits.usd, lookups: `${FEED_LIMITS.creditsPerPurchase} prepaid, never expire`, evidence: "answer-only", auto_renew: false, rate_limit_per_min: FEED_LIMITS.perMinute.credits, pay: `${base}/v1/feed/credits?key_id=<key id>` },
+        { plan: "feed", price_usd: PLANS.feed.usd, term_days: 30, lookups: `${FEED_LIMITS.included.feed.toLocaleString("en-US")} per term`, evidence: "full (tx hashes, receipts)", delta: true, auto_renew: false, rate_limit_per_min: FEED_LIMITS.perMinute.feed, pay: `${base}/v1/feed/subscribe/feed?key_id=<key id> (omit key_id to get a new key)` },
+        { plan: "feed_pro", price_usd: PLANS.feed_pro.usd, term_days: 30, lookups: `${FEED_LIMITS.included.feed_pro.toLocaleString("en-US")} per term`, evidence: "full (tx hashes, receipts)", delta: true, snapshot: true, webhooks: true, auto_renew: false, rate_limit_per_min: FEED_LIMITS.perMinute.feed_pro, pay: `${base}/v1/feed/subscribe/feed_pro?key_id=<key id>` },
+        { plan: PLATFORM_LICENCE.id, price_from_usd: PLATFORM_LICENCE.from_usd, term_days: PLATFORM_LICENCE.term_days, auto_renew: false, how_to_buy: `contact ${PLATFORM_LICENCE.contact}`, summary: PLATFORM_LICENCE.summary },
       ],
       free_tier_terms: PLATFORM_LICENCE.free_tier_terms,
       metering: "Lookups beyond the included amount use prepaid credits ($1.50 per 1,000). Without credits the request is refused (HTTP 429) and nothing is charged.",
@@ -84,8 +86,9 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
         usage: `GET ${base}/v1/feed/usage`,
       },
       license: `${base}/v1/feed/license`,
-      attribution: { lumi: ATTRIBUTION, vet402: `${VET402.source}, ${VET402.license}` },
+      attribution: { lumi: ATTRIBUTION, vet402: `${VET402.source}, ${VET402.license}`, x402_list: X402LIST_ATTRIBUTION },
       auto_renew: false,
+      refunds: "Payments are not refundable, except where Lumi cannot provide the service that was paid for: unused credits remain available or are refunded on request; if a 30-day plan cannot be provided for more than 48 consecutive hours, or Lumi ends the licence without cause, the unused part of that term is refunded pro-rata to the paying wallet.",
       disclaimer: "Dated observations, not ratings or advice. Not financial advice.",
     };
   }
@@ -249,7 +252,7 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
     return json(200, {
       kind: "lumi_feed_snapshot", cursor, next_cursor: next, generated_at: iso(t),
       entries: rows.map((r) => catalogView(r, buys.filter((b) => b.resource === r.resource), undefined, t)),
-      license: { terms: `${base}/v1/feed/license`, summary: "Licensed to this key for internal use during the term. No resale or redistribution of the raw data. Attribution required where shown.", attribution: ATTRIBUTION },
+      license: { terms: `${base}/v1/feed/license`, summary: "Licensed to this key as the current plan states (Feed Pro snapshots are for internal use during the term; a platform licence is required to display Licensed Fields inside a named product). No resale of the raw snapshot. Marked vet402 and x402-list fields stay under CC BY 4.0 and are not subject to the no-resale rule. Attribution required where shown.", attribution: { lumi: ATTRIBUTION, vet402: `${VET402.source}, ${VET402.license}`, x402_list: X402LIST_ATTRIBUTION } },
     }, NO_STORE);
   }
 

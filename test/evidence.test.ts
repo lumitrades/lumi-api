@@ -216,10 +216,13 @@ describe("evidence: lookups and trust/check", () => {
     const blob = JSON.stringify(free.body);
     expect(blob).not.toContain(H(1));
     expect(blob).not.toMatch(/"organic_payers"|"organic_payments"|"organic_usd"|"sample_payer"|"excluded_payers"/);
-    expect(free.body.catalog.entries[0].bazaar_quality).toMatchObject({ calls_30d: 50, unique_payers_30d: 4 });
+    expect(free.body.catalog.entries[0].bazaar_quality).toBeUndefined();
+    expect(free.body.catalog.entries[0].source).toBe("cdp_bazaar");
+    expect(free.body.catalog.entries[0].source_licence).toBe("lumi_observations");
     const paid = await buy("/v1/trust/check/high-value?amount=4&url=" + encodeURIComponent("https://api.xseller.com/v1/q"));
     expect(paid.status).toBe(200);
-    expect(paid.body.reasons.map((r: any) => r.code)).toEqual(expect.arrayContaining(["bazaar_usage", "organic_payers"]));
+    expect(paid.body.reasons.map((r: any) => r.code)).toEqual(expect.arrayContaining(["organic_payers"]));
+    expect(paid.body.reasons.map((r: any) => r.code)).not.toContain("bazaar_usage");
     const org = paid.body.reasons.find((r: any) => r.code === "organic_payers");
     expect(org.detail).toMatch(/1–9 organic payer cluster/);
     expect(org.detail).toMatch(/1–9 payment/);
@@ -293,7 +296,8 @@ describe("evidence: lookups and trust/check", () => {
     expect(ev.queue.get("https://api.bseller.com/v1/q")!.hits).toBe(1);
     const paid = await buy(u);
     expect(paid.body.reasons.find((x: any) => x.code === "vet402_l0_fail")?.severity).toBe("warn");
-    expect(paid.body.reasons.map((x: any) => x.code)).toContain("no_bazaar_usage");
+    expect(paid.body.reasons.map((x: any) => x.code)).not.toContain("no_bazaar_usage");
+    expect(paid.body.reasons.map((x: any) => x.code)).not.toContain("bazaar_usage");
     await new Promise((s) => setTimeout(s, 0));
     const q = await get("/v1/trust/catalog/buy-queue", owner);
     expect(q.body.rows[0]).toMatchObject({ resource: "https://api.bseller.com/v1/q", status: "queued", network: "eip155:8453" });

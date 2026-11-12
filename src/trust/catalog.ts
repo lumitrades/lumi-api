@@ -27,6 +27,25 @@ export const INGEST_PASS_RUNS = 12;
 export const CDP_SOURCE = "cdp_bazaar";
 /** Free public x402 directories (owner-approved 2026-10-26) fed by the operator box job catalog_sources.py. */
 export const EXTERNAL_SOURCES = ["ext:saylor", "ext:payai", "ext:thirdweb", "ext:402index", "ext:x402list", "ext:dexter"] as const;
+/** Directories used only as discovery seeds: Lumi does not sublicense their copied metadata (Quill MF5). */
+export const SEED_ONLY_SOURCES = new Set<string>(["ext:saylor", "ext:payai", "ext:thirdweb", "ext:402index", "ext:dexter"]);
+export const X402LIST_SOURCE = "ext:x402list";
+export const X402LIST_ATTRIBUTION = "Data: x402-list.com (CC BY 4.0)";
+export const X402LIST_LICENCE_URL = "https://creativecommons.org/licenses/by/4.0/";
+
+/** Provenance + licence tag for a catalog row. Never hardcode every row as CDP Bazaar discovery. */
+export function sourceMeta(source: string) {
+  if (source === CDP_SOURCE) {
+    return { source: CDP_SOURCE, source_label: "Lumi observation of a public endpoint (discovery seed: Coinbase CDP x402 Bazaar)", source_licence: "lumi_observations", discovery_seed: "cdp_bazaar" as const };
+  }
+  if (source === X402LIST_SOURCE) {
+    return { source, source_label: "x402-list.com", source_licence: "CC BY 4.0", source_attribution: X402LIST_ATTRIBUTION, source_licence_url: X402LIST_LICENCE_URL, no_resale_does_not_apply: true as const };
+  }
+  if (SEED_ONLY_SOURCES.has(source)) {
+    return { source, source_label: `Discovery seed only (${source.slice(4)}); licensed fields are Lumi's own observations`, source_licence: "seed_only", discovery_seed: true as const };
+  }
+  return { source: source || "unknown", source_label: source || "unknown", source_licence: "unknown" };
+}
 export const PROBE_BATCH = 36;
 export const RDAP_PER_BATCH = 3;
 export const RUNS_PER_DAY = 46; // */30 cron = 48 runs; 46 leaves slack so every entry is checked within 24 h
@@ -844,16 +863,13 @@ export function catalogView(row: CatalogRow, buys: BuyRow[], dom: DomainRow | un
   return {
     resource: row.resource,
     domain: row.domain,
-    service_name: row.service_name,
-    description: row.description,
+    ...(SEED_ONLY_SOURCES.has(row.source) ? {} : { service_name: row.service_name, description: row.description }),
     method: row.method,
     listed_price_usd: row.price_usd,
     networks: (row.networks ?? "").split(",").filter(Boolean),
     // One entry per (network, address): Bazaar listings repeat payTo once per accepted asset/scheme.
     pay_to: [...new Map(accepts.filter((a) => a.p).map((a) => [`${a.n}|${String(a.p).toLowerCase()}`, { network: a.n, pay_to: a.p }])).values()],
-    source: "CDP x402 Bazaar discovery",
-    bazaar_calls_30d: row.calls_30d,
-    bazaar_quality: bazaarQuality(row),
+    ...sourceMeta(row.source),
     tier: tierOf(row, buys, now),
     quote_checks: row.probe_ts == null
       ? null
@@ -902,13 +918,13 @@ export function catalogFreeView(row: CatalogRow, buys: BuyRow[], now: number) {
   return {
     resource: row.resource,
     domain: row.domain,
-    service_name: row.service_name,
+    ...(SEED_ONLY_SOURCES.has(row.source) ? {} : { service_name: row.service_name }),
     method: row.method,
     listed_price_usd: row.price_usd,
     networks: (row.networks ?? "").split(",").filter(Boolean),
     pay_to: [...new Map(accepts.filter((a) => a.p).map((a) => [`${a.n}|${String(a.p).toLowerCase()}`, { network: a.n, pay_to: a.p }])).values()],
+    ...sourceMeta(row.source),
     tier: tierOf(row, buys, now),
-    bazaar_quality: bazaarQuality(row),
     last_quote_check: row.probe_ts == null
       ? null
       : {

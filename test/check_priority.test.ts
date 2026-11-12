@@ -97,7 +97,8 @@ describe("test-buy priority: free and paid checks are identical", () => {
     const sa = a.snapshot();
     expect(sa.queue).toHaveLength(1);
     expect(sa.queue[0]).toMatchObject({ resource: R(1), network: "eip155:8453", status: "queued", hits: 1 });
-    expect(sa.queue[0].reasons).toContain("no_bazaar_usage");
+    // Coinbase quality fields are no longer a public buy signal (licence v2026-11-11).
+    expect(JSON.stringify(sa.queue[0].reasons)).not.toMatch(/no_bazaar_usage/);
     expect(sa.priority).toEqual([{ day: "2026-10-22", seller: "api.s1.com", resource: R(1), at: NOW }]);
     expect(b.snapshot()).toEqual(sa);
     expect(c.snapshot()).toEqual(sa);

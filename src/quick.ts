@@ -205,11 +205,7 @@ export function trustVerdict(input: CheckInput, exact: Json | null, domainDoc: J
 
   // Free evidence (dated facts, attributed): Coinbase Bazaar usage, payTo census, vet402 (third party).
   const day = (x: unknown) => (typeof x === "string" ? x.slice(0, 10) : "unknown date");
-  const bq = e?.bazaar_quality;
-  if (bq) {
-    if (bq.calls_30d > 0) add("bazaar_usage", "info", `Coinbase Bazaar reports ${bq.calls_30d} calls from ${bq.unique_payers_30d ?? "?"} unique payers in the 30 days before ${day(bq.as_of)}${bq.last_called_at ? ` (last called ${day(bq.last_called_at)})` : ""}.`);
-    else add("no_bazaar_usage", "info", `Coinbase Bazaar reports no calls in the 30 days before ${day(bq.as_of)}.`);
-  }
+  // Coinbase Bazaar quality fields are not published (licence v2026-11-11 / MF2). Do not add bazaar_usage reasons.
   for (const c of (exact?.payto_census ?? []) as Json[]) {
     if (c.status !== "ok") { if (c.status === "queued") add("payto_census_queued", "info", `A ledger read of payTo ${c.pay_to} is queued; check again in a few minutes.`); continue; }
     const chain = c.network === "xrpl:0" ? "XRPL" : "Base";

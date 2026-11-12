@@ -55,7 +55,7 @@ export const PLANS: Record<PlanId, PlanDef> = {
   founder_pack: { id: "founder_pack", name: "Founder pack", usd: "5", days: null, family: "monitor", pack: { buys: 24, expiryDays: 365, founder: { seats: 10, maxPurchases: 12 } }, path: "/v1/monitor/subscribe/founder_pack", summary: "First 10 sellers only (one place per company): 24 seller-funded test-buys of your enrolled endpoints (each priced at most 0.10 USD), used when you ask, valid 12 months. Rebuy up to 12 times." },
   feed: { id: "feed", name: "Feed", usd: "99", days: TERM_DAYS, family: "feed", path: "/v1/feed/subscribe/feed", summary: "30 days: 100,000 bulk lookups, delta feed, full evidence and receipts." },
   feed_pro: { id: "feed_pro", name: "Feed Pro", usd: "199", days: TERM_DAYS, family: "feed", path: "/v1/feed/subscribe/feed_pro", summary: "30 days: 500,000 lookups, delta feed, licensed full snapshot export, status-change webhooks, receipts." },
-  feed_credits: { id: "feed_credits", name: "Feed credits", usd: "1.5", days: null, family: "feed", path: "/v1/feed/credits", summary: "1,000 metered lookups (prepaid, credits never expire) on top of the free 1,000/month." },
+  feed_credits: { id: "feed_credits", name: "Feed credits", usd: "1.50", days: null, family: "feed", path: "/v1/feed/credits", summary: "1,000 metered lookups (prepaid, credits never expire) on top of the free 1,000/month." },
 };
 /** Paid monitoring ids the subscribe route knows: the per-endpoint Watch tiers, Audit, the test-buy packs, and the retired
  *  Monitor / Watch Plus ids (which answer 410 plan_retired, never quoted; rows bought before 2026-10-25 keep running to their term end). */
@@ -135,8 +135,8 @@ export const PLATFORM_LICENCE = {
   term_days: TERM_DAYS,
   how_to_buy: "contact",
   contact: "hello@lumitrades.io",
-  summary: "For wallets, facilitators and directories: the right to show Lumi's checks and evidence to your users inside your product, bulk and delta access, an uptime SLA, and exportable evidence packs. Quoted per platform, from $499 per 30 days. Lumi supplies evidence, not insurance or a payment guarantee.",
-  free_tier_terms: "The free checks are free to use and to quote with credit to Lumi. Reselling, redistributing or bulk-mirroring the data needs a licence (Feed for your own use, the platform licence for redistribution).",
+  summary: "For wallets, facilitators and directories: the right to show Lumi's checks and evidence inside the named product(s) written down at purchase, bulk and delta access, and exportable evidence packs. Quoted per platform, from $499 per 30 days, no auto-renew. Any availability figure is a non-binding target, not a credit-bearing SLA. Lumi supplies evidence, not insurance or a payment guarantee.",
+  free_tier_terms: "The free checks are free to use and to quote with credit to Lumi. A current platform licence is required to redistribute Licensed Fields inside your product, as that licence states. Feed and Feed Pro are for your own use and display to your users, not for resale of the raw snapshot.",
 } as const;
 
 export const WATCH_FREE = { endpoints: 1, termDays: TERM_DAYS, label: "free tier, no test-buys" };

@@ -272,6 +272,6 @@ describe("commerce discovery", () => {
     expect(skill).not.toMatch(/Watch Plus|Monitor Plus/);
     expect(skill).toContain("Older monitoring plans are no longer sold");
     expect(skill).not.toMatch(/Monitor Plus \$|\$29/);
-    expect(skill).toContain("$1.5 per 1,000");
+    expect(skill).toContain("$1.50 per 1,000");
   });
 });
