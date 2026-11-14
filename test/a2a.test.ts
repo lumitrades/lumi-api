@@ -57,6 +57,12 @@ describe("A2A agent card", () => {
     expect(x402.params.networks[0]).toMatchObject({ pay_to: EVM_PAY_TO });
     const mcp = card.capabilities.extensions.find((e: any) => e.uri === "https://modelcontextprotocol.io");
     expect(mcp.params.url).toBe(`${BASE}/mcp`);
+    // Link extractors treat "https://host/path:" (a colon right after the URL) as a 404 path.
+    const urls = cardText.match(/https?:\/\/[^\s"']+/g) ?? [];
+    for (const u of urls) expect(u.endsWith(":"), u).toBe(false);
+    const hv = card.skills.find((sk: any) => sk.id === "high_value_check");
+    expect(hv.description).toContain(`${BASE}/v1/trust/check/high-value, from`);
+    expect(hv.description).not.toContain("/v1/trust/check/high-value:");
   });
 });
 

@@ -109,6 +109,24 @@ describe("GET /v1/trust/check/high-value: x402 v2 quote", () => {
     const body: any = await ok.json();
     expect(body.kind).toBe("trust_check");
   });
+
+  it("quotes resource.url with the seller query, and a payment does not unlock a different seller", async () => {
+    const { req } = await setup();
+    const pathA = `/v1/trust/check/high-value?amount=1&url=${enc(SELLER)}`;
+    const r = await req(pathA);
+    expect(r.status).toBe(402);
+    const q1: any = await r.json();
+    const hdr = b64(r.headers.get("PAYMENT-REQUIRED"));
+    const expected = `${BASE}/v1/trust/check/high-value?amount=1&url=${enc(SELLER)}`;
+    expect(q1.resource.url).toBe(expected);
+    expect(hdr.resource.url).toBe(expected);
+    const opt = q1.accepts.find((a: any) => a.network.startsWith("xrpl:"));
+    const other = await req(`/v1/trust/check/high-value?amount=1&url=${enc("https://api.other.com/v1/q")}`, { "PAYMENT-SIGNATURE": paymentHeaderFor(opt) });
+    expect(other.status).toBe(402);
+    expect((await other.json()).error).toBe("invalid_invoice");
+    const ok = await req(pathA, { "PAYMENT-SIGNATURE": paymentHeaderFor(opt) });
+    expect(ok.status).toBe(200);
+  });
 });
 
 describe("free GET /v1/trust/check", () => {

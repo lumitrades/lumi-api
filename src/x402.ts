@@ -197,8 +197,10 @@ async function hmac(secret: string, msg: string): Promise<string> {
   return b64url(sig.slice(0, 16));
 }
 
-function macInput(cfg: Config, routeKey: string, amount: string, exp: string, nonce: string): string {
-  return [INVOICE_PREFIX, routeKey, amount, cfg.network, cfg.payTo, exp, nonce].join("|");
+function macInput(cfg: Config, routeKey: string, amount: string, exp: string, nonce: string, resourceUrl: string): string {
+  // resourceUrl binds the invoice to the quoted request (path + query), so a high-value
+  // or verdict invoice cannot be first-used against a different seller URL.
+  return [INVOICE_PREFIX, routeKey, amount, cfg.network, cfg.payTo, exp, nonce, resourceUrl].join("|");
 }
 
 /** invoiceId = lumi1.<routeKey>.<expiry base36>.<nonce>.<mac>, or lumi1.<routeKey>.<exp>.<nonce>.<drops>.<mac> (live XRP pricing) */
@@ -220,7 +222,7 @@ function offeredIous(cfg: Config, quote: Quote): [IouOption, string][] {
 export async function issueInvoiceId(cfg: Config, quote: Quote, nowMs = Date.now()): Promise<string> {
   const exp = Math.floor(nowMs / 1000 + cfg.invoiceTtlSeconds).toString(36);
   const nonce = b64url(crypto.getRandomValues(new Uint8Array(9)));
-  const mac = await hmac(cfg.invoiceSecret, macInput(cfg, quote.routeKey, quoteAmounts(cfg, quote), exp, nonce));
+  const mac = await hmac(cfg.invoiceSecret, macInput(cfg, quote.routeKey, quoteAmounts(cfg, quote), exp, nonce, quote.resourceUrl));
   return quote.liveDrops
     ? [INVOICE_PREFIX, quote.routeKey, exp, nonce, quote.amountDrops, mac].join(".")
     : [INVOICE_PREFIX, quote.routeKey, exp, nonce, mac].join(".");
@@ -243,7 +245,7 @@ export async function checkInvoiceId(
   const drops = parts.length === 6 ? parts[4] : undefined;
   if (drops !== undefined && !/^[1-9]\d{0,11}$/.test(drops)) return { ok: false, reason: "malformed_invoice" };
   const q = drops ? { ...quote, amountDrops: drops } : quote;
-  const expected = await hmac(cfg.invoiceSecret, macInput(cfg, routeKey, quoteAmounts(cfg, q), exp, nonce));
+  const expected = await hmac(cfg.invoiceSecret, macInput(cfg, routeKey, quoteAmounts(cfg, q), exp, nonce, quote.resourceUrl));
   if (!timingSafeEqual(mac, expected)) return { ok: false, reason: "invalid_invoice" };
   if (routeKey !== quote.routeKey) return { ok: false, reason: "invoice_route_mismatch" };
   const expiresAt = parseInt(exp, 36) * 1000;
@@ -315,6 +317,20 @@ export class DurableObjectReplayGuard extends MemoryReplayGuard {
     let h = 0;
     for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
     return this.ns.get(this.ns.idFromName(`shard-${h % 16}`));
+  }
+  /** Ask the Durable Object so a fresh isolate does not miss a claim and fall through to facilitator verify. */
+  async isUsed(id: string): Promise<boolean> {
+    if (await super.isUsed(id)) return true;
+    try {
+      const res = await this.stub(id).fetch("https://invoice-guard/used", {
+        method: "POST",
+        body: JSON.stringify({ id }),
+      });
+      return res.status === 200;
+    } catch {
+      // Pre-check may have false negatives; claim() is still authoritative.
+      return false;
+    }
   }
   async claim(id: string, ttlSeconds: number): Promise<boolean> {
     if (await super.isUsed(id)) return false;

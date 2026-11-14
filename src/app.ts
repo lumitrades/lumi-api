@@ -260,6 +260,18 @@ const FIXED: Record<string, PaidRoute> = {
 };
 /** Paid routes whose input is the query string (validated in prepare(), refused with 400 and never charged when malformed). */
 const QUERY_ROUTES: PaidRoute[] = ["high_value_check", "verdict", "receipts", "batch_check"];
+/** Origin + path + sorted query, so a high-value or verdict invoice binds to the seller URL, not only the route+price band. */
+export function paidQueryResourceUrl(base: string, path: string, search: string): string {
+  const q = search.startsWith("?") ? search.slice(1) : search;
+  if (!q) return `${base}${path}`;
+  const params = new URLSearchParams(q);
+  const canon = new URLSearchParams();
+  for (const k of [...new Set([...params.keys()])].sort()) {
+    for (const v of params.getAll(k)) canon.append(k, v);
+  }
+  const s = canon.toString();
+  return s ? `${base}${path}?${s}` : `${base}${path}`;
+}
 /** GET /v1/check/batch: at most this many URLs or domains per call. */
 export const BATCH_MAX = 10;
 /** GET /v1/trust/receipts: at most this many receipts per answer (newest first). */
@@ -1931,7 +1943,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         `Lumi API ${endpoint.template}: ${endpoint.summary}`,
         { subject: coin?.symbol ?? vendorId, usd: pf.usd },
       ),
-      resourceUrl: route === "receipts" ? receiptsResourceUrl(base, url.search) : `${base}${path}`,
+      resourceUrl: route === "receipts" ? receiptsResourceUrl(base, url.search) : (route === "high_value_check" || route === "verdict") ? paidQueryResourceUrl(base, path, url.search) : `${base}${path}`,
       bazaar: bazaarExtension(
         route,
         coin?.symbol ?? vendorId,

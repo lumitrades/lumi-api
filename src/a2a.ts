@@ -124,7 +124,7 @@ export function agentCard(cfg: Config, base: string) {
       id: s.id,
       name: s.name,
       description: ep
-        ? `${skillPrice(cfg, s.route!)} ${ep.summary} Paid per call via x402 at ${base}${ep.template}: ${s.route === "high_value_check" ? "from " : ""}${priceLine(cfg, s.route!)}${s.route === "high_value_check" ? " (the floor; the 402 for your amount is binding)" : ""}. Over A2A this skill returns the live payment terms; it is never charged when Lumi cannot answer.`
+        ? `${skillPrice(cfg, s.route!)} ${ep.summary} Paid per call via x402 at ${base}${ep.template}, ${s.route === "high_value_check" ? "from " : ""}${priceLine(cfg, s.route!)}${s.route === "high_value_check" ? " (the floor; the 402 for your amount is binding)" : ""}. Over A2A this skill returns the live payment terms; it is never charged when Lumi cannot answer.`
         : FREE_DESCRIPTIONS[s.id],
       tags: s.tags,
       examples: s.examples,

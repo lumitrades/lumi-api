@@ -25,6 +25,7 @@ export class InvoiceGuard {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/quota") return this.quota(request);
+    if (request.method === "POST" && url.pathname === "/used") return this.used(request);
     if (request.method !== "POST" || url.pathname !== "/claim") return new Response("not found", { status: 404 });
     const { id, ttlSeconds } = (await request.json()) as { id?: string; ttlSeconds?: number };
     if (!id || typeof id !== "string" || id.length > 256) return new Response("bad request", { status: 400 });
@@ -37,6 +38,17 @@ export class InvoiceGuard {
     await this.state.storage.put(key, now + Math.max(60, Number(ttlSeconds) || 600) * 1000);
     if ((await this.state.storage.getAlarm()) === null) await this.state.storage.setAlarm(now + 3600_000);
     return new Response("claimed", { status: 200 });
+  }
+
+  /** POST /used {id}: 200 if this id is already claimed and unexpired, 404 if not, 400 if the body is bad. Read-only. */
+  private async used(request: Request): Promise<Response> {
+    const body = (await request.json().catch(() => null)) as { id?: unknown } | null;
+    const id = body?.id;
+    if (!id || typeof id !== "string" || id.length > 256) return new Response("bad request", { status: 400 });
+    const until = await this.state.storage.get<number>(`inv:${id}`);
+    return new Response(until !== undefined && until > Date.now() ? "used" : "unused", {
+      status: until !== undefined && until > Date.now() ? 200 : 404,
+    });
   }
 
   /**

@@ -25,6 +25,13 @@ describe("stateless invoices", () => {
     expect(await checkInvoiceId(cfg, old, quote)).toMatchObject({ ok: false, reason: "invoice_expired" });
     expect(await checkInvoiceId(cfg, "garbage", quote)).toMatchObject({ ok: false, reason: "malformed_invoice" });
   });
+
+  it("binds the invoice to the quoted resource URL, so a different seller query does not verify", async () => {
+    const id = await issueInvoiceId(cfg, quote);
+    const otherSeller = { ...quote, resourceUrl: "http://x/v1/trust/check/high-value?url=https://b.example/y&amount=4" };
+    expect(await checkInvoiceId(cfg, id, otherSeller)).toMatchObject({ ok: false, reason: "invalid_invoice" });
+    expect(await checkInvoiceId(cfg, id, quote)).toMatchObject({ ok: true });
+  });
 });
 
 describe("encoding", () => {
@@ -55,5 +62,14 @@ describe("replay guards", () => {
     const results = await Promise.all(Array.from({ length: 5 }, () => new DurableObjectReplayGuard(ns).claim("same", 60)));
     expect(results.filter(Boolean)).toHaveLength(1);
     expect(await new DurableObjectReplayGuard(ns).claim("other", 60)).toBe(true);
+  });
+
+  it("Durable Object isUsed consults the DO, so a fresh isolate sees an already-claimed id", async () => {
+    const ns = fakeDurableObjectNamespace();
+    expect(await new DurableObjectReplayGuard(ns).isUsed("inv-1")).toBe(false);
+    expect(await new DurableObjectReplayGuard(ns).claim("inv-1", 60)).toBe(true);
+    // New guard instance = a fresh Worker isolate with empty memory.
+    expect(await new DurableObjectReplayGuard(ns).isUsed("inv-1")).toBe(true);
+    expect(await new DurableObjectReplayGuard(ns).isUsed("inv-other")).toBe(false);
   });
 });
