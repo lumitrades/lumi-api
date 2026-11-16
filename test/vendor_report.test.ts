@@ -3,6 +3,7 @@ import { createApp } from "../src/app";
 import { MemoryTrustStore, type ProbeRow } from "../src/trust/store";
 import { SEED_OBSERVATIONS } from "../src/trust/seed";
 import { FACILITATOR, DATA, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor, decodeB64Json } from "./helpers";
+import { paymentRequiredHeaderPayload } from "../src/x402";
 
 const KEY = "k".repeat(20) + "0123456789abcdef0123456789abcdef";
 const ENV = {
@@ -57,7 +58,7 @@ describe("paid vendor report: x402 terms", () => {
     const r = await get(PATH);
     expect(r.status).toBe(402);
     const body = await r.json();
-    expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(body);
+    expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(paymentRequiredHeaderPayload(body));
     expect(body.resource.url).toBe(`${BASE}${PATH}`);
     expect(body.accepts.map((a: any) => [a.network, a.extra?.symbol ?? a.asset, a.amount])).toEqual([
       ["eip155:84532", "USDC", "20000"], ["xrpl:1", "XRP", "15000"], ["xrpl:1", "RLUSD", "0.02"], ["xrpl:1", "USDC", "0.02"],

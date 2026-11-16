@@ -7,6 +7,7 @@ import { lookupStellarUsdc, stellarPublicKey, verifyStellarSignature, STELLAR_US
 import { verifyReceipt, receiptHash, receiptMessage, buildReceiptBody } from "../src/trust/receipts";
 import { explorerFor } from "../src/trust/catalog";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, jsonResponse, makeFetch, decodeB64Json, type FakeFacilitator } from "./helpers";
+import { paymentRequiredHeaderPayload } from "../src/x402";
 
 const ST_PAY_TO = "GCKTH26VNR4H4WLCXS5DX6563XRQQXWP5QKQWFD6CHOGTZJ2N5GKBU2L";
 const ST_FAC = "https://stellar-facilitator.test/x402";
@@ -74,7 +75,7 @@ describe("Stellar x402 option", () => {
     const r = await get("/v1/verdict?url=https://a.example/x");
     expect(r.status).toBe(402);
     const body = await r.json();
-    expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(body);
+    expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(paymentRequiredHeaderPayload(body));
     expect(PaymentRequiredV2Schema.safeParse(body).success).toBe(true);
     const s = body.accepts[body.accepts.length - 1];
     expect(s).toEqual({

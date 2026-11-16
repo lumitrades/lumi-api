@@ -5,6 +5,7 @@ import { createApp } from "../src/app";
 import { FACILITATOR, DATA, NOW, happyFacilitator, makeFetch, paymentHeaderFor, decodeB64Json } from "./helpers";
 import { planEconomics, badgeStatus, TEST_BADGE_LABEL } from "../src/commerce/monitor";
 import { isTestWallet, planPriceUsd, PLANS } from "../src/commerce/plans";
+import { paymentRequiredHeaderPayload } from "../src/x402";
 
 const BASE = "https://lumi.test";
 const OWNER = "owner-key-for-tests-0123456789-abcdefghijklmnop";
@@ -41,7 +42,7 @@ async function pay(s: ReturnType<typeof setup>, path: string) {
   const q = await s.req(path);
   expect(q.status).toBe(402);
   const body = await q.json();
-  expect(decodeB64Json(q.headers.get("PAYMENT-REQUIRED"))).toEqual(body);
+  expect(decodeB64Json(q.headers.get("PAYMENT-REQUIRED"))).toEqual(paymentRequiredHeaderPayload(body));
   const xrp = body.accepts.find((a: any) => a.asset === "XRP");
   const r = await s.req(path, { headers: { "PAYMENT-SIGNATURE": paymentHeaderFor(xrp) } });
   return { quote: body, r, body: await r.json() };

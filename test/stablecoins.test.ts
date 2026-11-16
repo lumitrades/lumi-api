@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
 import { loadConfig, iouValue, RLUSD_CURRENCY, USDC_CURRENCY, MAINNET_PAY_TO } from "../src/config";
 import { DATA, FACILITATOR, PAY_TO, happyFacilitator, makeFetch, paymentHeaderFor, decodeB64Json, type FakeFacilitator , NOW } from "./helpers";
+import { paymentRequiredHeaderPayload } from "../src/x402";
 
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret" };
 const TESTNET_ISSUER = "rQhWct2fv4Vc4KRjRgMrxa8xPN9Zx9iLKV";
@@ -52,7 +53,7 @@ describe("stablecoins in the 402", () => {
       const r = await get(path);
       expect(r.status).toBe(402);
       const body = await r.json();
-      expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(body);
+      expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(paymentRequiredHeaderPayload(body));
       const [a, b, c] = body.accepts;
       expect(body.accepts).toHaveLength(3);
       expect(c).toMatchObject({ asset: USDC_CURRENCY, amount: rl, payTo: PAY_TO });

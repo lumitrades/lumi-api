@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
 import { DATA, FACILITATOR, PAY_TO, fakeDurableObjectNamespace, happyFacilitator, jsonResponse, makeFetch, paymentHeaderFor, decodeB64Json, type FakeFacilitator , NOW } from "./helpers";
+import { paymentRequiredHeaderPayload } from "../src/x402";
 
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", PRIVATE_NAMES: "Canaryname" };
 const BASE = "http://lumi.test";
@@ -17,7 +18,7 @@ async function challenge(get: (p: string) => Promise<Response>, path: string) {
   expect(r.status).toBe(402);
   const header = decodeB64Json(r.headers.get("PAYMENT-REQUIRED"));
   const body = await r.json();
-  expect(header).toEqual(body);
+  expect(header).toEqual(paymentRequiredHeaderPayload(body));
   return body.accepts[0];
 }
 
@@ -156,7 +157,7 @@ describe("x402 paywall", () => {
     expect(b3.error).toBe("invalid_payment_signature_header");
     expect(b3.accepts.length).toBeGreaterThan(0);
     const h3 = JSON.parse(Buffer.from(r3.headers.get("PAYMENT-REQUIRED")!, "base64").toString("utf8"));
-    expect(h3).toEqual(b3);
+    expect(h3).toEqual(paymentRequiredHeaderPayload(b3));
     for (const bad of [Buffer.from(JSON.stringify({ x402Version: 1, accepted: req })).toString("base64"), Buffer.from(JSON.stringify({ x402Version: 2, accepted: { ...req, extra: {} }, payload: {} })).toString("base64")]) {
       const r = await get("/v1/trust/check/high-value?url=https://a.example/x&amount=4", { "X-PAYMENT": bad });
       expect(r.status).toBe(402);

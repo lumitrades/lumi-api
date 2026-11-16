@@ -5,6 +5,7 @@ import { wrapFetchWithSIWx, createSIWxPayload, encodeSIWxHeader } from "@x402/ex
 import { SiweMessage } from "@signinwithethereum/siwe";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, decodeB64Json } from "./helpers";
+import { paymentRequiredHeaderPayload } from "../src/x402";
 
 const RPC = "https://base-rpc.test";
 const ENV = {
@@ -55,7 +56,7 @@ describe("free trial (x402 sign-in-with-x)", () => {
     const plain = await appFetch(BASE + "/v1/verdict?url=https://a.example/x");
     expect(plain.status).toBe(402);
     const pb = await plain.json();
-    expect(decodeB64Json(plain.headers.get("PAYMENT-REQUIRED"))).toEqual(pb);
+    expect(decodeB64Json(plain.headers.get("PAYMENT-REQUIRED"))).toEqual(paymentRequiredHeaderPayload(pb));
     expect(pb.accepts.length).toBeGreaterThan(0);
     expect(pb.extensions["sign-in-with-x"]).toBeUndefined();
     expect(Object.keys(pb.extensions)).toEqual(["bazaar", "payment-identifier"]);
@@ -63,7 +64,7 @@ describe("free trial (x402 sign-in-with-x)", () => {
     const r = await appFetch(BASE + "/v1/verdict?url=https://a.example/x", TRIAL);
     expect(r.status).toBe(402);
     const body = await r.json();
-    expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(body);
+    expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(paymentRequiredHeaderPayload(body));
     const ext = body.extensions["sign-in-with-x"];
     expect(ext.info).toMatchObject({ domain: "lumi.test", uri: BASE + "/v1/verdict?url=https://a.example/x", version: "1", statement: TRIAL_STATEMENT, resources: [BASE + "/v1/verdict?url=https://a.example/x"] });
     expect(ext.supportedChains).toEqual([{ chainId: "eip155:84532", type: "eip191" }, { chainId: "xrpl:1", type: "xrpl" }]);

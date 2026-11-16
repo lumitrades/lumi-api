@@ -31,7 +31,7 @@ describe("trust check first", () => {
 });
 
 describe("example result in trust-route 402 quotes", () => {
-  it("high-value check, verdict and batch check carry a labelled example (body == header); other routes do not", async () => {
+  it("high-value check, verdict and batch check carry a labelled example in the body (not the header); other routes do not", async () => {
     const app = mk();
     const seen: string[] = [];
     for (const e of PAID_ENDPOINTS) {
@@ -42,14 +42,15 @@ describe("example result in trust-route 402 quotes", () => {
       expect(h.length).toBeLessThan(8000);
       const fromHeader = decodeB64Json(h);
       const body = await r.json() as any;
-      expect(body.example_result).toEqual(fromHeader.example_result);
+      expect(fromHeader.example_result).toBeUndefined();
       if (["high_value_check", "verdict", "batch_check"].includes(e.route)) {
         seen.push(e.route);
         expect(body.example_result.label).toBe(EXAMPLE_RESULT_LABEL);
         expect(body.example_result.label).toMatch(/^EXAMPLE/);
         // placeholder sellers only, never a real seller's verdict
         expect(JSON.stringify(body.example_result.result)).not.toMatch(/https?:\/\/(?![a-z.]*example\.(com|org))/);
-        // the example never leaks into what clients echo back to the facilitator
+        // the example never leaks into the header (what clients echo back to the facilitator)
+        expect(JSON.stringify(fromHeader)).not.toContain("EXAMPLE only");
         expect(JSON.stringify(body.resource)).not.toContain("EXAMPLE only");
         expect(JSON.stringify(body.accepts)).not.toContain("EXAMPLE only");
       } else {
@@ -66,7 +67,7 @@ describe("example result in trust-route 402 quotes", () => {
     const r = await get(app, "/v1/verdict?url=" + encodeURIComponent("https://api.agentweather.io/v1/pulse/facilitator"));
     expect(r.status).toBe(402);
     const body = await r.json() as any;
-    expect(body.example_result).toEqual(decodeB64Json(r.headers.get("PAYMENT-REQUIRED")!).example_result);
+    expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED")!).example_result).toBeUndefined();
     expect(body.example_result.label).toBe(EXAMPLE_RESULT_LABEL);
     expect(body.example_result.result.label).toBe("checks_passed");
   });

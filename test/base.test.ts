@@ -10,6 +10,7 @@ import {
   DATA, FACILITATOR, PAY_TO, NOW, fakeDurableObjectNamespace, happyFacilitator, jsonResponse, makeFetch, paymentHeaderFor,
   decodeB64Json, type FakeFacilitator,
 } from "./helpers";
+import { paymentRequiredHeaderPayload } from "../src/x402";
 
 const EVM_PAY_TO = "0x5E617bac19912e6d212CB303ae84655E9E203532";
 const EVM_FAC = "https://evm-facilitator.test";
@@ -102,7 +103,7 @@ describe("Base USDC in the 402", () => {
       const r = await get(path);
       expect(r.status).toBe(402);
       const body = await r.json();
-      expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(body);
+      expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(paymentRequiredHeaderPayload(body));
       expect(PaymentRequiredV2Schema.safeParse(body).success).toBe(true);
       expect(body.accepts.map((a: any) => a.network)).toEqual(["eip155:84532", "xrpl:1", "xrpl:1", "xrpl:1"]);
       const b = body.accepts[0];

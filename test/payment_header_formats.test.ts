@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import { parsePaymentHeader, paymentHeaderProblem } from "../src/payment_header";
 import { DATA, NOW, FACILITATOR, PAY_TO, PAYER, makeFetch, happyFacilitator, jsonResponse, paymentHeaderFor, decodeB64Json } from "./helpers";
+import { paymentRequiredHeaderPayload } from "../src/x402";
 
 // 2026-10-28: Scout's refused-payment events (lumi-deploy-check v1 + junk, x402lint junk) showed v1 payloads refused as
 // the misleading invalid_payment_signature_header and no hint of the expected format. These pin the accepted formats,
@@ -66,8 +67,8 @@ describe("402 refusals for unusable payment headers", () => {
       expect(body.payment_help.expected.encoding).toMatch(/base64/);
       expect(body.payment_help.example.decoded).toMatchObject({ x402Version: 2 });
       expect(body.payment_help.note).toMatch(/Not charged/);
-      // header and body stay identical (canonical), so SDKs reading PAYMENT-REQUIRED see the same help
-      expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(body);
+      // payment_help is body-only (header budget); the header still re-quotes accepts so an SDK can retry
+      expect(decodeB64Json(r.headers.get("PAYMENT-REQUIRED"))).toEqual(paymentRequiredHeaderPayload(body));
       expect(fac.calls).toEqual([]);
     });
   }

@@ -519,12 +519,57 @@ export function json(status: number, body: unknown, headers: Record<string, stri
   });
 }
 
+/**
+ * Lumi-only 402 fields that stay in the JSON body. The PAYMENT-REQUIRED header is the x402 v2
+ * PaymentRequired (version, error, resource, accepts, extensions) plus `how_to_pay` when a Base
+ * option is offered. Clients and the Bazaar need those header fields; the body-only keys are
+ * documentation and would push a long-URL quote over the ~8,400-char soft limit.
+ */
+export const PAYMENT_REQUIRED_BODY_ONLY_KEYS = [
+  "example_result",
+  "samples",
+  "note",
+  "trial",
+  "trial_key",
+  "first_check_refund",
+  "payment_help",
+] as const;
+
+/** Soft cap for the base64 PAYMENT-REQUIRED header: stay comfortably under this for worst-case quotes. */
+export const PAYMENT_REQUIRED_HEADER_SOFT_LIMIT = 8400;
+
+/**
+ * Header payload: the 402 body minus Lumi-only keys. Shared so tests can compare header and body.
+ * When a sign-in-with-x challenge is present, the header also drops bazaar and the SIWX
+ * `schema` / `lumi_trial` docs: official SIWX clients only need `info` and `supportedChains`,
+ * and bazaar + the full SIWX block together exceed the soft limit on a long resource URL.
+ * The body still carries the complete extensions (bazaar, schema, lumi_trial).
+ */
+export function paymentRequiredHeaderPayload(body: Record<string, unknown>): Record<string, unknown> {
+  const header: Record<string, unknown> = { ...body };
+  for (const k of PAYMENT_REQUIRED_BODY_ONLY_KEYS) delete header[k];
+  const extIn = header.extensions;
+  if (extIn && typeof extIn === "object" && !Array.isArray(extIn)) {
+    const extensions: Record<string, unknown> = { ...(extIn as Record<string, unknown>) };
+    const siwx = extensions["sign-in-with-x"];
+    if (siwx && typeof siwx === "object" && !Array.isArray(siwx)) {
+      const slim: Record<string, unknown> = { ...(siwx as Record<string, unknown>) };
+      delete slim.lumi_trial;
+      delete slim.schema;
+      extensions["sign-in-with-x"] = slim;
+      delete extensions.bazaar;
+    }
+    header.extensions = extensions;
+  }
+  return header;
+}
+
 export async function paymentRequiredResponse(cfg: Config, quote: Quote, error: string, extra?: Record<string, unknown>): Promise<Response> {
-  // Body uses the same canonical (sorted-key) order as the header, so naive string comparisons of the two match.
   const pr = await buildPaymentRequired(cfg, quote, error);
   const body = JSON.parse(canonicalJson(extra ? { ...pr, ...extra } : pr));
+  const header = paymentRequiredHeaderPayload(body);
   return json(402, body, {
-    [HEADER_PAYMENT_REQUIRED]: encodeHeader(body),
+    [HEADER_PAYMENT_REQUIRED]: encodeHeader(header),
     "Cache-Control": "no-store",
     ...(quote.samplesUrl ? { Link: `<${quote.samplesUrl}>; rel="describedby"; title="free samples"` } : {}),
   });

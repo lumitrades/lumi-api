@@ -1,8 +1,8 @@
 /**
- * Short, labelled sample results carried in the 402 quote of the trust routes (2026-10-28), so a buyer sees what it
+ * Short, labelled sample results carried in the 402 body of the trust routes (2026-10-28), so a buyer sees what it
  * gets before paying. Real-shaped (same field names and real reason codes as the paid answer) but invented, on
- * placeholder example.com sellers, never a real seller's verdict. Kept very short: the quote is also sent base64 in the
- * PAYMENT-REQUIRED header, which must stay under 8 KB (test/cdp.test.ts).
+ * placeholder example.com sellers, never a real seller's verdict. Body-only: not copied into the PAYMENT-REQUIRED
+ * header, which must stay under the 8,400-char soft limit (test/payment_required_header_size.test.ts).
  */
 import type { PaidRoute } from "./config";
 
