@@ -970,7 +970,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
     on: () => fleetGuardOn(d.env),
     discovery(base: string) {
       if (!fleetGuardOn(d.env)) return [];
-      return [{ name: "Wallet pattern check (fleet guard)", url: `${base}/v1/fleet/check?subject=api.example.com`, mimeType: "application/json", method: "GET", description: `Dated pattern-match label (automated cluster / no match / insufficient data) for a payer or seller identifier. ${FLEET_GUARD.priceUsd} USD per call on XRPL or Stellar, cache 1h${keySecret() ? `; ${FLEET_PACK_TEXT} The pack is also payable in Base USDC.` : ""}. Not OFAC/AML screening, not a consumer report.` }];
+      return [{ name: "Wallet pattern check (fleet guard)", url: `${base}/v1/fleet/check?subject=api.example.com`, mimeType: "application/json", method: "GET", description: `Dated pattern-match label (automated cluster / no match / insufficient data) for a payer or seller identifier. ${FLEET_GUARD.priceUsd} USD per call on XRPL or Stellar, cache 1h${keySecret() ? `; ${FLEET_PACK_TEXT} The pack is also payable in Base USDC` : ""}. Not OFAC/AML screening, not a consumer report.` }];
     },
     methodology: (base: string) => methodology(base),
     async handle(request: Request, path: string, base: string, ctx?: { waitUntil(p: Promise<unknown>): void }): Promise<Response | null> {
