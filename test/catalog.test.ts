@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createApp } from "../src/app";
-import { toListing, normalizeUrl, normalizeDomain, registrableDomain, MemoryCatalogStore, probeRow, LABELS, INGEST_PAGE, INGEST_PASS_RUNS } from "../src/trust/catalog";
+import { toListing, normalizeUrl, normalizeDomain, registrableDomain, MemoryCatalogStore, probeRow, LABELS, INGEST_PAGE, INGEST_PASS_RUNS, EXTERNAL_SOURCES, sourceMeta } from "../src/trust/catalog";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch } from "./helpers";
 
 const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", OWNER_MCP_KEY: "k".repeat(52) };
@@ -267,6 +267,21 @@ describe("external free directories (ext:* sources)", () => {
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ ok: true, received: 2, valid: 1, written: 1 });
     expect(store.rows.map((x) => [x.domain, x.source])).toEqual([["svc.example.net", "ext:402index"]]);
+  });
+  it("accepts the eight sources added 2026-11-19, each tagged discovery-seed only", async () => {
+    const added = ["ext:circle", "ext:ultravioleta", "ext:goplausible", "ext:openfacilitator", "ext:p2flux", "ext:openx402", "ext:kobaru", "ext:algovoi"];
+    expect(EXTERNAL_SOURCES.length).toBe(14);
+    for (const src of added) {
+      expect((EXTERNAL_SOURCES as readonly string[]).includes(src)).toBe(true);
+      expect(sourceMeta(src)).toMatchObject({ source: src, source_licence: "seed_only", discovery_seed: true });
+    }
+    const store = new MemoryCatalogStore();
+    const app = createApp(ENV as any, { fetch: catalogFetch(makeFetch(happyFacilitator())), now: () => NOW, catalogStore: store, queue: { sendBatch: async () => {} } });
+    for (const [i, src] of added.entries()) {
+      const r = await app.fetch(new Request(BASE + "/v1/trust/catalog/external", { method: "POST", headers: { ...owner, "Content-Type": "application/json" }, body: JSON.stringify({ source: src, items: [ext(`https://svc${i}.example.net/x`)] }) }));
+      expect(r.status, src).toBe(200);
+    }
+    expect(store.rows.map((x) => x.source).sort()).toEqual([...added].sort());
   });
   it("a listing without a payTo gets no pay-to signal from a quote check", async () => {
     const row: any = { id: 1, resource: "https://svc.example.net/x", domain: "svc.example.net", method: "GET", body: null, pay_tos: "", price_usd: "0.01" };

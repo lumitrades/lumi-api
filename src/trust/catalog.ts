@@ -26,9 +26,13 @@ export const INGEST_PASS_RUNS = 12;
 /** Catalog row source for listings that come from the CDP Bazaar ingest. Other free directories use "ext:<name>". */
 export const CDP_SOURCE = "cdp_bazaar";
 /** Free public x402 directories (owner-approved 2026-10-26) fed by the operator box job catalog_sources.py. */
-export const EXTERNAL_SOURCES = ["ext:saylor", "ext:payai", "ext:thirdweb", "ext:402index", "ext:x402list", "ext:dexter"] as const;
+export const EXTERNAL_SOURCES = [
+  "ext:saylor", "ext:payai", "ext:thirdweb", "ext:402index", "ext:x402list", "ext:dexter",
+  // owner-approved 2026-11-19 (Bobby, 9:58 CT): eight more free public x402 directories / facilitator listings
+  "ext:circle", "ext:ultravioleta", "ext:goplausible", "ext:openfacilitator", "ext:p2flux", "ext:openx402", "ext:kobaru", "ext:algovoi",
+] as const;
 /** Directories used only as discovery seeds: Lumi does not sublicense their copied metadata (Quill MF5). */
-export const SEED_ONLY_SOURCES = new Set<string>(["ext:saylor", "ext:payai", "ext:thirdweb", "ext:402index", "ext:dexter"]);
+export const SEED_ONLY_SOURCES = new Set<string>(["ext:saylor", "ext:payai", "ext:thirdweb", "ext:402index", "ext:dexter", "ext:circle", "ext:ultravioleta", "ext:goplausible", "ext:openfacilitator", "ext:p2flux", "ext:openx402", "ext:kobaru", "ext:algovoi"]);
 export const X402LIST_SOURCE = "ext:x402list";
 export const X402LIST_ATTRIBUTION = "Data: x402-list.com (CC BY 4.0)";
 export const X402LIST_LICENCE_URL = "https://creativecommons.org/licenses/by/4.0/";
