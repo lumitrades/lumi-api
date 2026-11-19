@@ -42,6 +42,7 @@ import { D1ReceiptStore, MemoryReceiptStore, type ReceiptStore } from "./trust/r
 import { createContributors, D1ContributorStore, MemoryContributorStore, type ContributorStore, type Contributors, type ContribQueue } from "./trust/contributors";
 import { productSample, sampleEntry, SAMPLE_ARGS, SAMPLE_LABEL } from "./samples";
 import { applyRate, createXrpPricer, type XrpPricer } from "./pricing";
+import { createFleetGuard, D1FleetGuardStore, MemoryFleetGuardStore, FLEET_KEY_HEADER, type FleetGuardStore } from "./fleet_guard";
 import { D1TrafficStore, MemoryTrafficStore, TRAFFIC_RETENTION_DAYS, TrafficBuffer, trafficRow, trafficSummary, paymentHeaderOf, payFailFrom, type TrafficStore } from "./traffic";
 import { D1FeedStore, MemoryFeedStore, FEEDS, dueFeed, refreshFeed, feedFresh, type FeedStore } from "./feeds";
 import { fundingView, fearGreedView, fearGreedFromContext, trustVerdict } from "./quick";
@@ -116,6 +117,8 @@ export interface AppOptions {
   idempotencyStore?: IdempotencyStore;
   /** Lumi Check contributor store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   contributorStore?: ContributorStore;
+  /** Fleet guard store (tests); D1 when TRUST_DB is bound. */
+  fleetGuardStore?: FleetGuardStore;
   /** Seller customer-activity store override (tests). Default: D1 (TRUST_DB) when bound, else in-memory. */
   activityStore?: ActivityStore;
   probeStore?: ProbeStore;
@@ -993,6 +996,16 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     return json(200, { kind: "tested_badge_verdict", ...payload, signed, note: "Earned only, never sold. Re-evaluated from the live score on every request; removed automatically when a rule above stops holding (score drop, failed latest test-buy, or no conclusive Lumi test-buy for 30 days). Check the signature and expires_at; a copied image proves nothing." }, headers);
   }
   const ownHosts = new Set(["api.lumitrades.io", ...(config.publicBaseUrl ? [new URL(config.publicBaseUrl).hostname] : [])]);
+  const fleetGuard = createFleetGuard({
+    cfg: config,
+    env,
+    store: opts.fleetGuardStore ?? (env.TRUST_DB ? new D1FleetGuardStore(env.TRUST_DB) : new MemoryFleetGuardStore()),
+    counter: opts.quotaCounter ?? (env.INVOICE_GUARD ? new DurableObjectQuotaCounter(env.INVOICE_GUARD) : new MemoryQuotaCounter(now)),
+    paywall: (ctx) => paywallDeps(ctx),
+    isOwner: ownerReq,
+    now,
+    log: (e) => deps.log?.(e),
+  });
   const commerce = createCommerce({
     sanctions,
     store: commerceStore,
@@ -1528,7 +1541,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
           : {
               "Access-Control-Allow-Origin": "*",
               "Access-Control-Allow-Methods": "GET, OPTIONS",
-              "Access-Control-Allow-Headers": "PAYMENT-SIGNATURE, X-PAYMENT, SIGN-IN-WITH-X, X-Lumi-Trial, X-Lumi-Trial-Key, Idempotency-Key, Content-Type",
+              "Access-Control-Allow-Headers": `PAYMENT-SIGNATURE, X-PAYMENT, SIGN-IN-WITH-X, X-Lumi-Trial, X-Lumi-Trial-Key, Idempotency-Key, Content-Type${fleetGuard.on() ? `, ${FLEET_KEY_HEADER}, X-Lumi-Wallet` : ""}`,
               "Access-Control-Max-Age": "86400",
             },
       });
@@ -1609,6 +1622,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       if (path === "/v1/badge") return json(200, badgeDocs(base, badgeThresholds(env)), { "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" });
       const eb = /^\/v1\/badge\/([^/]{1,200})\.(json|svg)$/.exec(path);
       if (eb) { const k = safeDecode(eb[1]); if (k) return earnedBadge(k, eb[2] as "json" | "svg", base); }
+    }
+    // Fleet guard (off unless FLEET_GUARD=on): paid x402 fleet-membership check, prepaid keys, capped free check.
+    if (path.startsWith("/v1/fleet")) {
+      const r = await fleetGuard.handle(request, path, base, ctx);
+      if (r) return r;
     }
     // Seller monitoring + data licence feed (free docs/signup, x402 plans, keyed feed, owner routes).
     {
@@ -1829,7 +1847,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       case "/.well-known/agent.json":
         return json(200, agentCard(config, base), { "Cache-Control": "public, max-age=300" });
       case "/.well-known/x402":
-        return json(200, wellKnownX402(config, base), { "Cache-Control": "public, max-age=300" });
+      {
+        const wk = wellKnownX402(config, base);
+        const extra = fleetGuard.discovery(base);
+        return json(200, extra.length ? { ...wk, resources: [...wk.resources, ...extra] } : wk, { "Cache-Control": "public, max-age=300" });
+      }
       case "/.well-known/mcp/server-card.json":
       case "/.well-known/mcp.json":
         return json(200, mcpServerCard(base), { "Cache-Control": "public, max-age=300" });
@@ -2135,6 +2157,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       // matched; see isNightlyTick.
       const nightly = isNightlyTick(now());
       const contribPurge = nightly ? contributors.purge().catch(() => {}) : Promise.resolve();
+      if (nightly && fleetGuard.on()) await fleetGuard.purge().catch((e) => deps.log?.({ event: "fleet_guard_purge_error", error: String(e).slice(0, 120) }));
       const prune = Promise.all([trafficBuf.flush().catch(trafficErr), (nightly ? outcomes.nightly().then((r) => deps.log?.({ event: "check_outcomes_nightly", ...r, rolled: r.rolled.length, rerolled: r.rerolled.length, purged_days: r.purged_days.length })) : outcomes.flush()).catch(() => {}), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge]);
       const [probes, cat, , com] = await Promise.allSettled([trust.runProbes(), catalog.cron(), prune, commerce.cron(config.publicBaseUrl ?? "https://api.lumitrades.io")]);
       return {

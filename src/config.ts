@@ -47,6 +47,12 @@ export interface Env {
   PRIVATE_NAMES?: string;
   /** Owner access key for the remote MCP endpoint (/mcp): paid tools return data free. `wrangler secret put OWNER_MCP_KEY`. */
   OWNER_MCP_KEY?: string;
+  /** Fleet guard (src/fleet_guard.ts): exactly "on" enables /v1/fleet/*; anything else = off (routes not handled, not listed). */
+  FLEET_GUARD?: string;
+  /** Fleet guard keyed-HMAC secret (>= 32 chars) for payer / member / IP hashes. `wrangler secret put FLEET_GUARD_HMAC_SECRET`. Unset = 503, never charged. */
+  FLEET_GUARD_HMAC_SECRET?: string;
+  /** Fleet guard flat monthly plan ($49 / 30 days, fair-use cap): exactly "on" offers it; default off (owner decision). */
+  FLEET_GUARD_MONTHLY?: string;
   /** Lumi Check v0: ed25519 seed (64 hex) that signs check responses and badge verdicts. Not a wallet key and not an admin credential (must differ from CONTRIB_ADMIN_KEY / OWNER_MCP_KEY). Its PUBLIC key must be pinned in src/trust/lumi_keys.ts. Set at deploy time with `wrangler secret put LUMI_CHECK_SIGNING_KEY` (docs/lumi-check-keys.md). Unset = unsigned (signature null). */
   LUMI_CHECK_SIGNING_KEY?: string;
   /** Tested-by-Lumi badge thresholds. Defaults (approved): score 80 and 3 conclusive paid Lumi test-buys. */
