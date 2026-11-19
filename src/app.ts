@@ -76,7 +76,7 @@ import { liveProbe, liveAlertView, LIVE_ALERT_PREFIX, LIVE_CHECK_NOTE, type Live
 import { createActivity, activityPublic, activityOwnerView, activityFlags, qualifyOrganicPayers, D1ActivityStore, MemoryActivityStore, type ActivityStore } from "./trust/activity";
 import { CONTACT_EMAIL } from "./trust/index";
 import { D1SalesStore, MemorySalesStore, firstHighValueRefunds, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, DEFERRED_ALERT_ROUTES, DEFERRED_ALERT_WAIT_MS, REFUSED_ALERT_NOTE, type SalesStore, type AlertConfig, type SaleOutcome } from "./sales";
-import { bindPayer, erasePayer, hmacPayerAll, inventoryPayer, memoryStoresFrom, payerSecretsFromEnv, purgeCustomerPayers, submittedWallet } from "./payer_retention";
+import { bindPayer, erasePayer, hmacPayer, hmacPayerAll, inventoryPayer, memoryStoresFrom, payerSecretsFromEnv, purgeCustomerPayers, submittedWallet } from "./payer_retention";
 
 export interface AppOptions {
   /** OFAC SDN address snapshot override (tests); default = bundled data/ofac_sdn_addresses.json (+ optional SANCTIONS_KV). */
@@ -1733,22 +1733,16 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       return json(400, { error: "invalid_action", allowed: ["approve", "reject", "appeal"] }, noStore);
     }
     // Owner-only access / deletion of customer payer data, keyed by a submitted wallet (Authorization: Bearer <OWNER_MCP_KEY>).
-    // Prefer POST {wallet} so the address is not in the URL. GET ?wallet= is also accepted. Raw addresses are never returned.
+    // POST {wallet} only, so the address is not in the URL. Raw addresses are never returned.
     if (path === "/v1/owner/payer-data" || path === "/v1/owner/payer-data/delete") {
       const bearerTok = /^Bearer\s+(.+)$/i.exec(request.headers.get("Authorization") ?? "")?.[1]?.trim();
       if (!bearerTok || !(await isOwnerKey(bearerTok, env.OWNER_MCP_KEY))) {
         return json(401, { error: "owner_key_required", hint: "Authorization: Bearer <OWNER_MCP_KEY>" }, { "Cache-Control": "no-store", "WWW-Authenticate": "Bearer" });
       }
-      const erase = path === "/v1/owner/payer-data/delete";
-      if (erase && request.method !== "POST") return json(405, { error: "method_not_allowed", hint: "POST {wallet}" }, { "Cache-Control": "no-store", Allow: "POST" });
-      if (!erase && request.method !== "GET" && request.method !== "POST") return json(405, { error: "method_not_allowed", hint: "GET ?wallet= or POST {wallet}" }, { "Cache-Control": "no-store", Allow: "GET, POST" });
-      let walletRaw: unknown = url.searchParams.get("wallet");
-      if (request.method === "POST") {
-        const b = await request.json().catch(() => null) as Record<string, unknown> | null;
-        if (b && "wallet" in b) walletRaw = b.wallet;
-      }
-      const wallet = submittedWallet(walletRaw);
-      if (!wallet) return json(400, { error: "wallet_required", hint: "Submit the wallet address in the JSON body as {wallet}, preferably not as a query string." }, { "Cache-Control": "no-store" });
+      if (request.method !== "POST") return json(405, { error: "method_not_allowed", hint: "POST {wallet}" }, { "Cache-Control": "no-store", Allow: "POST" });
+      const b = await request.json().catch(() => null) as Record<string, unknown> | null;
+      const wallet = submittedWallet(b && "wallet" in b ? b.wallet : undefined);
+      if (!wallet) return json(400, { error: "wallet_required", hint: "Submit the wallet address in the JSON body as {wallet}." }, { "Cache-Control": "no-store" });
       const secrets = payerSecretsFromEnv(env);
       const common = {
         db: env.TRUST_DB,
@@ -1759,6 +1753,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         now: now(),
         wallet,
       };
+      const erase = path === "/v1/owner/payer-data/delete";
       if (erase) {
         const r = await erasePayer(common);
         deps.log?.({ event: "payer_erasure", raw_nulled: r.raw_nulled, matched: r.matched, tables: r.tables });
@@ -2048,7 +2043,11 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         if (stale) return stale;
         const r = await runTrial(request, siwxHeader, trialUri, route);
         if (r.ok) {
-          deps.log?.({ event: "trial_call", route, wallet: r.wallet, used: r.used });
+          const trialLog: Record<string, unknown> = { event: "trial_call", route, used: r.used };
+          if (config.payerHmacSecret) {
+            trialLog.wallet_hmac_prefix = (await hmacPayer(config.payerHmacSecret, r.wallet)).slice(0, 12);
+          }
+          deps.log?.(trialLog);
           if (prep.onServed) {
             // A free trial trust/check sends exactly the same priority signal as a paid one.
             const p = prep.onServed().catch((e) => deps.log?.({ event: "buy_queue_error", error: String(e) }));
@@ -2218,9 +2217,13 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
             secretPrev: config.payerHmacSecretPrev,
             retentionDays: config.payerRetentionDays,
             now: now(),
+            purgeOn: config.payerPurge,
+            maxRows: config.payerPurgeMaxRows,
+            otherSecrets: [env.INVOICE_SECRET, config.invoiceSecret, env.FLEET_GUARD_HMAC_SECRET, env.FLEET_GUARD_HMAC_SECRET_PREV, env.FLEET_GUARD_KEY_SECRET],
+            log: deps.log,
           }).then((r) => {
             payerRetention = r;
-            deps.log?.({ event: "payer_retention_purge", ...r });
+            if (!r.skipped) deps.log?.({ event: "payer_retention_purge", ...r });
             return r;
           }).catch((e) => {
             const err = { error: String(e).slice(0, 200) };

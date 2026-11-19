@@ -171,10 +171,14 @@ export interface Env {
   TRAFFIC_SALT?: string;
   /** HMAC-SHA256 key (>= 32 chars) for customer wallet matching after raw addresses are nulled. `wrangler secret put PAYER_HMAC_SECRET`. Missing or short = feed-key bind/signup returns 503 (not charged); sales still record. */
   PAYER_HMAC_SECRET?: string;
-  /** Previous PAYER_HMAC_SECRET during a rotation (>= 32 chars). Lookups and owner access/deletion also match hashes made with it. Remove 90 days after rotating. */
+  /** Previous PAYER_HMAC_SECRET during a rotation (>= 32 chars). Lookups and owner access/deletion also match hashes made with it. Keep this set as long as any purged row still carries an HMAC made with the old secret. A rotation without PREV resets trial caps and wallet-to-key lookup for those rows. */
   PAYER_HMAC_SECRET_PREV?: string;
   /** Days to keep a raw customer wallet after the later of the last payment or key/plan expiry. Default 90. Integer 1..3650. */
   PAYER_RETENTION_DAYS?: string;
+  /** Exactly "on" nulls raw wallets on the nightly tick. Committed default is "off": backfill/re-hash only, plus a dry-run would-purge count. */
+  PAYER_PURGE?: string;
+  /** Optional cap on payer-retention writes (backfill + rotate + null) per nightly tick. Default 500, integer 1..10000. */
+  PAYER_PURGE_MAX_ROWS?: string;
 }
 
 /** Minimal Cloudflare D1 surface used by the trust store. */
@@ -311,6 +315,10 @@ export interface Config {
   payerHmacSecretPrev?: string;
   /** Raw-wallet retention window in days (default 90). */
   payerRetentionDays: number;
+  /** True only when PAYER_PURGE is exactly "on". */
+  payerPurge: boolean;
+  /** Max payer-retention writes per nightly tick (default 500). */
+  payerPurgeMaxRows: number;
 }
 
 export type EvmNetwork = "eip155:8453" | "eip155:84532";
@@ -661,6 +669,11 @@ export function loadConfig(env: Env): Config {
     payerRetentionDays: (() => {
       const n = env.PAYER_RETENTION_DAYS == null || String(env.PAYER_RETENTION_DAYS).trim() === "" ? NaN : Number(env.PAYER_RETENTION_DAYS);
       return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : 90;
+    })(),
+    payerPurge: (env.PAYER_PURGE || "").trim() === "on",
+    payerPurgeMaxRows: (() => {
+      const n = env.PAYER_PURGE_MAX_ROWS == null || String(env.PAYER_PURGE_MAX_ROWS).trim() === "" ? NaN : Number(env.PAYER_PURGE_MAX_ROWS);
+      return Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : 500;
     })(),
   };
 }

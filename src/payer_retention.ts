@@ -6,6 +6,22 @@
  * (or created_at / last rotation when a free key has no expiry). Configurable via
  * PAYER_RETENTION_DAYS. Accounting fields (tx, amount, asset, date, route) are kept.
  * Logs and the sale-alert webhook never include a raw payer. No secrets are logged.
+ *
+ * Safeguards: the nightly tick is a no-op purge unless PAYER_HMAC_SECRET is set
+ * (>= 32 chars) and does not reuse INVOICE_SECRET, FLEET_GUARD_HMAC_SECRET,
+ * FLEET_GUARD_HMAC_SECRET_PREV or FLEET_GUARD_KEY_SECRET. PAYER_PURGE must be
+ * exactly "on" to null raw wallets; when off (the committed default) the tick
+ * only backfills / re-hashes HMACs and logs a dry-run count. A row whose HMAC
+ * is empty is never nulled.
+ *
+ * Rotation: while a raw wallet still exists, each tick re-hashes it under the
+ * current secret. Lookups also try PAYER_HMAC_SECRET_PREV. Keep PREV as long as
+ * any already-purged row still carries an HMAC made with the old secret;
+ * removing PREV without that, or rotating without setting PREV, resets trial
+ * caps and wallet-to-key lookup for those rows.
+ *
+ * The D1 purge is paged (LIMIT) and set-based, and a per-tick row cap keeps the
+ * 03:00 cron from starving fleet-guard, outcomes and contributor jobs.
  */
 import type { D1Like } from "./config";
 import type { SaleRow } from "./sales";
@@ -25,6 +41,37 @@ export function payerRetentionDays(raw?: string | null): number {
 
 export function payerHmacSecretOk(secret?: string | null): secret is string {
   return typeof secret === "string" && secret.trim().length >= MIN_PAYER_HMAC_SECRET_LEN;
+}
+
+/** Exact wrangler value "on" (after trim). Anything else, including unset, is off. */
+export function payerPurgeOn(raw?: string | null): boolean {
+  return (raw ?? "").trim() === "on";
+}
+
+export const DEFAULT_PAYER_PURGE_MAX_ROWS = 500;
+export const PAYER_PURGE_PAGE_SIZE = 100;
+
+export function payerPurgeMaxRows(raw?: string | null): number {
+  const n = raw == null || String(raw).trim() === "" ? NaN : Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : DEFAULT_PAYER_PURGE_MAX_ROWS;
+}
+
+/**
+ * True when the payer HMAC secret equals an invoice or fleet-guard secret.
+ * The nightly purge must skip in that case (do not hash customer wallets under a shared key).
+ */
+export function payerSecretReused(payerSecret: string | undefined | null, others: Array<string | undefined | null>): boolean {
+  if (!payerHmacSecretOk(payerSecret)) return false;
+  const p = payerSecret.trim();
+  return others.some((s) => typeof s === "string" && s.trim() !== "" && s.trim() === p);
+}
+
+function hmacFilled(h?: string | null): boolean {
+  return !!(h && h.trim());
+}
+
+function rawFilled(r?: string | null): boolean {
+  return !!(r && r.trim());
 }
 
 /** Lowercase + trim so EVM checksums and mixed-case XRPL/Stellar forms match one HMAC. */
@@ -88,12 +135,26 @@ export interface TableCounts {
   trial_uses: number;
 }
 
+export type PayerPurgeSkipReason = "payer_purge_skipped_no_secret" | "payer_purge_skipped_secret_reused";
+
 export interface PurgeResult {
   retention_days: number;
   backfilled: TableCounts;
   nulled: TableCounts;
   /** Always true: tx, amount, asset, date and route are left in place. */
   kept_accounting: true;
+  /** Set when the tick returned before any write (missing/short or reused secret). */
+  skipped?: PayerPurgeSkipReason;
+  /** Rows whose HMAC was rewritten under the current secret (raw still present). */
+  rotated?: TableCounts;
+  /** PAYER_PURGE is not "on": raw wallets were not nulled. */
+  dry_run?: boolean;
+  /** Count of rows that would have been nulled when dry_run is true. */
+  would_purge?: TableCounts;
+  /** The per-tick write cap was hit; more rows remain for a later tick. */
+  truncated?: boolean;
+  processed?: number;
+  max_rows?: number;
 }
 
 export interface PayerRecord {
@@ -141,6 +202,13 @@ export interface PayerRetentionOpts {
   secretPrev?: string;
   retentionDays: number;
   now: number;
+  /** When false or omitted, backfill/re-hash only and report would_purge. Tests that assert a real null must pass true. */
+  purgeOn?: boolean;
+  /** Max D1/memory row writes (backfill + rotate + null) per tick. Default 500. */
+  maxRows?: number;
+  /** Compared against PAYER_HMAC_SECRET (and PREV); a match skips the tick. */
+  otherSecrets?: Array<string | undefined | null>;
+  log?: (rec: Record<string, unknown>) => void;
 }
 
 export interface PayerMemoryStores {
@@ -166,40 +234,77 @@ async function hashOpen(secret: string | undefined, addr: string | null | undefi
 
 // ---------------------------------------------------------------- memory path
 
-export async function backfillMemory(stores: PayerMemoryStores, secret: string | undefined): Promise<TableCounts> {
-  const out = copyCounts();
-  if (!payerHmacSecretOk(secret)) return out;
-  const fill = async (raw: string | null | undefined, existing: string | null | undefined): Promise<string | null | undefined> => {
-    if (existing && existing.trim()) return existing;
-    if (!raw || !raw.trim()) return existing ?? null;
-    return hmacPayer(secret, raw);
+export async function backfillMemory(stores: PayerMemoryStores, secret: string | undefined, budget?: { remaining: number }): Promise<{ backfilled: TableCounts; rotated: TableCounts; truncated: boolean }> {
+  const backfilled = copyCounts();
+  const rotated = copyCounts();
+  if (!payerHmacSecretOk(secret)) return { backfilled, rotated, truncated: false };
+  const take = (): boolean => {
+    if (!budget) return true;
+    if (budget.remaining <= 0) return false;
+    budget.remaining--;
+    return true;
+  };
+  const apply = async (raw: string | null | undefined, existing: string | null | undefined): Promise<{ next: string | null | undefined; kind: "backfill" | "rotate" | "ok" } | "capped"> => {
+    if (!rawFilled(raw)) return { next: existing ?? null, kind: "ok" };
+    const want = await hmacPayer(secret, raw!);
+    if (!hmacFilled(existing)) {
+      if (!take()) return "capped";
+      return { next: want, kind: "backfill" };
+    }
+    if (existing!.trim() !== want) {
+      if (!take()) return "capped";
+      return { next: want, kind: "rotate" };
+    }
+    return { next: existing, kind: "ok" };
+  };
+  let truncated = false;
+  const bump = (table: keyof TableCounts, kind: "backfill" | "rotate" | "ok") => {
+    if (kind === "backfill") backfilled[table]++;
+    else if (kind === "rotate") rotated[table]++;
   };
   if (stores.sales) {
     for (const r of stores.sales.rows) {
-      if (r.payer && !r.payerHmac) { r.payerHmac = await hmacPayer(secret, r.payer); out.sales++; }
+      const a = await apply(r.payer, r.payerHmac);
+      if (a === "capped") { truncated = true; break; }
+      r.payerHmac = a.next ?? null;
+      bump("sales", a.kind);
     }
   }
-  if (stores.commerce) {
+  if (stores.commerce && !truncated) {
     for (const k of stores.commerce.fkeys.values()) {
-      if ((k.wallet || k.wallet_lc) && !k.wallet_hmac) { k.wallet_hmac = await hmacPayer(secret, (k.wallet || k.wallet_lc)!); out.feed_keys++; }
+      const a = await apply(k.wallet || k.wallet_lc, k.wallet_hmac);
+      if (a === "capped") { truncated = true; break; }
+      k.wallet_hmac = a.next ?? null;
+      bump("feed_keys", a.kind);
     }
-    for (const p of stores.commerce.pays) {
-      if (p.payer && !p.payer_hmac) { p.payer_hmac = await hmacPayer(secret, p.payer); out.feed_payments++; }
+    if (!truncated) for (const p of stores.commerce.pays) {
+      const a = await apply(p.payer, p.payer_hmac);
+      if (a === "capped") { truncated = true; break; }
+      p.payer_hmac = a.next ?? null;
+      bump("feed_payments", a.kind);
     }
-    for (const p of stores.commerce.plans) {
-      if (p.payer && !p.payer_hmac) { p.payer_hmac = await hmacPayer(secret, p.payer); out.monitor_plans++; }
+    if (!truncated) for (const p of stores.commerce.plans) {
+      const a = await apply(p.payer, p.payer_hmac);
+      if (a === "capped") { truncated = true; break; }
+      p.payer_hmac = a.next ?? null;
+      bump("monitor_plans", a.kind);
     }
-    for (const p of stores.commerce.refusals) {
-      if (p.payer && !p.payer_hmac) { p.payer_hmac = await hmacPayer(secret, p.payer); out.monitor_pack_refusals++; }
+    if (!truncated) for (const p of stores.commerce.refusals) {
+      const a = await apply(p.payer, p.payer_hmac);
+      if (a === "capped") { truncated = true; break; }
+      p.payer_hmac = a.next ?? null;
+      bump("monitor_pack_refusals", a.kind);
     }
   }
-  if (stores.trials) {
+  if (stores.trials && !truncated) {
     for (const r of stores.trials.rows) {
-      if (r.wallet && !r.wallet_hmac) { r.wallet_hmac = await hmacPayer(secret, r.wallet); out.trial_uses++; }
+      const a = await apply(r.wallet, r.wallet_hmac);
+      if (a === "capped") { truncated = true; break; }
+      r.wallet_hmac = a.next ?? null;
+      bump("trial_uses", a.kind);
     }
   }
-  void fill;
-  return out;
+  return { backfilled, rotated, truncated };
 }
 
 function retainMap(stores: PayerMemoryStores): Map<string, number> {
@@ -244,42 +349,105 @@ function retainMap(stores: PayerMemoryStores): Map<string, number> {
   return m;
 }
 
-export async function purgeMemory(stores: PayerMemoryStores, opts: PayerRetentionOpts): Promise<PurgeResult> {
-  const backfilled = await backfillMemory(stores, opts.secret);
+function duePayer(retain: Map<string, number>, id: string | null, opts: PayerRetentionOpts): boolean {
+  if (!id || !retain.has(id)) return false;
+  return opts.now >= retain.get(id)! + opts.retentionDays * 86_400_000;
+}
+
+function wouldPurgeMemory(stores: PayerMemoryStores, opts: PayerRetentionOpts): TableCounts {
   const retain = retainMap(stores);
-  const cutoffOf = (id: string | null) => (id && retain.has(id) ? retain.get(id)! + opts.retentionDays * 86_400_000 : null);
-  const due = (id: string | null) => {
-    const c = cutoffOf(id);
-    return c != null && opts.now >= c;
-  };
-  const nulled = copyCounts();
-  if (stores.sales) {
-    for (const r of stores.sales.rows) {
-      if (r.payer && due(payerIdent(r.payerHmac, r.payer))) { r.payer = null; nulled.sales++; }
-    }
+  const due = (id: string | null) => duePayer(retain, id, opts);
+  const would = copyCounts();
+  if (stores.sales) for (const r of stores.sales.rows) {
+    if (rawFilled(r.payer) && hmacFilled(r.payerHmac) && due(payerIdent(r.payerHmac, r.payer))) would.sales++;
   }
   if (stores.commerce) {
     for (const k of stores.commerce.fkeys.values()) {
-      if ((k.wallet || k.wallet_lc) && due(payerIdent(k.wallet_hmac, k.wallet_lc || k.wallet))) {
-        k.wallet = null; k.wallet_lc = null; nulled.feed_keys++;
-      }
+      if (rawFilled(k.wallet || k.wallet_lc) && hmacFilled(k.wallet_hmac) && due(payerIdent(k.wallet_hmac, k.wallet_lc || k.wallet))) would.feed_keys++;
     }
     for (const p of stores.commerce.pays) {
-      if (p.payer && due(payerIdent(p.payer_hmac, p.payer))) { p.payer = null; nulled.feed_payments++; }
+      if (rawFilled(p.payer) && hmacFilled(p.payer_hmac) && due(payerIdent(p.payer_hmac, p.payer))) would.feed_payments++;
     }
     for (const p of stores.commerce.plans) {
-      if (p.payer && due(payerIdent(p.payer_hmac, p.payer))) { p.payer = null; nulled.monitor_plans++; }
+      if (rawFilled(p.payer) && hmacFilled(p.payer_hmac) && due(payerIdent(p.payer_hmac, p.payer))) would.monitor_plans++;
     }
     for (const p of stores.commerce.refusals) {
-      if (p.payer && due(payerIdent(p.payer_hmac, p.payer))) { p.payer = null; nulled.monitor_pack_refusals++; }
+      if (rawFilled(p.payer) && hmacFilled(p.payer_hmac) && due(payerIdent(p.payer_hmac, p.payer))) would.monitor_pack_refusals++;
     }
   }
-  if (stores.trials) {
+  if (stores.trials) for (const r of stores.trials.rows) {
+    if (rawFilled(r.wallet) && hmacFilled(r.wallet_hmac) && due(payerIdent(r.wallet_hmac, r.wallet))) would.trial_uses++;
+  }
+  return would;
+}
+
+export async function purgeMemory(stores: PayerMemoryStores, opts: PayerRetentionOpts): Promise<PurgeResult> {
+  const maxRows = opts.maxRows ?? DEFAULT_PAYER_PURGE_MAX_ROWS;
+  const budget = { remaining: maxRows };
+  const hashed = await backfillMemory(stores, opts.secret, budget);
+  const would = wouldPurgeMemory(stores, opts);
+  const base = {
+    retention_days: opts.retentionDays,
+    backfilled: hashed.backfilled,
+    rotated: hashed.rotated,
+    nulled: copyCounts(),
+    kept_accounting: true as const,
+    processed: maxRows - budget.remaining,
+    max_rows: maxRows,
+  };
+  if (!opts.purgeOn) {
+    return { ...base, dry_run: true, would_purge: would, truncated: hashed.truncated };
+  }
+  if (hashed.truncated) {
+    return { ...base, would_purge: would, truncated: true };
+  }
+  const retain = retainMap(stores);
+  const due = (id: string | null) => duePayer(retain, id, opts);
+  const nulled = copyCounts();
+  let truncated = false;
+  const take = (): boolean => {
+    if (budget.remaining <= 0) { truncated = true; return false; }
+    budget.remaining--;
+    return true;
+  };
+  // Never null a row whose HMAC is empty, even if it is past the retention window.
+  if (stores.sales) {
+    for (const r of stores.sales.rows) {
+      if (!rawFilled(r.payer) || !hmacFilled(r.payerHmac) || !due(payerIdent(r.payerHmac, r.payer))) continue;
+      if (!take()) break;
+      r.payer = null; nulled.sales++;
+    }
+  }
+  if (stores.commerce && !truncated) {
+    for (const k of stores.commerce.fkeys.values()) {
+      if (!rawFilled(k.wallet || k.wallet_lc) || !hmacFilled(k.wallet_hmac) || !due(payerIdent(k.wallet_hmac, k.wallet_lc || k.wallet))) continue;
+      if (!take()) break;
+      k.wallet = null; k.wallet_lc = null; nulled.feed_keys++;
+    }
+    if (!truncated) for (const p of stores.commerce.pays) {
+      if (!rawFilled(p.payer) || !hmacFilled(p.payer_hmac) || !due(payerIdent(p.payer_hmac, p.payer))) continue;
+      if (!take()) break;
+      p.payer = null; nulled.feed_payments++;
+    }
+    if (!truncated) for (const p of stores.commerce.plans) {
+      if (!rawFilled(p.payer) || !hmacFilled(p.payer_hmac) || !due(payerIdent(p.payer_hmac, p.payer))) continue;
+      if (!take()) break;
+      p.payer = null; nulled.monitor_plans++;
+    }
+    if (!truncated) for (const p of stores.commerce.refusals) {
+      if (!rawFilled(p.payer) || !hmacFilled(p.payer_hmac) || !due(payerIdent(p.payer_hmac, p.payer))) continue;
+      if (!take()) break;
+      p.payer = null; nulled.monitor_pack_refusals++;
+    }
+  }
+  if (stores.trials && !truncated) {
     for (const r of stores.trials.rows) {
-      if (r.wallet && due(payerIdent(r.wallet_hmac, r.wallet))) { r.wallet = ""; nulled.trial_uses++; }
+      if (!rawFilled(r.wallet) || !hmacFilled(r.wallet_hmac) || !due(payerIdent(r.wallet_hmac, r.wallet))) continue;
+      if (!take()) break;
+      r.wallet = ""; nulled.trial_uses++;
     }
   }
-  return { retention_days: opts.retentionDays, backfilled, nulled, kept_accounting: true };
+  return { ...base, nulled, processed: maxRows - budget.remaining, truncated: truncated || hashed.truncated };
 }
 
 function memoryMatches(stores: PayerMemoryStores, hmacs: string[], wallet: string): {
@@ -384,62 +552,82 @@ async function runCatch(db: D1Like, sql: string, ...args: unknown[]): Promise<nu
   }
 }
 
-export async function backfillD1(db: D1Like, secret: string | undefined): Promise<TableCounts> {
-  const out = copyCounts();
-  if (!payerHmacSecretOk(secret)) return out;
-  const fill = async (table: keyof TableCounts, idCol: string, rawCol: string, hmacCol: string) => {
-    const rows = await allRows<{ id: string; raw: string }>(db, `SELECT ${idCol} AS id, ${rawCol} AS raw FROM ${table} WHERE ${rawCol} IS NOT NULL AND TRIM(${rawCol}) != '' AND (${hmacCol} IS NULL OR ${hmacCol} = '')`);
-    for (const row of rows) {
-      const h = await hmacPayer(secret, row.raw);
-      out[table] += await runCatch(db, `UPDATE ${table} SET ${hmacCol} = ?2 WHERE ${idCol} = ?1 AND (${hmacCol} IS NULL OR ${hmacCol} = '')`, row.id, h);
+export async function backfillD1(db: D1Like, secret: string | undefined, budget?: { remaining: number }): Promise<{ backfilled: TableCounts; rotated: TableCounts; truncated: boolean }> {
+  const backfilled = copyCounts();
+  const rotated = copyCounts();
+  if (!payerHmacSecretOk(secret)) return { backfilled, rotated, truncated: false };
+  const page = PAYER_PURGE_PAGE_SIZE;
+  let truncated = false;
+  const take = (n = 1): boolean => {
+    if (!budget) return true;
+    if (budget.remaining < n) return false;
+    budget.remaining -= n;
+    return true;
+  };
+
+  const write = async (stmts: { sql: string; args: unknown[] }[]): Promise<number> => {
+    if (!stmts.length) return 0;
+    if (typeof db.batch === "function") {
+      const results = (await db.batch(stmts.map((st) => db.prepare(st.sql).bind(...st.args)))) as Array<{ meta?: { changes?: number } }>;
+      return (results ?? []).reduce((a, r) => a + (r?.meta?.changes ?? 0), 0);
+    }
+    let n = 0;
+    for (const st of stmts) n += await runCatch(db, st.sql, ...st.args);
+    return n;
+  };
+
+  const hashTable = async (
+    table: keyof TableCounts,
+    idCol: string,
+    rawExpr: string,
+    hmacCol: string,
+  ) => {
+    if (truncated) return;
+    let after: string | number | null = null;
+    while (true) {
+      // Still page even when remaining is 0 so we can detect leftover work for truncated.
+      const sql = after == null
+        ? `SELECT ${idCol} AS id, ${rawExpr} AS raw, ${hmacCol} AS hmac FROM ${table} WHERE ${rawExpr} IS NOT NULL AND TRIM(${rawExpr}) != '' ORDER BY ${idCol} LIMIT ${page}`
+        : `SELECT ${idCol} AS id, ${rawExpr} AS raw, ${hmacCol} AS hmac FROM ${table} WHERE ${rawExpr} IS NOT NULL AND TRIM(${rawExpr}) != '' AND ${idCol} > ?1 ORDER BY ${idCol} LIMIT ${page}`;
+      type HashRow = { id: string | number; raw: string; hmac: string | null };
+      const rows: HashRow[] = after == null
+        ? await allRows<HashRow>(db, sql)
+        : await allRows<HashRow>(db, sql, after);
+      if (!rows.length) break;
+      after = rows[rows.length - 1]!.id;
+      const stmts: { sql: string; args: unknown[] }[] = [];
+      const kinds: Array<"backfill" | "rotate"> = [];
+      for (const row of rows) {
+        if (!rawFilled(row.raw)) continue;
+        const want = await hmacPayer(secret, row.raw);
+        if (!hmacFilled(row.hmac)) {
+          if (!take()) { truncated = true; break; }
+          stmts.push({ sql: `UPDATE ${table} SET ${hmacCol} = ?2 WHERE ${idCol} = ?1 AND (${hmacCol} IS NULL OR ${hmacCol} = '')`, args: [row.id, want] });
+          kinds.push("backfill");
+        } else if (row.hmac!.trim() !== want) {
+          if (!take()) { truncated = true; break; }
+          stmts.push({ sql: `UPDATE ${table} SET ${hmacCol} = ?2 WHERE ${idCol} = ?1`, args: [row.id, want] });
+          kinds.push("rotate");
+        }
+      }
+      const changes = await write(stmts);
+      // Count by intended kind (one statement per row). Fall back to statement count if meta.changes is missing.
+      void changes;
+      for (const k of kinds) {
+        if (k === "backfill") backfilled[table]++;
+        else rotated[table]++;
+      }
+      if (truncated || rows.length < page) break;
     }
   };
-  // sales uses integer id; tx is unique too but id is the PK.
-  {
-    const rows = await allRows<{ id: number; raw: string }>(db, "SELECT id, payer AS raw FROM sales WHERE payer IS NOT NULL AND TRIM(payer) != '' AND (payer_hmac IS NULL OR payer_hmac = '')");
-    for (const row of rows) {
-      const h = await hmacPayer(secret, row.raw);
-      out.sales += await runCatch(db, "UPDATE sales SET payer_hmac = ?2 WHERE id = ?1 AND (payer_hmac IS NULL OR payer_hmac = '')", row.id, h);
-    }
-  }
-  await fill("feed_keys", "id", "wallet", "wallet_hmac");
-  // Some legacy rows may only have wallet_lc.
-  {
-    const rows = await allRows<{ id: string; raw: string }>(db, "SELECT id, COALESCE(wallet, wallet_lc) AS raw FROM feed_keys WHERE (wallet_hmac IS NULL OR wallet_hmac = '') AND COALESCE(wallet, wallet_lc) IS NOT NULL AND TRIM(COALESCE(wallet, wallet_lc)) != ''");
-    for (const row of rows) {
-      const h = await hmacPayer(secret, row.raw);
-      out.feed_keys += await runCatch(db, "UPDATE feed_keys SET wallet_hmac = ?2 WHERE id = ?1 AND (wallet_hmac IS NULL OR wallet_hmac = '')", row.id, h);
-    }
-  }
-  {
-    const rows = await allRows<{ id: string; raw: string }>(db, "SELECT tx AS id, payer AS raw FROM feed_payments WHERE payer IS NOT NULL AND TRIM(payer) != '' AND (payer_hmac IS NULL OR payer_hmac = '')");
-    for (const row of rows) {
-      const h = await hmacPayer(secret, row.raw);
-      out.feed_payments += await runCatch(db, "UPDATE feed_payments SET payer_hmac = ?2 WHERE tx = ?1 AND (payer_hmac IS NULL OR payer_hmac = '')", row.id, h);
-    }
-  }
-  {
-    const rows = await allRows<{ id: string; raw: string }>(db, "SELECT id, payer AS raw FROM monitor_plans WHERE payer IS NOT NULL AND TRIM(payer) != '' AND (payer_hmac IS NULL OR payer_hmac = '')");
-    for (const row of rows) {
-      const h = await hmacPayer(secret, row.raw);
-      out.monitor_plans += await runCatch(db, "UPDATE monitor_plans SET payer_hmac = ?2 WHERE id = ?1 AND (payer_hmac IS NULL OR payer_hmac = '')", row.id, h);
-    }
-  }
-  {
-    const rows = await allRows<{ id: string; raw: string }>(db, "SELECT paid_tx AS id, payer AS raw FROM monitor_pack_refusals WHERE payer IS NOT NULL AND TRIM(payer) != '' AND (payer_hmac IS NULL OR payer_hmac = '')");
-    for (const row of rows) {
-      const h = await hmacPayer(secret, row.raw);
-      out.monitor_pack_refusals += await runCatch(db, "UPDATE monitor_pack_refusals SET payer_hmac = ?2 WHERE paid_tx = ?1 AND (payer_hmac IS NULL OR payer_hmac = '')", row.id, h);
-    }
-  }
-  {
-    const rows = await allRows<{ id: string; raw: string }>(db, "SELECT nonce AS id, wallet AS raw FROM trial_uses WHERE wallet IS NOT NULL AND TRIM(wallet) != '' AND (wallet_hmac IS NULL OR wallet_hmac = '')");
-    for (const row of rows) {
-      const h = await hmacPayer(secret, row.raw);
-      out.trial_uses += await runCatch(db, "UPDATE trial_uses SET wallet_hmac = ?2 WHERE nonce = ?1 AND (wallet_hmac IS NULL OR wallet_hmac = '')", row.id, h);
-    }
-  }
-  return out;
+
+  await hashTable("sales", "id", "payer", "payer_hmac");
+  await hashTable("feed_keys", "id", "COALESCE(wallet, wallet_lc)", "wallet_hmac");
+  await hashTable("feed_payments", "tx", "payer", "payer_hmac");
+  await hashTable("monitor_plans", "id", "payer", "payer_hmac");
+  await hashTable("monitor_pack_refusals", "paid_tx", "payer", "payer_hmac");
+  await hashTable("trial_uses", "nonce", "wallet", "wallet_hmac");
+  return { backfilled, rotated, truncated };
 }
 
 async function retainMapD1(db: D1Like): Promise<Map<string, number>> {
@@ -486,35 +674,76 @@ async function retainMapD1(db: D1Like): Promise<Map<string, number>> {
 }
 
 export async function purgeD1(db: D1Like, opts: PayerRetentionOpts): Promise<PurgeResult> {
-  const backfilled = await backfillD1(db, opts.secret);
+  const maxRows = opts.maxRows ?? DEFAULT_PAYER_PURGE_MAX_ROWS;
+  const budget = { remaining: maxRows };
+  const hashed = await backfillD1(db, opts.secret, budget);
   const retain = await retainMapD1(db);
-  const due = (id: string | null) => {
-    if (!id || !retain.has(id)) return false;
-    return opts.now >= retain.get(id)! + opts.retentionDays * 86_400_000;
+  const due = (id: string | null) => duePayer(retain, id, opts);
+
+  const collectDue = async (sql: string): Promise<Array<string | number>> => {
+    const ids: Array<string | number> = [];
+    for (const r of await allRows<{ id: string | number; hmac: string | null; raw: string | null }>(db, sql)) {
+      if (hmacFilled(r.hmac) && rawFilled(r.raw) && due(payerIdent(r.hmac, r.raw))) ids.push(r.id);
+    }
+    return ids;
   };
+
+  const would = copyCounts();
+  const dueSales = await collectDue("SELECT id, payer_hmac AS hmac, payer AS raw FROM sales WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
+  const dueKeys = await collectDue("SELECT id, wallet_hmac AS hmac, COALESCE(wallet, wallet_lc) AS raw FROM feed_keys WHERE ((wallet IS NOT NULL AND TRIM(wallet) != '') OR (wallet_lc IS NOT NULL AND TRIM(wallet_lc) != '')) AND wallet_hmac IS NOT NULL AND TRIM(wallet_hmac) != ''");
+  const duePays = await collectDue("SELECT tx AS id, payer_hmac AS hmac, payer AS raw FROM feed_payments WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
+  const duePlans = await collectDue("SELECT id, payer_hmac AS hmac, payer AS raw FROM monitor_plans WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
+  const dueRefusals = await collectDue("SELECT paid_tx AS id, payer_hmac AS hmac, payer AS raw FROM monitor_pack_refusals WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
+  const dueTrials = await collectDue("SELECT nonce AS id, wallet_hmac AS hmac, wallet AS raw FROM trial_uses WHERE wallet IS NOT NULL AND TRIM(wallet) != '' AND wallet_hmac IS NOT NULL AND TRIM(wallet_hmac) != ''");
+  would.sales = dueSales.length;
+  would.feed_keys = dueKeys.length;
+  would.feed_payments = duePays.length;
+  would.monitor_plans = duePlans.length;
+  would.monitor_pack_refusals = dueRefusals.length;
+  would.trial_uses = dueTrials.length;
+
+  const base = {
+    retention_days: opts.retentionDays,
+    backfilled: hashed.backfilled,
+    rotated: hashed.rotated,
+    nulled: copyCounts(),
+    kept_accounting: true as const,
+    processed: maxRows - budget.remaining,
+    max_rows: maxRows,
+  };
+  if (!opts.purgeOn) {
+    return { ...base, dry_run: true, would_purge: would, truncated: hashed.truncated };
+  }
+  if (hashed.truncated) {
+    return { ...base, would_purge: would, truncated: true };
+  }
+
+  const nullIn = async (table: keyof TableCounts, sql: string, ids: Array<string | number>): Promise<number> => {
+    let n = 0;
+    const chunk = PAYER_PURGE_PAGE_SIZE;
+    for (let i = 0; i < ids.length; i += chunk) {
+      if (budget.remaining <= 0) return n;
+      const part = ids.slice(i, Math.min(ids.length, i + Math.min(chunk, budget.remaining)));
+      if (!part.length) break;
+      budget.remaining -= part.length;
+      n += await runCatch(db, sql.replace("__IN__", inList(part.length)), ...part);
+    }
+    return n;
+  };
+
   const nulled = copyCounts();
-  const bump = async (table: keyof TableCounts, sql: string, key: string | number) => {
-    nulled[table] += await runCatch(db, sql, key);
-  };
-  for (const r of await allRows<{ id: number; hmac: string | null; raw: string | null }>(db, "SELECT id, payer_hmac AS hmac, payer AS raw FROM sales WHERE payer IS NOT NULL AND TRIM(payer) != ''")) {
-    if (due(payerIdent(r.hmac, r.raw))) await bump("sales", "UPDATE sales SET payer = NULL WHERE id = ?1", r.id);
-  }
-  for (const r of await allRows<{ id: string; hmac: string | null; raw: string | null }>(db, "SELECT id, wallet_hmac AS hmac, COALESCE(wallet, wallet_lc) AS raw FROM feed_keys WHERE (wallet IS NOT NULL AND TRIM(wallet) != '') OR (wallet_lc IS NOT NULL AND TRIM(wallet_lc) != '')")) {
-    if (due(payerIdent(r.hmac, r.raw))) await bump("feed_keys", "UPDATE feed_keys SET wallet = NULL, wallet_lc = NULL WHERE id = ?1", r.id);
-  }
-  for (const r of await allRows<{ id: string; hmac: string | null; raw: string | null }>(db, "SELECT tx AS id, payer_hmac AS hmac, payer AS raw FROM feed_payments WHERE payer IS NOT NULL AND TRIM(payer) != ''")) {
-    if (due(payerIdent(r.hmac, r.raw))) await bump("feed_payments", "UPDATE feed_payments SET payer = NULL WHERE tx = ?1", r.id);
-  }
-  for (const r of await allRows<{ id: string; hmac: string | null; raw: string | null }>(db, "SELECT id, payer_hmac AS hmac, payer AS raw FROM monitor_plans WHERE payer IS NOT NULL AND TRIM(payer) != ''")) {
-    if (due(payerIdent(r.hmac, r.raw))) await bump("monitor_plans", "UPDATE monitor_plans SET payer = NULL WHERE id = ?1", r.id);
-  }
-  for (const r of await allRows<{ id: string; hmac: string | null; raw: string | null }>(db, "SELECT paid_tx AS id, payer_hmac AS hmac, payer AS raw FROM monitor_pack_refusals WHERE payer IS NOT NULL AND TRIM(payer) != ''")) {
-    if (due(payerIdent(r.hmac, r.raw))) await bump("monitor_pack_refusals", "UPDATE monitor_pack_refusals SET payer = NULL WHERE paid_tx = ?1", r.id);
-  }
-  for (const r of await allRows<{ id: string; hmac: string | null; raw: string | null }>(db, "SELECT nonce AS id, wallet_hmac AS hmac, wallet AS raw FROM trial_uses WHERE wallet IS NOT NULL AND TRIM(wallet) != ''")) {
-    if (due(payerIdent(r.hmac, r.raw))) await bump("trial_uses", "UPDATE trial_uses SET wallet = '' WHERE nonce = ?1", r.id);
-  }
-  return { retention_days: opts.retentionDays, backfilled, nulled, kept_accounting: true };
+  nulled.sales = await nullIn("sales", "UPDATE sales SET payer = NULL WHERE id IN (__IN__) AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''", dueSales);
+  nulled.feed_keys = await nullIn("feed_keys", "UPDATE feed_keys SET wallet = NULL, wallet_lc = NULL WHERE id IN (__IN__) AND wallet_hmac IS NOT NULL AND TRIM(wallet_hmac) != ''", dueKeys);
+  nulled.feed_payments = await nullIn("feed_payments", "UPDATE feed_payments SET payer = NULL WHERE tx IN (__IN__) AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''", duePays);
+  nulled.monitor_plans = await nullIn("monitor_plans", "UPDATE monitor_plans SET payer = NULL WHERE id IN (__IN__) AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''", duePlans);
+  nulled.monitor_pack_refusals = await nullIn("monitor_pack_refusals", "UPDATE monitor_pack_refusals SET payer = NULL WHERE paid_tx IN (__IN__) AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''", dueRefusals);
+  nulled.trial_uses = await nullIn("trial_uses", "UPDATE trial_uses SET wallet = '' WHERE nonce IN (__IN__) AND wallet_hmac IS NOT NULL AND TRIM(wallet_hmac) != ''", dueTrials);
+  const processed = maxRows - budget.remaining;
+  const truncated = hashed.truncated || processed >= maxRows && (
+    nulled.sales + nulled.feed_keys + nulled.feed_payments + nulled.monitor_plans + nulled.monitor_pack_refusals + nulled.trial_uses
+    < would.sales + would.feed_keys + would.feed_payments + would.monitor_plans + would.monitor_pack_refusals + would.trial_uses
+  );
+  return { ...base, nulled, processed, truncated: !!truncated, would_purge: would };
 }
 
 type D1MatchRow = { table: keyof TableCounts; at?: number | null; tx?: string | null; amount?: string | null; asset?: string | null; route?: string | null; key_id?: string | null; plan?: string | null; plan_ends_at?: number | null; has_raw: number };
@@ -633,9 +862,19 @@ export function memoryStoresFrom(sales: SalesStore, commerce: CommerceStore, tri
 }
 
 export async function purgeCustomerPayers(opts: PayerRetentionOpts & { db?: D1Like | null; memory?: PayerMemoryStores | null }): Promise<PurgeResult> {
+  const empty = (): PurgeResult => ({ retention_days: opts.retentionDays, backfilled: copyCounts(), rotated: copyCounts(), nulled: copyCounts(), kept_accounting: true });
+  const skip = (reason: PayerPurgeSkipReason): PurgeResult => {
+    opts.log?.({ event: reason });
+    return { ...empty(), skipped: reason };
+  };
+  if (!payerHmacSecretOk(opts.secret)) return skip("payer_purge_skipped_no_secret");
+  const others = opts.otherSecrets ?? [];
+  if (payerSecretReused(opts.secret, others) || payerSecretReused(opts.secretPrev, others)) {
+    return skip("payer_purge_skipped_secret_reused");
+  }
   if (opts.db) return purgeD1(opts.db, opts);
   if (opts.memory) return purgeMemory(opts.memory, opts);
-  return { retention_days: opts.retentionDays, backfilled: copyCounts(), nulled: copyCounts(), kept_accounting: true };
+  return empty();
 }
 
 export async function inventoryPayer(opts: PayerRetentionOpts & { db?: D1Like | null; memory?: PayerMemoryStores | null; wallet: string }): Promise<PayerInventory> {

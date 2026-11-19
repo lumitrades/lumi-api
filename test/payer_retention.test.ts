@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { createApp } from "../src/app";
 import { MemorySalesStore, toRow, firstHighValueRefunds } from "../src/sales";
 import { MemoryCommerceStore, type FeedKey } from "../src/commerce/store";
@@ -13,9 +14,12 @@ import {
   memoryStoresFrom,
   normalizePayer,
   payerHmacSecretOk,
+  payerPurgeOn,
   payerRetentionDays,
+  payerSecretReused,
   payerSecretsFromEnv,
   purgeCustomerPayers,
+  purgeMemory,
   submittedWallet,
   stripPayerFields,
 } from "../src/payer_retention";
@@ -107,7 +111,7 @@ describe("nightly purge (memory)", () => {
     fresh.payerHmac = await hmacPayer(SECRET, OTHER);
     await sales.insert(oldRow);
     await sales.insert(fresh);
-    const r = await purgeCustomerPayers({ memory: memoryStoresFrom(sales, new MemoryCommerceStore(), new MemoryTrialStore()), secret: SECRET, retentionDays: 90, now: NOW });
+    const r = await purgeCustomerPayers({ memory: memoryStoresFrom(sales, new MemoryCommerceStore(), new MemoryTrialStore()), secret: SECRET, purgeOn: true, retentionDays: 90, now: NOW });
     expect(r.kept_accounting).toBe(true);
     expect(r.nulled.sales).toBe(1);
     const gone = sales.rows.find((x) => x.tx === "OLD")!;
@@ -133,12 +137,12 @@ describe("nightly purge (memory)", () => {
     await sales.insert(row);
     await commerce.addKey(key({ id: "fk_active", wallet: WALLET, wallet_lc: WALLET.toLowerCase(), wallet_hmac: row.payerHmac, plan: "feed", plan_ends_at: ends, created_at: payTs }));
     await commerce.addPayment({ tx: "fp1", key_id: "fk_active", product: "feed", usd: 4, is_test: false, network: "eip155:8453", asset: "USDC", amount: "4", payer: WALLET, payer_hmac: row.payerHmac, ts: payTs });
-    const still = await purgeCustomerPayers({ memory: memoryStoresFrom(sales, commerce, new MemoryTrialStore()), secret: SECRET, retentionDays: 90, now: NOW });
+    const still = await purgeCustomerPayers({ memory: memoryStoresFrom(sales, commerce, new MemoryTrialStore()), secret: SECRET, purgeOn: true, retentionDays: 90, now: NOW });
     expect(still.nulled.sales).toBe(0);
     expect(still.nulled.feed_keys).toBe(0);
     expect(commerce.fkeys.get("fk_active")!.wallet).toBe(WALLET);
 
-    const expired = await purgeCustomerPayers({ memory: memoryStoresFrom(sales, commerce, new MemoryTrialStore()), secret: SECRET, retentionDays: 4, now: NOW });
+    const expired = await purgeCustomerPayers({ memory: memoryStoresFrom(sales, commerce, new MemoryTrialStore()), secret: SECRET, purgeOn: true, retentionDays: 4, now: NOW });
     expect(expired.retention_days).toBe(4);
     expect(expired.nulled.sales).toBe(1);
     expect(expired.nulled.feed_keys).toBe(1);
@@ -155,7 +159,7 @@ describe("nightly purge (memory)", () => {
     const commerce = new MemoryCommerceStore();
     await commerce.addKey(key({ id: "fk_legacy", wallet: WALLET, wallet_lc: WALLET.toLowerCase(), created_at: NOW - 200 * DAY, key_hash: "kept-hash" }));
     expect((await commerce.keyByWallet(WALLET.toLowerCase()))?.id).toBe("fk_legacy");
-    const r = await purgeCustomerPayers({ memory: memoryStoresFrom(new MemorySalesStore(), commerce, new MemoryTrialStore()), secret: SECRET, retentionDays: 90, now: NOW });
+    const r = await purgeCustomerPayers({ memory: memoryStoresFrom(new MemorySalesStore(), commerce, new MemoryTrialStore()), secret: SECRET, purgeOn: true, retentionDays: 90, now: NOW });
     expect(r.backfilled.feed_keys).toBe(1);
     expect(r.nulled.feed_keys).toBe(1);
     const k = commerce.fkeys.get("fk_legacy")!;
@@ -173,7 +177,7 @@ describe("nightly purge (memory)", () => {
     const trials = new MemoryTrialStore();
     const hmac = await hmacPayer(SECRET, WALLET);
     trials.rows.push({ nonce: "n1", wallet: WALLET, wallet_hmac: hmac, ip_hash: null, day: "2026-07-01", route: "verdict", ts: NOW - 100 * DAY });
-    const r = await purgeCustomerPayers({ memory: memoryStoresFrom(new MemorySalesStore(), new MemoryCommerceStore(), trials), secret: SECRET, retentionDays: 90, now: NOW });
+    const r = await purgeCustomerPayers({ memory: memoryStoresFrom(new MemorySalesStore(), new MemoryCommerceStore(), trials), secret: SECRET, purgeOn: true, retentionDays: 90, now: NOW });
     expect(r.nulled.trial_uses).toBe(1);
     expect(trials.rows[0].wallet).toBe("");
     expect(trials.rows[0].wallet_hmac).toBe(hmac);
@@ -189,7 +193,7 @@ describe("scheduled hook and HTTP owner route", () => {
     await sales.insert(row);
     const logs: Record<string, unknown>[] = [];
     let t = Date.parse("2026-10-23T02:30:00Z");
-    const app = createApp({ ...ENV } as any, {
+    const app = createApp({ ...ENV, PAYER_PURGE: "on" } as any, {
       fetch: makeFetch(happyFacilitator()),
       log: (e) => logs.push(e),
       now: () => t,
@@ -260,6 +264,7 @@ describe("scheduled hook and HTTP owner route", () => {
     expect(inv.records.some((r: any) => r.table === "sales" && r.tx === "LIVE-TX")).toBe(true);
     expect(inv.records.some((r: any) => r.table === "feed_keys" && r.key_id === "fk_own")).toBe(true);
     expect(JSON.stringify(inv)).not.toContain(WALLET);
+    expect((await app.fetch(new Request(`${BASE}/v1/owner/payer-data`, { method: "GET", headers: { Authorization: `Bearer ${OWNER}` } }))).status).toBe(405);
     expect((await app.fetch(new Request(`${BASE}/v1/owner/payer-data/delete`, { method: "GET", headers: { Authorization: `Bearer ${OWNER}` } }))).status).toBe(405);
     const erased = await (await app.fetch(new Request(`${BASE}/v1/owner/payer-data/delete`, {
       method: "POST",
@@ -282,24 +287,204 @@ describe("scheduled hook and HTTP owner route", () => {
   });
 });
 
+
+describe("Vigil B1 / PAYER_PURGE / rotation / batch / secrets", () => {
+  it("PAYER_PURGE is committed off and only the exact value on enables the nulling tick", () => {
+    expect(payerPurgeOn(undefined)).toBe(false);
+    expect(payerPurgeOn("off")).toBe(false);
+    expect(payerPurgeOn("ON")).toBe(false);
+    expect(payerPurgeOn("on")).toBe(true);
+    const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+    expect(toml).toMatch(/^PAYER_PURGE = "off"/m);
+  });
+
+  it("returns early and logs payer_purge_skipped_no_secret unless the secret is ok", async () => {
+    const sales = new MemorySalesStore();
+    await sales.insert(sale(WALLET, NOW - 100 * DAY, "NOSECRET"));
+    const logs: Record<string, unknown>[] = [];
+    const r = await purgeCustomerPayers({
+      memory: memoryStoresFrom(sales, new MemoryCommerceStore(), new MemoryTrialStore()),
+      retentionDays: 90, now: NOW, purgeOn: true, log: (e) => logs.push(e),
+    });
+    expect(r.skipped).toBe("payer_purge_skipped_no_secret");
+    expect(r.nulled.sales).toBe(0);
+    expect(sales.rows[0].payer).toBe(WALLET);
+    expect(logs.some((e) => e.event === "payer_purge_skipped_no_secret")).toBe(true);
+    const short = await purgeCustomerPayers({
+      memory: memoryStoresFrom(sales, new MemoryCommerceStore(), new MemoryTrialStore()),
+      secret: "too-short", retentionDays: 90, now: NOW, purgeOn: true, log: (e) => logs.push(e),
+    });
+    expect(short.skipped).toBe("payer_purge_skipped_no_secret");
+    expect(sales.rows[0].payer).toBe(WALLET);
+  });
+
+  it("never nulls a row whose HMAC is empty", async () => {
+    const sales = new MemorySalesStore();
+    await sales.insert(sale(WALLET, NOW - 100 * DAY, "EMPTYHMAC"));
+    expect(sales.rows[0].payerHmac).toBeFalsy();
+    // Direct nulling path, no backfill (secret omitted): the due row stays.
+    const r = await purgeMemory({ sales }, { retentionDays: 90, now: NOW, purgeOn: true });
+    expect(r.nulled.sales).toBe(0);
+    expect(sales.rows[0].payer).toBe(WALLET);
+  });
+
+  it("when PAYER_PURGE is off, the tick only backfills and logs a dry-run would-purge count", async () => {
+    const sales = new MemorySalesStore();
+    await sales.insert(sale(WALLET, NOW - 100 * DAY, "DRY"));
+    await sales.insert(sale(OTHER, NOW - 5 * DAY, "FRESH"));
+    const logs: Record<string, unknown>[] = [];
+    const app = createApp({ ...ENV, PAYER_PURGE: "off" } as any, {
+      fetch: makeFetch(happyFacilitator()),
+      log: (e) => logs.push(e),
+      now: () => NIGHT,
+      salesStore: sales,
+    });
+    const out: any = await app.scheduled();
+    expect(out.payer_retention).toMatchObject({ dry_run: true, kept_accounting: true, nulled: expect.objectContaining({ sales: 0 }) });
+    expect(out.payer_retention.would_purge.sales).toBe(1);
+    expect(out.payer_retention.backfilled.sales).toBe(2);
+    expect(sales.rows.find((x) => x.tx === "DRY")!.payer).toBe(WALLET);
+    expect(sales.rows.find((x) => x.tx === "DRY")!.payerHmac).toBe(await hmacPayer(SECRET, WALLET));
+    const line = logs.find((e) => e.event === "payer_retention_purge")!;
+    expect(line.dry_run).toBe(true);
+    expect((line.would_purge as any).sales).toBe(1);
+    expect(JSON.stringify(line)).not.toContain(WALLET);
+  });
+
+  it("re-hashes raw rows under the current secret and still matches PREV after a purge", async () => {
+    const sales = new MemorySalesStore();
+    const oldH = await hmacPayer(SECRET2, WALLET);
+    const row = sale(WALLET, NOW - 10 * DAY, "ROT");
+    row.payerHmac = oldH;
+    await sales.insert(row);
+    const dry = await purgeCustomerPayers({
+      memory: memoryStoresFrom(sales, new MemoryCommerceStore(), new MemoryTrialStore()),
+      secret: SECRET, secretPrev: SECRET2, retentionDays: 90, now: NOW, purgeOn: false,
+    });
+    expect(dry.rotated?.sales).toBe(1);
+    expect(sales.rows[0].payer).toBe(WALLET);
+    expect(sales.rows[0].payerHmac).toBe(await hmacPayer(SECRET, WALLET));
+    expect(sales.rows[0].payerHmac).not.toBe(oldH);
+    // After the raw is gone, PREV is still required to find a row hashed under the old secret.
+    const trials = new MemoryTrialStore();
+    const stale = await hmacPayer(SECRET2, OTHER);
+    trials.rows.push({ nonce: "n-rot", wallet: "", wallet_hmac: stale, ip_hash: null, day: "2026-07-01", route: "verdict", ts: NOW - 100 * DAY });
+    expect(await trials.usedByWallet(OTHER, await hmacPayerAll([SECRET], OTHER))).toBe(0);
+    expect(await trials.usedByWallet(OTHER, await hmacPayerAll([SECRET, SECRET2], OTHER))).toBe(1);
+  });
+
+  it("caps writes per tick so a later due row waits for the next run", async () => {
+    const sales = new MemorySalesStore();
+    const h = await hmacPayer(SECRET, WALLET);
+    for (let i = 0; i < 3; i++) {
+      const row = sale(WALLET, NOW - 100 * DAY, `CAP${i}`);
+      row.payerHmac = h;
+      await sales.insert(row);
+    }
+    const r = await purgeCustomerPayers({
+      memory: memoryStoresFrom(sales, new MemoryCommerceStore(), new MemoryTrialStore()),
+      secret: SECRET, purgeOn: true, retentionDays: 90, now: NOW, maxRows: 2,
+    });
+    expect(r.nulled.sales).toBe(2);
+    expect(r.truncated).toBe(true);
+    expect(sales.rows.filter((x) => x.payer === WALLET)).toHaveLength(1);
+    const r2 = await purgeCustomerPayers({
+      memory: memoryStoresFrom(sales, new MemoryCommerceStore(), new MemoryTrialStore()),
+      secret: SECRET, purgeOn: true, retentionDays: 90, now: NOW, maxRows: 2,
+    });
+    expect(r2.nulled.sales).toBe(1);
+    expect(sales.rows.every((x) => x.payer == null)).toBe(true);
+  });
+
+  it("skips the purge and logs when PAYER_HMAC_SECRET reuses an invoice or fleet-guard secret", async () => {
+    expect(payerSecretReused(SECRET, ["other", SECRET])).toBe(true);
+    expect(payerSecretReused(SECRET, ["INVOICE_SECRET_is_different_value_ok"])).toBe(false);
+    const sales = new MemorySalesStore();
+    await sales.insert(sale(WALLET, NOW - 100 * DAY, "REUSE"));
+    const logs: Record<string, unknown>[] = [];
+    const r = await purgeCustomerPayers({
+      memory: memoryStoresFrom(sales, new MemoryCommerceStore(), new MemoryTrialStore()),
+      secret: SECRET, purgeOn: true, retentionDays: 90, now: NOW,
+      otherSecrets: [SECRET, "fleet-key-secret-that-is-32-bytes-min"],
+      log: (e) => logs.push(e),
+    });
+    expect(r.skipped).toBe("payer_purge_skipped_secret_reused");
+    expect(r.nulled.sales).toBe(0);
+    expect(sales.rows[0].payer).toBe(WALLET);
+    expect(logs.some((e) => e.event === "payer_purge_skipped_secret_reused")).toBe(true);
+  });
+
+  it("keys firstHighValueRefunds on payerHmac so a purged raw wallet is still grouped", async () => {
+    const h = await hmacPayer(SECRET, WALLET);
+    const first = toRow({ route: "high_value_check", rail: "base", network: "eip155:8453", asset: "USDC", amount: "0.05", usd: 0.05, payer: WALLET, tx: "0xa" }, NOW - 2000);
+    first.payerHmac = h;
+    const later = toRow({ route: "high_value_check", rail: "base", network: "eip155:8453", asset: "USDC", amount: "0.25", usd: 0.25, payer: WALLET, tx: "0xb" }, NOW - 1000);
+    later.payerHmac = h;
+    later.payer = null;
+    const other = toRow({ route: "high_value_check", rail: "base", network: "eip155:8453", asset: "USDC", amount: "0.10", usd: 0.10, payer: OTHER, tx: "0xc" }, NOW);
+    other.payerHmac = await hmacPayer(SECRET, OTHER);
+    const out = firstHighValueRefunds([first, later, other], 0.25);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ tx: "0xa", payer: WALLET, payerHmac: h, refund_usd: 0.05 });
+    expect(out[1]).toMatchObject({ tx: "0xc", payer: OTHER, refund_usd: 0.10 });
+    const onlyHmac = firstHighValueRefunds([later], 0.25);
+    expect(onlyHmac).toHaveLength(1);
+    expect(onlyHmac[0].payer).toBeNull();
+    expect(onlyHmac[0].payerHmac).toBe(h);
+    expect(onlyHmac[0].tx).toBe("0xb");
+  });
+});
+
+
+/** Split a SQL migration into statements, ignoring ';' and '--' inside strings. */
+function sqlStatements(sql: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let i = 0;
+  let inSingle = false;
+  while (i < sql.length) {
+    const c = sql[i]!;
+    if (!inSingle && c === "-" && sql[i + 1] === "-") {
+      while (i < sql.length && sql[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "'") {
+      cur += c;
+      if (inSingle && sql[i + 1] === "'") { cur += "'"; i += 2; continue; }
+      inSingle = !inSingle;
+      i++;
+      continue;
+    }
+    if (!inSingle && c === ";") {
+      const t = cur.trim();
+      if (t) out.push(t);
+      cur = "";
+      i++;
+      continue;
+    }
+    cur += c;
+    i++;
+  }
+  const t = cur.trim();
+  if (t) out.push(t);
+  return out;
+}
+
 describe("payer retention D1 (miniflare)", () => {
   it("migration 0035 adds hmac columns; purge and owner erase work in SQL", async () => {
     const { Miniflare, convertV4MiniflareOptions } = await import("miniflare") as any;
     const mf = new Miniflare(miniflareD1Options(convertV4MiniflareOptions));
     try {
       const db: any = await mf.getD1Database("DB");
-      const run = async (f: string) => {
-        for (const st of readFileSync(f, "utf8").replace(/--.*$/gm, "").split(";").map((x) => x.trim()).filter(Boolean)) {
+      const files = readdirSync("migrations").filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
+      expect(files[0]).toBe("0001_trust.sql");
+      expect(files).toContain("0034_fleet_guard.sql");
+      expect(files.at(-1)).toBe("0035_payer_retention.sql");
+      for (const f of files) {
+        for (const st of sqlStatements(readFileSync(join("migrations", f), "utf8"))) {
           await db.prepare(st).run();
         }
-      };
-      await run("migrations/0003_sales.sql");
-      await run("migrations/0023_sales_client.sql");
-      await run("migrations/0008_trials.sql");
-      await run("migrations/0011_monitor_feed.sql");
-      await run("migrations/0025_monitor_watch.sql");
-      await run("migrations/0030_testbuy_packs.sql");
-      await run("migrations/0035_payer_retention.sql");
+      }
       const tsOld = NOW - 100 * DAY;
       const tsNew = NOW - 5 * DAY;
       await db.prepare("INSERT INTO sales (ts, route, rail, network, asset, amount, usd, payer, tx, facilitator, is_test) VALUES (?1,'verdict','xrpl','xrpl:1','RLUSD','0.01',0.01,?2,'OLD','t54',0)").bind(tsOld, WALLET).run();
@@ -307,7 +492,7 @@ describe("payer retention D1 (miniflare)", () => {
       await db.prepare("INSERT INTO feed_keys (id, key_hash, wallet, wallet_lc, network, plan, plan_ends_at, credits, is_test, webhook_cursor, created_at) VALUES ('fk_d1','kh',?1,?2,'eip155:8453','free',NULL,0,0,0,?3)").bind(WALLET, WALLET.toLowerCase(), tsOld).run();
       await db.prepare("INSERT INTO trial_uses (nonce, wallet, ip_hash, day, route, ts) VALUES ('n-old',?1,NULL,'2026-07-01','verdict',?2)").bind(WALLET, tsOld).run();
 
-      const r = await purgeCustomerPayers({ db, secret: SECRET, retentionDays: 90, now: NOW });
+      const r = await purgeCustomerPayers({ db, secret: SECRET, purgeOn: true, retentionDays: 90, now: NOW });
       expect(r.backfilled.sales).toBe(2);
       expect(r.backfilled.feed_keys).toBe(1);
       expect(r.backfilled.trial_uses).toBe(1);
@@ -327,11 +512,11 @@ describe("payer retention D1 (miniflare)", () => {
       expect(fk.wallet_hmac).toBe(await hmacPayer(SECRET, WALLET));
       expect(fk.key_hash).toBe("kh");
 
-      const inv = await inventoryPayer({ db, wallet: WALLET, secret: SECRET, retentionDays: 90, now: NOW });
+      const inv = await inventoryPayer({ db, wallet: WALLET, secret: SECRET, purgeOn: true, retentionDays: 90, now: NOW });
       expect(inv.matched).toBe(true);
       expect(inv.raw_still_stored).toBe(0);
       expect(JSON.stringify(inv)).not.toContain(WALLET);
-      const erased = await erasePayer({ db, wallet: OTHER, secret: SECRET, retentionDays: 90, now: NOW });
+      const erased = await erasePayer({ db, wallet: OTHER, secret: SECRET, purgeOn: true, retentionDays: 90, now: NOW });
       expect(erased.raw_nulled).toBe(1);
       expect((await db.prepare("SELECT payer, tx FROM sales WHERE tx = 'NEW'").first()).payer).toBeNull();
       const audit = await db.prepare("SELECT wallet_hmac, raw_nulled, tables_json FROM payer_erasure_requests").first();
@@ -341,5 +526,5 @@ describe("payer retention D1 (miniflare)", () => {
     } finally {
       await mf.dispose();
     }
-  });
+  }, 30_000);
 });

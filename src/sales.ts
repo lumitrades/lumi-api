@@ -352,9 +352,10 @@ export async function sendPlainEmail(
   }
 }
 
-/** One owed first-high-value-check refund (computed, never sent by code). */
+/** One owed first-high-value-check refund (computed, never issued by code). */
 export interface FirstHvRefund {
-  payer: string;
+  payer: string | null;
+  payerHmac?: string | null;
   network: string;
   paid_usd: number | null;
   refund_usd: number;
@@ -364,18 +365,24 @@ export interface FirstHvRefund {
 
 /**
  * First high-value check refunds owed (FIRST_HV_REFUND=on): each non-test payer's earliest settled high_value_check,
- * refund = min(paid, cap). Pure read of the sales ledger; this module has no way to move money.
+ * refund = min(paid, cap). Grouped by payer HMAC when present, else the normalised raw payer. Pure read of the
+ * sales ledger; this module has no way to move money. After the raw wallet is dropped, payer is null and the
+ * operator uses tx (and payerHmac) to identify the payment.
  */
 export function firstHighValueRefunds(rows: SaleRow[], capUsd: number): FirstHvRefund[] {
   const first = new Map<string, SaleRow>();
   for (const r of rows) {
-    if (r.route !== "high_value_check" || r.isTest || !r.payer) continue;
-    const k = r.payer.startsWith("0x") ? r.payer.toLowerCase() : r.payer;
+    if (r.route !== "high_value_check" || r.isTest) continue;
+    const k = r.payerHmac && r.payerHmac.trim()
+      ? `h:${r.payerHmac.trim()}`
+      : (r.payer ? `r:${r.payer.startsWith("0x") ? r.payer.toLowerCase() : r.payer}` : null);
+    if (!k) continue;
     const cur = first.get(k);
     if (!cur || r.ts < cur.ts) first.set(k, r);
   }
   return [...first.values()].sort((a, b) => a.ts - b.ts).map((r) => ({
-    payer: r.payer!,
+    payer: r.payer ?? null,
+    payerHmac: r.payerHmac ?? null,
     network: r.network,
     paid_usd: r.usd,
     refund_usd: Math.round(Math.min(r.usd ?? capUsd, capUsd) * 1e6) / 1e6,
