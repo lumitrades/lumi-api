@@ -403,10 +403,12 @@ describe("Vigil steering 1: owner admin works while FLEET_GUARD is off", () => {
     const s = setup({ env: { FLEET_GUARD: "off", FLEET_GUARD_HMAC_SECRET: undefined } });
     expect((await s.load()).status).toBe(503);
   });
-  it("wrangler.toml commits FLEET_GUARD = \"off\"", () => {
+  it("wrangler.toml commits FLEET_GUARD = \"on\" in production (launched 2026-11-19) and \"off\" on testnet", () => {
     const t = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
     const top = t.slice(t.indexOf("[vars]"), t.indexOf("[env.testnet]"));
-    expect(top).toMatch(/^FLEET_GUARD = "off"/m);
+    const testnet = t.slice(t.indexOf("[env.testnet]"));
+    expect(top).toMatch(/^FLEET_GUARD = "on"/m);
+    expect(testnet).toMatch(/^FLEET_GUARD = "off"/m);
   });
 });
 
