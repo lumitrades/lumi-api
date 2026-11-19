@@ -31,7 +31,7 @@ function setup(o: { env?: Record<string, string | undefined>; fac?: FakeFacilita
 async function loadFleet(s: ReturnType<typeof setup>) {
   const r = await s.app.fetch(new Request(BASE + "/v1/fleet/admin/members", {
     method: "POST", headers: { Authorization: `Bearer ${OWNER}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ cluster: { id: "F1", wallets: 104, sellers_paid: 3, first_seen: "2026-08-25", basis: "funding path + 100% payer overlap" }, subjects: [{ value: FLEET_PAYER, role: "payer" }, { value: FLEET_SELLER, role: "seller" }] }),
+    body: JSON.stringify({ cluster: { id: "F1", basis: "funding path + payer overlap" }, subjects: [{ value: FLEET_PAYER, role: "payer" }, { value: FLEET_SELLER, role: "seller" }] }),
   }));
   expect(r.status).toBe(200);
 }
@@ -106,9 +106,13 @@ describe("fleet guard: paid path", () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     const b = JSON.parse(text);
-    expect(b.results.map((r: any) => r.fleet_member)).toEqual([true, true, false]);
+    expect(b.results.map((r: any) => r.match)).toEqual([true, true, false]);
+    expect(b.results[0].label).toMatch(/^Pattern match: automated cluster, as of \d{4}-\d{2}-\d{2}, method http:\/\/lumi\.test\/v1\/fleet\/methodology$/);
+    expect(b.results[2].label).toBe("No match");
     expect(b.results[0].role).toBe("payer");
-    expect(b.results[1].cluster.id).toBe("F1");
+    expect(b.results[1]).not.toHaveProperty("cluster_id");
+    expect(text).not.toContain("F1");
+    expect(text).not.toMatch(/first_seen|wallets|sellers_paid|confidence|scripted/);
     expect(b.access).toMatchObject({ mode: "x402", charged: true, price_usd: "0.0015" });
     expect(Date.parse(b.valid_until) - Date.parse(b.as_of)).toBe(3600_000);
     expect(text).not.toContain(PAYER);
@@ -167,7 +171,7 @@ describe("fleet guard: paid path", () => {
     s.store.members = async (h) => { lookups++; return orig(h); };
     const unpaid = await s.get(path);
     expect(unpaid.status).toBe(402);
-    expect(await unpaid.text()).not.toContain("fleet_member");
+    expect(await unpaid.text()).not.toContain("Pattern match");
   });
 
   it("rejects a payment that does not match the server-set requirements", async () => {

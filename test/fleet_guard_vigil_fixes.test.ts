@@ -278,26 +278,68 @@ describe("MED-3: limits on prepaid keys", () => {
     expect(s.uses()).toBeLessThanOrEqual(FLEET_GUARD.keyFailPer10Min + 1);
   });
 
-  it("a shared NAT / /64 / unknown bucket locked out by bad keys does not lock out a recently valid key (other isolate too)", async () => {
+  it("a shared NAT / /64 / unknown bucket locked out by bad keys does not lock out a recently valid key (this isolate, and an isolate where the network is not locked)", async () => {
     const counter = new MemoryQuotaCounter(() => NOW);
     const store = new MemoryFleetGuardStore();
     const mk = () => createApp(ENV as any, { fetch: makeFetch(happyFacilitator()), now: () => NOW, log: () => {}, fleetGuardStore: store, salesStore: new MemorySalesStore(), quotaCounter: counter, idempotencyStore: new MemoryIdempotencyStore() });
-    const A = mk(); const B = mk();
+    const A = mk();
     const get = (app: ReturnType<typeof mk>, p: string, h: Record<string, string>) => app.fetch(new Request(BASE + p, { headers: h }));
     const q: any = await (await get(A, "/v1/fleet/pack", {})).json();
     const key = ((await (await get(A, "/v1/fleet/pack", { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) })).json()) as any).key;
     expect((await get(A, "/v1/fleet/key", { "X-Lumi-Fleet-Key": key, "CF-Connecting-IP": "8.8.8.8" })).status).toBe(200);
     const nets: Record<string, string>[] = [{ "CF-Connecting-IP": "2001:db8:9:9::1" }, {}];
     for (const ipH of nets) {
-      // lock the network out on isolate B (shared /64 and the header-less "unknown" bucket)
+      const B = mk(); const C = mk();
+      // B sees the valid key first, then the network gets locked out on B
+      expect((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": key, ...ipH })).status).toBe(200);
       const st: number[] = [];
       for (let i = 0; i < 15; i++) st.push((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": unknownKey(1000 + i), ...ipH })).status);
       expect(st.slice(-3).every((x) => x === 429)).toBe(true);
       expect((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": unknownKey(5000), ...ipH })).status).toBe(429);
-      // the valid key, first time on isolate B and on this network: recognised through the shared marker
-      expect((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": key, ...ipH })).status).toBe(200);
+      // still served on B (seen valid here) ...
       expect((await get(B, "/v1/fleet/check?subject=a.example", { "X-Lumi-Fleet-Key": key, ...ipH })).status).toBe(200);
+      // ... and on C, first time there, through the shared marker (the lockout is per isolate; 60/min not exceeded)
+      expect((await get(C, "/v1/fleet/key", { "X-Lumi-Fleet-Key": key, ...ipH })).status).toBe(200);
+      expect((await get(C, "/v1/fleet/check?subject=a.example", { "X-Lumi-Fleet-Key": key, ...ipH })).status).toBe(200);
     }
+  });
+
+  it("order (Vigil 2026-11-19): IP lockout and 60/min are checked before the shared counter's valid-key marker is read", async () => {
+    const inner = new MemoryQuotaCounter(() => NOW);
+    const calls: string[] = [];
+    const counter = { take: async (o: string, keys: any[]) => { calls.push(...keys.map((k) => String(k.key).split(":")[0])); return inner.take(o, keys); } };
+    const store = new MemoryFleetGuardStore();
+    const mk = () => createApp(ENV as any, { fetch: makeFetch(happyFacilitator()), now: () => NOW, log: () => {}, fleetGuardStore: store, salesStore: new MemorySalesStore(), quotaCounter: counter as any, idempotencyStore: new MemoryIdempotencyStore() });
+    const A = mk(); const B = mk();
+    const get = (app: ReturnType<typeof mk>, p: string, h: Record<string, string>) => app.fetch(new Request(BASE + p, { headers: h }));
+    const q: any = await (await get(A, "/v1/fleet/pack", {})).json();
+    const key = ((await (await get(A, "/v1/fleet/pack", { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) })).json()) as any).key;
+    const L = { "CF-Connecting-IP": "9.9.9.9" };
+    // lock 9.9.9.9 out on B with bad-format keys
+    for (let i = 0; i < FLEET_GUARD.keyFailPer10Min + 1; i++) await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": "nope", ...L });
+    calls.length = 0;
+    // locked: a random well-formed key and even a valid key not yet seen on B make no counter call at all
+    expect((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": unknownKey(1), ...L })).status).toBe(429);
+    expect((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": key, ...L })).status).toBe(429);
+    expect(calls).toEqual([]);
+    // over 60/min (not locked): the 61st unknown key gets 429 after one fg-ki take and no fg-kv marker read
+    const N = { "CF-Connecting-IP": "5.5.5.5" };
+    const st: number[] = [];
+    for (let i = 0; i < FLEET_GUARD.keyIpPerMinute; i++) {
+      // real keys (stored, never marked valid): not failures, so the network is over 60/min without being locked
+      const raw = "fgk_" + (i + 1).toString(16).padStart(40, "c");
+      const h = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      await store.mintKey({ key_hash: h, plan: "fleet_pack", calls: 10, used: 0, expires_at: NOW + 86_400_000, paid_tx: "TT" + i, payer_hmac: null, created_at: NOW });
+      st.push((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": raw, ...N })).status);
+    }
+    expect(st.every((x) => x === 200)).toBe(true);
+    calls.length = 0;
+    expect((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": key, ...N })).status).toBe(429);
+    expect(calls).toEqual(["fg-ki"]);
+    // an allowed request reads the marker only after the per-network take
+    calls.length = 0;
+    expect((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": key, "CF-Connecting-IP": "4.3.2.1" })).status).toBe(200);
+    expect(calls.slice(0, 2)).toEqual(["fg-ki", "fg-kv"]);
   });
 
   it("/v1/fleet/key: bad-format keys are failures too", async () => {
@@ -420,8 +462,8 @@ describe("flag parsing and PAYMENT-REQUIRED size", () => {
     const paths = [
       "/v1/fleet/check?subject=a.io",
       `/v1/fleet/check?subject=${evm7}`,
-      ...[2, 5, 10, 15, 20].map((n) => `/v1/fleet/check?subject=${sub(n, FLEET_GUARD.echoMaxChars)}`),
-      ...[2, 20].map((n) => `/v1/fleet/check?subject=${sub(n, FLEET_GUARD.echoMaxChars + 1)}`),
+      ...[2, 5, 10, 15, 20].map((n) => `/v1/fleet/check?subject=${sub(n, 500)}`),
+      ...[2, 20].map((n) => `/v1/fleet/check?subject=${sub(n, 1500)}`),
       `/v1/fleet/check?subject=${sub(20, 2000)}`,
       "/v1/fleet/pack",
       "/v1/fleet/plan/monthly",
@@ -436,8 +478,14 @@ describe("flag parsing and PAYMENT-REQUIRED size", () => {
       expect(new TextEncoder().encode(h).length, p).toBeLessThan(4096);
       expect(h.length, p).toBeLessThanOrEqual(PAYMENT_REQUIRED_HEADER_SOFT_LIMIT);
       worst = Math.max(worst, h.length);
+      // Quill 3: the subject is always hashed in the invoice/resource URL, never echoed
+      if (p.includes("subject=")) {
+        const decoded = JSON.stringify(pr);
+        for (const subj of p.split("subject=")[1].split(",")) expect(decoded, p).not.toContain(subj);
+        expect(pr.resource?.url ?? pr.accepts[0].resource ?? "", p).toMatch(/[?&]qh=[0-9a-f]{32}(&|$)/);
+      }
     }
-    expect(worst).toBeGreaterThan(3500); // the cases above really are the large ones
+    expect(worst).toBeGreaterThan(1500); // sanity: real five-accept headers
     expect(worst).toBeLessThan(4096 - 128); // keep headroom below the 4 KB proxy limit
   });
 });

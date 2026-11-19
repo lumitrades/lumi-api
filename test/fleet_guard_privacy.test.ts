@@ -1,0 +1,324 @@
+/**
+ * Quill's privacy review of the fleet guard (2026-11-19, notes/legal/privacy_fleet_guard_2026-11-19.md) plus Vigil's
+ * steering items: labels, legal fields, method URL, hashed resource URLs, retention, corrections, no fingerprinting fields,
+ * HMAC rotation, admin while off, monthly plan hidden.
+ */
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
+import { createApp } from "../src/app";
+import { loadConfig, type D1Like, type D1Statement } from "../src/config";
+import { MemorySalesStore } from "../src/sales";
+import { MemoryQuotaCounter } from "../src/free_quota";
+import { MemoryIdempotencyStore } from "../src/idempotency";
+import { createFleetGuard, D1FleetGuardStore, MemoryFleetGuardStore, FLEET_DISCLAIMER, FLEET_USE_RESTRICTION, FLEET_SALES_ROUTES, type FleetGuardStore } from "../src/fleet_guard";
+import { MemoryReplayGuard } from "../src/x402";
+import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor, decodeB64Json } from "./helpers";
+
+const SECRET = "fg-test-secret-0123456789abcdef0123456789";
+const NEW_SECRET = "fg-rotated-secret-zyxwvutsrqponmlkjihgfedcba";
+const KEY_SECRET = "fg-key-secret-fedcba9876543210fedcba9876543210";
+const OWNER = "k".repeat(52);
+const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", OWNER_MCP_KEY: OWNER, FLEET_GUARD: "on", FLEET_GUARD_HMAC_SECRET: SECRET, FLEET_GUARD_KEY_SECRET: KEY_SECRET };
+const BASE = "http://lumi.test";
+const FLEET_PAYER = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh";
+const FLEET_SELLER = "seller-in-fleet.example";
+const CLEAN = "clean-seller.example";
+const EVM = "0x" + "12".repeat(20);
+const DAY = 86_400_000;
+const FORBIDDEN = /scripted|one buyer|independent demand|seller's income|first_seen|wallets"|sellers_paid|confidence"|"cluster_id"|"F1"/i;
+
+class SqliteD1 implements D1Like {
+  db = new DatabaseSync(":memory:");
+  constructor(migrations: string[]) { for (const m of migrations) this.db.exec(readFileSync(new URL(`../migrations/${m}`, import.meta.url), "utf8")); }
+  prepare(sql: string): D1Statement { return this.stmt(sql, []); }
+  private stmt(sql: string, args: unknown[]): D1Statement {
+    const db = this.db;
+    const a = args.map((v) => (v === undefined ? null : v)) as any[];
+    return {
+      bind: (...v: unknown[]) => this.stmt(sql, v),
+      run: async () => { const r = db.prepare(sql).run(...a); return { meta: { changes: Number(r.changes) } } as any; },
+      all: async <T>() => ({ results: db.prepare(sql).all(...a) as T[] }),
+      first: async <T>() => ((db.prepare(sql).get(...a) as T) ?? null),
+    };
+  }
+  async batch(st: D1Statement[]) { for (const s of st) await s.run(); return []; }
+}
+
+function setup(o: { env?: Record<string, unknown>; store?: FleetGuardStore; clock?: { t: number } } = {}) {
+  const clock = o.clock ?? { t: NOW };
+  const store = o.store ?? new MemoryFleetGuardStore();
+  const sales = new MemorySalesStore();
+  const fac = happyFacilitator();
+  const app = createApp({ ...ENV, ...(o.env ?? {}) } as any, {
+    fetch: makeFetch(fac), now: () => clock.t, log: () => {}, fleetGuardStore: store as any, salesStore: sales,
+    quotaCounter: new MemoryQuotaCounter(() => clock.t), idempotencyStore: new MemoryIdempotencyStore(),
+  });
+  const get = (p: string, h: Record<string, string> = {}) => app.fetch(new Request(BASE + p, { headers: h }));
+  const admin = (method: string, p: string, body: unknown, owner = true) => app.fetch(new Request(BASE + p, {
+    method, body: JSON.stringify(body), headers: { "Content-Type": "application/json", ...(owner ? { Authorization: `Bearer ${OWNER}` } : {}) },
+  }));
+  const load = (subjects = [{ value: FLEET_PAYER, role: "payer" }, { value: FLEET_SELLER, role: "seller" }]) => admin("POST", "/v1/fleet/admin/members", { cluster: { id: "F1", basis: "funding path + payer overlap" }, subjects });
+  const check = async (subjects: string) => {
+    const q: any = await (await get(`/v1/fleet/check?subject=${subjects}`)).json();
+    const r = await get(`/v1/fleet/check?subject=${subjects}`, { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) });
+    const text = await r.text();
+    return { r, text, b: JSON.parse(text) as any, q };
+  };
+  // the fake facilitator returns one tx hash for every settle: forget recorded settles between paid checks in a test
+  const reset = () => { if (store instanceof MemoryFleetGuardStore) store.settles.clear(); };
+  return { app, get, admin, load, check, reset, store, sales, clock, fac };
+}
+
+const legalOk = (b: any) => {
+  expect(b.method_url).toBe(`${BASE}/v1/fleet/methodology`);
+  expect(b.disclaimer).toBe(FLEET_DISCLAIMER);
+  expect(b.disclaimer).toMatch(/Not OFAC/);
+  expect(b.disclaimer).toMatch(/Not a consumer report/);
+  expect(b.disclaimer).toMatch(/no warranty/i);
+  expect(b.use_restriction).toBe(FLEET_USE_RESTRICTION);
+  expect(b.use_restriction).toMatch(/15 U\.S\.C\. 1681b/);
+  for (const w of ["credit", "employment", "insurance", "tenancy"]) expect(b.use_restriction).toContain(w);
+  expect(b.disputes).toContain("hello@lumitrades.io");
+};
+
+describe("Quill 1 + 7: only three label values, no score, no intent wording, no fingerprinting fields", () => {
+  it("match / No match / Insufficient data", async () => {
+    const s = setup();
+    expect((await s.load()).status).toBe(200);
+    const { r, text, b } = await s.check(`${FLEET_PAYER},${CLEAN},${EVM}`);
+    expect(r.status).toBe(200);
+    const day = new Date(NOW).toISOString().slice(0, 10);
+    expect(b.results.map((x: any) => x.label)).toEqual([
+      `Pattern match: automated cluster, as of ${day}, method ${BASE}/v1/fleet/methodology`,
+      "No match",          // a domain: Lumi has domain clusters, this one is not in them
+      "Insufficient data", // an EVM address: Lumi has no EVM clusters loaded
+    ]);
+    expect(b.results.map((x: any) => x.match)).toEqual([true, false, null]);
+    for (const x of b.results) expect(Object.keys(x).sort()).toEqual(["as_of", "index", "label", "match", "role", "subject_kind"]);
+    expect(text).not.toMatch(FORBIDDEN);
+    expect(text).not.toMatch(/score/i);
+    legalOk(b);
+  });
+
+  it("docs, methodology and discovery carry no intent wording either", async () => {
+    const s = setup();
+    for (const p of ["/v1/fleet", "/v1/fleet/methodology", "/.well-known/x402"]) {
+      const t = await (await s.get(p)).text();
+      expect(t, p).not.toMatch(/scripted|one buyer|independent demand|seller's income/i);
+    }
+  });
+});
+
+describe("Quill 2: disclaimer, FCRA use restriction and a resolving method_url on every fleet response", () => {
+  it("paid, free, prepaid-key, key info and pack responses", async () => {
+    const s = setup();
+    await s.load();
+    legalOk((await s.check(CLEAN)).b);
+    legalOk(await (await s.get(`/v1/fleet/check/free?subject=${CLEAN}`, { "CF-Connecting-IP": "1.1.1.1" })).json());
+    const q: any = await (await s.get("/v1/fleet/pack")).json();
+    s.reset();
+    const pack: any = await (await s.get("/v1/fleet/pack", { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) })).json();
+    legalOk(pack);
+    expect(pack.auto_renew).toBe(false);
+    legalOk(await (await s.get(`/v1/fleet/check?subject=${CLEAN}`, { "X-Lumi-Fleet-Key": pack.key })).json());
+    legalOk(await (await s.get("/v1/fleet/key", { "X-Lumi-Fleet-Key": pack.key })).json());
+    legalOk(await (await s.get("/v1/fleet")).json());
+  });
+
+  it("the method URL resolves, and the trust methodology page carries the fleet section only when on", async () => {
+    const s = setup();
+    const m = await s.get("/v1/fleet/methodology");
+    expect(m.status).toBe(200);
+    const mb: any = await m.json();
+    expect(mb.url).toBe(`${BASE}/v1/fleet/methodology`);
+    expect(mb.labels).toMatchObject({ no_match: "No match", insufficient_data: "Insufficient data" });
+    expect(JSON.stringify(mb.retention)).toMatch(/90 days/);
+    expect(JSON.stringify(mb.retention)).toMatch(/30 days after the key expires/);
+    legalOk(mb);
+    const tm: any = await (await s.get("/v1/trust/methodology")).json();
+    expect(tm.fleet_guard?.url).toBe(`${BASE}/v1/fleet/methodology`);
+    const off = setup({ env: { FLEET_GUARD: "off" } });
+    expect((await off.get("/v1/fleet/methodology")).status).toBe(404);
+    const tOff: any = await (await off.get("/v1/trust/methodology")).json();
+    expect(tOff).not.toHaveProperty("fleet_guard");
+  });
+});
+
+describe("Quill 3: the subject is always hashed in invoice / resource URLs", () => {
+  it("one short subject: resource URL has n and qh only", async () => {
+    const s = setup();
+    for (const subj of [CLEAN, FLEET_PAYER, EVM]) {
+      const r = await s.get(`/v1/fleet/check?subject=${subj}`);
+      const body = await r.clone().text();
+      const hdr = JSON.stringify(decodeB64Json(r.headers.get("PAYMENT-REQUIRED")));
+      const q = JSON.parse(body);
+      expect(q.resource.url).toMatch(/^http:\/\/lumi\.test\/v1\/fleet\/check\?n=1&qh=[0-9a-f]{32}$/);
+      expect(body).not.toContain(subj);
+      expect(hdr).not.toContain(subj);
+    }
+  });
+});
+
+describe("Quill 4 + 5: retention (90 days; keys 30 days after expiry) and owner deletion", () => {
+  async function retention(store: FleetGuardStore) {
+    const clock = { t: NOW };
+    const s = setup({ store, clock });
+    await s.load();
+    await store.recordSettle("TX_OLD", "fleet_check", "ph", NOW);
+    await store.mintKey({ key_hash: "kh_exp", plan: "fleet_pack", calls: 10, used: 0, expires_at: NOW + 70 * DAY, paid_tx: "TXK", payer_hmac: null, created_at: NOW });
+    await s.sales.insert({ route: "fleet_check", routeKey: null, rail: "xrpl", network: "xrpl:1", asset: "XRP", amount: "1", usd: 0.0005, payer: null, tx: "S1", facilitator: null, client: null, isTest: false, ts: NOW } as any);
+    await s.sales.insert({ route: "high_value_check", routeKey: null, rail: "xrpl", network: "xrpl:1", asset: "XRP", amount: "1", usd: 0.25, payer: null, tx: "S2", facilitator: null, client: null, isTest: false, ts: NOW } as any);
+    const fg = createFleetGuard({
+      cfg: loadConfig(ENV as any), env: ENV, store, counter: new MemoryQuotaCounter(() => clock.t), isOwner: async () => true, now: () => clock.t, log: () => {},
+      paywall: () => ({ fetch: makeFetch(happyFacilitator()), replay: new MemoryReplayGuard() }), sales: s.sales,
+    });
+    clock.t = NOW + 89 * DAY;
+    expect(await fg.purge()).toEqual({ settles: 0, members: 0, clusters: 0, keys: 0, sales: 0 });
+    clock.t = NOW + 91 * DAY;
+    const r = await fg.purge();
+    expect(r).toEqual({ settles: 1, members: 2, clusters: 1, keys: 0, sales: 1 });
+    clock.t = NOW + 101 * DAY;
+    expect((await fg.purge()).keys).toBe(1); // expired at day 70, deleted 30 days later
+    expect(s.sales.rows.map((x) => x.route)).toEqual(["high_value_check"]);
+    // memberships are gone: the domain kind is no longer covered either
+    expect((await store.members([])).size).toBe(0);
+    expect((await store.coveredKinds()).size).toBe(0);
+  }
+  it("memory store", async () => { await retention(new MemoryFleetGuardStore()); });
+  it("D1 store (real migration)", async () => { await retention(new D1FleetGuardStore(new SqliteD1(["0034_fleet_guard.sql"]))); });
+
+  it("a reconfirmed membership restarts its 90-day clock and its as-of date", async () => {
+    const clock = { t: NOW };
+    const store = new MemoryFleetGuardStore();
+    const s = setup({ store, clock });
+    await s.load();
+    clock.t = NOW + 60 * DAY;
+    await s.load();
+    const fg = createFleetGuard({ cfg: loadConfig(ENV as any), env: ENV, store, counter: new MemoryQuotaCounter(() => clock.t), isOwner: async () => true, now: () => clock.t, log: () => {}, paywall: () => ({ fetch: makeFetch(happyFacilitator()), replay: new MemoryReplayGuard() }) });
+    clock.t = NOW + 120 * DAY;
+    expect((await fg.purge()).members).toBe(0);
+    clock.t = NOW + 151 * DAY;
+    expect((await fg.purge()).members).toBe(2);
+  });
+
+  it("owner deletion by subject and by cluster; non-owner refused", async () => {
+    const s = setup();
+    await s.load();
+    expect((await s.admin("DELETE", "/v1/fleet/admin/members", { subjects: [FLEET_PAYER] }, false)).status).toBe(401);
+    const d: any = await (await s.admin("DELETE", "/v1/fleet/admin/members", { subjects: [FLEET_PAYER] })).json();
+    expect(d.removed).toBe(1);
+    const c: any = await (await s.admin("DELETE", "/v1/fleet/admin/members", { cluster: "F1" })).json();
+    expect(c.removed).toBe(1);
+    s.reset();
+    const { b } = await s.check(`${FLEET_PAYER},${FLEET_SELLER}`);
+    expect(b.results.map((x: any) => x.label)).toEqual(["Insufficient data", "Insufficient data"]);
+  });
+
+  it("the nightly purge runs even when FLEET_GUARD is off", async () => {
+    const store = new MemoryFleetGuardStore();
+    let purged = 0;
+    const orig = store.purge.bind(store);
+    store.purge = async (t: number) => { purged++; return orig(t); };
+    const nightly = Date.UTC(2026, 10, 20, 3, 0, 0);
+    const app = createApp({ ...ENV, FLEET_GUARD: "off" } as any, { fetch: makeFetch(happyFacilitator()), now: () => nightly, log: () => {}, fleetGuardStore: store, salesStore: new MemorySalesStore(), quotaCounter: new MemoryQuotaCounter(() => nightly) });
+    await app.scheduled();
+    expect(purged).toBe(1);
+  });
+});
+
+describe("deletions are never served stale from another isolate", () => {
+  it("isolate A answered a match; the owner deletes via isolate B; A's next answer is not a match", async () => {
+    const store = new MemoryFleetGuardStore();
+    const A = setup({ store }); const B = setup({ store });
+    await B.load();
+    A.reset();
+    expect((await A.check(FLEET_SELLER)).b.results[0].match).toBe(true);
+    await B.admin("DELETE", "/v1/fleet/admin/members", { subjects: [FLEET_SELLER] });
+    A.reset();
+    expect((await A.check(FLEET_SELLER)).b.results[0].match).not.toBe(true);
+  });
+});
+
+describe("Quill 6: owner correction / exclusion applies at once", () => {
+  it("override wins at once, blocks reloading that subject, and can be cleared", async () => {
+    const s = setup();
+    await s.load();
+    expect((await s.check(FLEET_PAYER)).b.results[0].match).toBe(true);
+    expect((await s.admin("POST", "/v1/fleet/admin/override", { subject: FLEET_PAYER, label: "No match" }, false)).status).toBe(401);
+    expect((await s.admin("POST", "/v1/fleet/admin/override", { subject: FLEET_PAYER, label: "Pattern match" })).status).toBe(400);
+    expect((await s.admin("POST", "/v1/fleet/admin/override", { subject: FLEET_PAYER, label: "No match" })).status).toBe(200);
+    s.reset();
+    expect((await s.check(FLEET_PAYER)).b.results[0]).toMatchObject({ label: "No match", match: false, role: null });
+    // a later member load skips the overridden subject
+    const l: any = await (await s.load()).json();
+    expect(l.skipped_overridden).toBe(1);
+    expect((await s.admin("POST", "/v1/fleet/admin/override", { subject: FLEET_PAYER, label: null })).status).toBe(200);
+    s.reset();
+    // override cleared; the membership was removed when the override was set (no xrpl members left: Insufficient data)
+    expect((await s.check(FLEET_PAYER)).b.results[0]).toMatchObject({ label: "Insufficient data", match: null });
+  });
+});
+
+describe("Quill 8: HMAC rotation (current + previous secret)", () => {
+  it("lookups, overrides and deletions match hashes made with the previous secret", async () => {
+    const store = new MemoryFleetGuardStore();
+    await setup({ store }).load(); // loaded under the old secret
+    const rotated = setup({ store, env: { FLEET_GUARD_HMAC_SECRET: NEW_SECRET, FLEET_GUARD_HMAC_SECRET_PREV: SECRET } });
+    rotated.reset();
+    expect((await rotated.check(FLEET_PAYER)).b.results[0].match).toBe(true);
+    const noPrev = setup({ store, env: { FLEET_GUARD_HMAC_SECRET: NEW_SECRET } });
+    noPrev.reset();
+    expect((await noPrev.check(FLEET_PAYER)).b.results[0].match).not.toBe(true);
+    // deletion under the rotated config removes the old-secret row
+    const d: any = await (await rotated.admin("DELETE", "/v1/fleet/admin/members", { subjects: [FLEET_SELLER] })).json();
+    expect(d.removed).toBe(1);
+    // an override written during rotation is found under either secret
+    await rotated.admin("POST", "/v1/fleet/admin/override", { subject: FLEET_PAYER, label: "Insufficient data" });
+    const old = setup({ store });
+    old.reset();
+    expect((await old.check(FLEET_PAYER)).b.results[0].label).toBe("Insufficient data");
+  });
+});
+
+describe("Vigil steering 1: owner admin works while FLEET_GUARD is off", () => {
+  it("load, override and delete return 200 while public routes stay absent", async () => {
+    const store = new MemoryFleetGuardStore();
+    const off = setup({ store, env: { FLEET_GUARD: "off" } });
+    expect((await off.load()).status).toBe(200);
+    expect((await off.admin("POST", "/v1/fleet/admin/override", { subject: CLEAN, label: "No match" })).status).toBe(200);
+    expect((await off.admin("DELETE", "/v1/fleet/admin/members", { subjects: [FLEET_SELLER] })).status).toBe(200);
+    expect((await off.admin("POST", "/v1/fleet/admin/members", {}, false)).status).toBe(401);
+    expect((await off.get(`/v1/fleet/check?subject=${CLEAN}`)).status).toBe(404);
+    expect((await off.get("/v1/fleet")).status).toBe(404);
+    // the members loaded while off answer once switched on
+    const on = setup({ store });
+    on.reset();
+    expect((await on.check(FLEET_PAYER)).b.results[0].match).toBe(true);
+  });
+  it("still fails closed without the HMAC secret", async () => {
+    const s = setup({ env: { FLEET_GUARD: "off", FLEET_GUARD_HMAC_SECRET: undefined } });
+    expect((await s.load()).status).toBe(503);
+  });
+  it("wrangler.toml commits FLEET_GUARD = \"off\"", () => {
+    const t = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
+    const top = t.slice(t.indexOf("[vars]"), t.indexOf("[env.testnet]"));
+    expect(top).toMatch(/^FLEET_GUARD = "off"/m);
+  });
+});
+
+describe("pricing text and the monthly plan", () => {
+  it("docs say 0.0005 USD per call and the $4 / 10,000 / 365 days / no auto-renew pack; monthly hidden unless on", async () => {
+    const d: any = await (await setup().get("/v1/fleet")).json();
+    expect(d.price).toMatch(/^0\.0005 USD per call/);
+    expect(d.pack.text).toBe("$4 pack of 10,000 calls, lasts 365 days, no auto-renew.");
+    expect(d.pack.auto_renew).toBe(false);
+    expect(JSON.stringify(d)).not.toMatch(/monthly|\$49|"49"/);
+    expect(JSON.stringify(await (await setup().get("/v1/fleet/methodology")).json())).not.toMatch(/monthly|49/);
+    expect(JSON.stringify(await (await setup().get("/.well-known/x402")).json())).not.toMatch(/fleet\/plan\/monthly/);
+    const on: any = await (await setup({ env: { FLEET_GUARD_MONTHLY: "on" } }).get("/v1/fleet")).json();
+    expect(on.monthly).toMatchObject({ usd: "49", auto_renew: false });
+  });
+});
+
+void FLEET_SALES_ROUTES;

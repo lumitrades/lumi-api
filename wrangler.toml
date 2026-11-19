@@ -31,6 +31,7 @@ SOURCE_TAG = "5864"                                     # Lumi's own tag ("LUMI"
 XRPL_DEST_TAG_ROUTES = "all"                              # per-product extra.destinationTag rollout: "" off, "receipts,..." or "all" (docs/xrpl-destination-tags.md)
 XRPL_DEST_TAG_SOURCE_TAG = "804681468"                 # sourceTag on destination-tagged quotes: "none" or a uint32
 FIRST_HV_REFUND = "off"                                  # first high-value check refund offer (<= $0.25, once per payer): "on" to announce it; refunds are paid by hand, never by code (docs/first-hv-refund.md)
+FLEET_GUARD = "off"                                      # wallet pattern check (fleet guard): exactly "on" serves /v1/fleet/*; launch = change to "on" in a commit, then deploy; rollback = "off" + redeploy. Owner /v1/fleet/admin/* works while off.
 PRICE_VENDOR_REPORT_XRP = "0.015"                        # $0.02 at XRP ~= $1.32 (Oct 22 2026); fixed, not repriced live
 # Stablecoins (XRPL issued tokens), offered as accepts[1] RLUSD and accepts[2] USDC. Issuers default to the
 # official ones per network (Ripple rMxCKbEDwqr76QuheSUMdEGf4B9xJ8m5De, Circle rGm7WCVp9gb4jZHWTEtGUr4dd74z2XuWhE).
@@ -131,6 +132,7 @@ FACILITATOR_URL = "https://xrpl-facilitator-testnet.t54.ai"
 SOURCE_TAG = "5864"                                     # Lumi's own tag ("LUMI" on a keypad), the pre-Oct-22 value
 XRPL_DEST_TAG_ROUTES = ""                               # per-product extra.destinationTag rollout: "" off, "receipts,..." or "all" (docs/xrpl-destination-tags.md)
 XRPL_DEST_TAG_SOURCE_TAG = "none"                       # sourceTag on destination-tagged quotes: "none" or a uint32
+FLEET_GUARD = "off"
 PRICE_VENDOR_REPORT_XRP = "0.015"
 DATA_BASE_URL = "https://lumitrades.io/data"
 DATA_TTL_SECONDS = "60"

@@ -1005,6 +1005,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     isOwner: ownerReq,
     now,
     log: (e) => deps.log?.(e),
+    sales,
   });
   const commerce = createCommerce({
     sanctions,
@@ -1623,7 +1624,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       const eb = /^\/v1\/badge\/([^/]{1,200})\.(json|svg)$/.exec(path);
       if (eb) { const k = safeDecode(eb[1]); if (k) return earnedBadge(k, eb[2] as "json" | "svg", base); }
     }
-    // Fleet guard (off unless FLEET_GUARD=on): paid x402 fleet-membership check, prepaid keys, capped free check.
+    // Fleet guard (off unless FLEET_GUARD=on; owner admin works while off): paid x402 wallet pattern check, prepaid keys, capped free check.
     if (path.startsWith("/v1/fleet")) {
       const r = await fleetGuard.handle(request, path, base, ctx);
       if (r) return r;
@@ -1636,6 +1637,15 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     // Trust layer: free GETs, rate-limited public POSTs, owner-only ingest.
     if (path.startsWith("/v1/trust") || path === "/v1/reports" || path === "/v1/tips") {
       const r = await trust.handle(request, path, base, ctx);
+      // With fleet guard on, the shared methodology page also carries its section (the fleet method_url is /v1/fleet/methodology).
+      if (r && path === "/v1/trust/methodology" && r.status === 200 && fleetGuard.on() && (r.headers.get("Content-Type") ?? "").includes("json")) {
+        try {
+          const j = (await r.clone().json()) as Record<string, unknown>;
+          const h = new Headers(r.headers);
+          h.delete("Content-Length");
+          return new Response(JSON.stringify({ ...j, fleet_guard: fleetGuard.methodology(base) }, null, 2), { status: 200, headers: h });
+        } catch { return r; }
+      }
       if (r) return r;
     }
     // Lumi Check v0 (DRAFT, not deployed): contributor-signed receipts + owner key management.
@@ -2157,7 +2167,9 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       // matched; see isNightlyTick.
       const nightly = isNightlyTick(now());
       const contribPurge = nightly ? contributors.purge().catch(() => {}) : Promise.resolve();
-      if (nightly && fleetGuard.on()) await fleetGuard.purge().catch((e) => deps.log?.({ event: "fleet_guard_purge_error", error: String(e).slice(0, 120) }));
+      // Fleet-guard retention runs nightly whether or not the feature is on (data can outlive a switch-off). Before migration
+      // 0034 is applied the tables do not exist: that error is expected and only logged.
+      if (nightly) await fleetGuard.purge().catch((e) => deps.log?.({ event: "fleet_guard_purge_error", error: String(e).slice(0, 120) }));
       const prune = Promise.all([trafficBuf.flush().catch(trafficErr), (nightly ? outcomes.nightly().then((r) => deps.log?.({ event: "check_outcomes_nightly", ...r, rolled: r.rolled.length, rerolled: r.rerolled.length, purged_days: r.purged_days.length })) : outcomes.flush()).catch(() => {}), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge]);
       const [probes, cat, , com] = await Promise.allSettled([trust.runProbes(), catalog.cron(), prune, commerce.cron(config.publicBaseUrl ?? "https://api.lumitrades.io")]);
       return {

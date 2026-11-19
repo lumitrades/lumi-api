@@ -43,6 +43,8 @@ export interface SaleRow extends Required<Omit<SaleEvent, "routeKey" | "usd" | "
 export interface SalesStore {
   insert(row: SaleRow): Promise<boolean>;
   since(tsMs: number): Promise<SaleRow[]>;
+  /** Retention for one product's rows (fleet guard: 90 days). Returns rows deleted. */
+  purgeRoutes?(routes: readonly string[], beforeMs: number): Promise<number>;
 }
 
 export class MemorySalesStore implements SalesStore {
@@ -54,6 +56,11 @@ export class MemorySalesStore implements SalesStore {
   }
   async since(tsMs: number): Promise<SaleRow[]> {
     return this.rows.filter((r) => r.ts >= tsMs).sort((a, b) => b.ts - a.ts);
+  }
+  async purgeRoutes(routes: readonly string[], beforeMs: number): Promise<number> {
+    const before = this.rows.length;
+    this.rows = this.rows.filter((r) => !(routes.includes(r.route) && r.ts < beforeMs));
+    return before - this.rows.length;
   }
 }
 
@@ -100,6 +107,11 @@ export class D1SalesStore implements SalesStore {
       client: (x.client as string) ?? null,
       isTest: Number(x.is_test) === 1,
     }));
+  }
+  async purgeRoutes(routes: readonly string[], beforeMs: number): Promise<number> {
+    if (!routes.length) return 0;
+    const r = await this.db.prepare(`DELETE FROM sales WHERE route IN (${routes.map(() => "?").join(",")}) AND ts < ?`).bind(...routes, beforeMs).run();
+    return Number((r as { meta?: { changes?: number } })?.meta?.changes ?? 0);
   }
 }
 

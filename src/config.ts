@@ -47,10 +47,12 @@ export interface Env {
   PRIVATE_NAMES?: string;
   /** Owner access key for the remote MCP endpoint (/mcp): paid tools return data free. `wrangler secret put OWNER_MCP_KEY`. */
   OWNER_MCP_KEY?: string;
-  /** Fleet guard (src/fleet_guard.ts): exactly "on" enables /v1/fleet/*; anything else = off (routes not handled, not listed). */
+  /** Fleet guard (src/fleet_guard.ts): exactly "on" enables /v1/fleet/*; anything else = off (routes not handled, not listed; owner /v1/fleet/admin/* still works). Committed in wrangler.toml [vars], default "off". */
   FLEET_GUARD?: string;
   /** Fleet guard keyed-HMAC secret (>= 32 chars) for payer / member / IP hashes. `wrangler secret put FLEET_GUARD_HMAC_SECRET`. Unset = 503, never charged. */
   FLEET_GUARD_HMAC_SECRET?: string;
+  /** Previous fleet guard HMAC secret during a rotation (>= 32 chars). Lookups, overrides and deletions also match hashes made with it. Remove 90 days after rotating. */
+  FLEET_GUARD_HMAC_SECRET_PREV?: string;
   /** Fleet guard pack/plan key-derivation secret (>= 32 chars, different from FLEET_GUARD_HMAC_SECRET). `wrangler secret put FLEET_GUARD_KEY_SECRET`. Unset = packs and plans 503, never charged. */
   FLEET_GUARD_KEY_SECRET?: string;
   /** Fleet guard flat monthly plan ($49 / 30 days, fair-use cap): exactly "on" offers it; default off (owner decision). */
