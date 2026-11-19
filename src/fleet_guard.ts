@@ -403,6 +403,8 @@ export const LABEL_INSUFFICIENT = "Insufficient data";
 export const matchLabel = (asOf: string, methodUrl: string) => `Pattern match: automated cluster, as of ${asOf}, method ${methodUrl}`;
 export const FLEET_DISCLAIMER =
   "Dated statistical pattern observation of public-ledger payments under Lumi's published method, as of the date shown. Not a finding of intent or wrongdoing. Not OFAC, sanctions, AML or KYC screening and not a substitute for it. Not a consumer report; Lumi is not a consumer reporting agency. False matches and missed matches occur, and absence of a match is not a clearance. Provided as is, with no warranty of any kind. Do not display this result as current after valid_until.";
+/** Short form for the 402 body (Quill, 2026-11-19); the full FLEET_DISCLAIMER is on every answer. */
+export const FLEET_DISCLAIMER_SHORT = "Dated pattern observation under Lumi's method, not a finding of intent. Not OFAC/AML screening, not a consumer report. No warranty.";
 export const FLEET_USE_RESTRICTION =
   "FCRA: you may not use this result, in whole or in part, as a factor in deciding any individual's eligibility for credit, insurance, employment, housing or tenancy, a government benefit, or any other purpose listed in 15 U.S.C. 1681b, and you may not represent that others may do so. Pass this restriction on to anyone you let see the result.";
 export const FLEET_DISPUTES = "To dispute or correct a label, or to ask Lumi to exclude an address that is yours, email hello@lumitrades.io with the address and network. Lumi can only find a hashed record if you give the address.";
@@ -661,7 +663,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
     };
   }
 
-  function quoteFor(route: string, usd: string, resourceUrl: string, description: string): Quote {
+  function quoteFor(route: string, usd: string, resourceUrl: string, description: string, base: string): Quote {
     const cfg = d.cfg;
     const rate = cfg.xrpRate?.usd ?? cfg.xrpUsdFallback;
     const atomic6 = String(Math.round(Number(usd) * 1e6));
@@ -678,6 +680,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
       resourceUrl,
       bazaar: { info: { input: { type: "http", method: "GET" }, output: { type: "json" } } },
       service: { serviceName: "Lumi fleet guard", tags: ["x402", "trust", "fleet"] },
+      legal: { disclaimer: FLEET_DISCLAIMER_SHORT, use_restriction: FLEET_USE_RESTRICTION, method_url: methodUrl(base) },
     };
   }
 
@@ -780,7 +783,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
     // The invoice binds this URL. It never echoes a subject (Quill 2026-11-19): always a keyed hash of the normalized query
     // (HMAC, so an address cannot be confirmed by hashing candidates), recomputed on the paid retry.
     const resourceUrl = `${base}/v1/fleet/check?n=${n}&qh=${(await hmacHex(secret(), `fg-qh:${FLEET_GUARD.version}|${parsed.canonical}`)).slice(0, 32)}`;
-    const quote = quoteFor(`fleet_check:n${n}`, usd, resourceUrl, `Lumi wallet pattern check: dated pattern-match label for ${n} identifier(s), ${FLEET_GUARD.priceUsd} USD per call, cache 1h.`);
+    const quote = quoteFor(`fleet_check:n${n}`, usd, resourceUrl, `Lumi wallet pattern check: dated pattern-match label for ${n} identifier(s), ${FLEET_GUARD.priceUsd} USD per call, cache 1h.`, base);
     if (!hasPayment(request)) {
       return paymentRequiredResponse(d.cfg, quote, "PAYMENT-SIGNATURE header is required", {
         pack: { url: `${base}/v1/fleet/pack`, usd: FLEET_GUARD.pack.usd, calls: FLEET_GUARD.pack.calls },
@@ -812,7 +815,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
     if (!keySecret()) return json(503, { error: "fleet_keys_not_configured", detail: "Packs and plans are not on sale right now; per-call checks still work.", note: "Not charged." }, NO_STORE);
     const ip = await ipHmac(request);
     if (!(await take(obj(ip), [{ key: `fg-b:${ip}`, max: 30, resetAt: minuteEnd() }], false))) return rateLimited();
-    const quote = quoteFor(plan.id, plan.usd, `${base}${path}`, `Lumi wallet pattern check ${plan.id === FLEET_GUARD.pack.id ? "pack" : "30-day plan"}: ${plan.calls.toLocaleString("en-US")} calls, lasts ${plan.days} days, no auto-renew.`);
+    const quote = quoteFor(plan.id, plan.usd, `${base}${path}`, `Lumi wallet pattern check ${plan.id === FLEET_GUARD.pack.id ? "pack" : "30-day plan"}: ${plan.calls.toLocaleString("en-US")} calls, lasts ${plan.days} days, no auto-renew.`, base);
     if (!hasPayment(request)) return paymentRequiredResponse(d.cfg, quote, "PAYMENT-SIGNATURE header is required", { idempotency: "Send Idempotency-Key with the paid retry; a repeat with the same key and payment returns the same key." });
     return paid(request, ctx, quote, Number(plan.usd), async (s, ph) => {
       const raw = await deriveKey(plan.id, s.transaction);

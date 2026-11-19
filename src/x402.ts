@@ -140,6 +140,8 @@ export interface Quote {
   trial_key?: Record<string, unknown>;
   /** Trust routes: a short, labelled sample of what the paid answer looks like (top-level `example_result`; see example_result.ts). */
   exampleResult?: { label: string; result: Record<string, unknown> };
+  /** Top-level legal notes in the 402 BODY only (never the PAYMENT-REQUIRED header, which must stay under 4 KB). */
+  legal?: { disclaimer: string; use_restriction: string; method_url: string };
 }
 
 // ---------------------------------------------------------------- encoding
@@ -481,6 +483,7 @@ export async function buildPaymentRequired(cfg: Config, quote: Quote, error: str
     ...(quote.trial ? { trial: quote.trial } : {}),
     ...(quote.trial_key ? { trial_key: quote.trial_key } : {}),
     ...(quote.exampleResult ? { example_result: quote.exampleResult } : {}),
+    ...(quote.legal ? { disclaimer: quote.legal.disclaimer, use_restriction: quote.legal.use_restriction, method_url: quote.legal.method_url } : {}),
     ...howTo,
     // First high-value check refund offer: only when FIRST_HV_REFUND=on (default off); words only, no money path.
     ...(cfg.firstHvRefund && quoteRoute(quote) === "high_value_check" ? { first_check_refund: FIRST_HV_REFUND_TEXT } : {}),
@@ -533,6 +536,9 @@ export const PAYMENT_REQUIRED_BODY_ONLY_KEYS = [
   "trial_key",
   "first_check_refund",
   "payment_help",
+  "disclaimer",
+  "use_restriction",
+  "method_url",
 ] as const;
 
 /** Soft cap for the base64 PAYMENT-REQUIRED header: stay comfortably under this for worst-case quotes. */

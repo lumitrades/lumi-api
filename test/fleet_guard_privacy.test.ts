@@ -11,7 +11,7 @@ import { loadConfig, type D1Like, type D1Statement } from "../src/config";
 import { MemorySalesStore } from "../src/sales";
 import { MemoryQuotaCounter } from "../src/free_quota";
 import { MemoryIdempotencyStore } from "../src/idempotency";
-import { createFleetGuard, D1FleetGuardStore, MemoryFleetGuardStore, FLEET_DISCLAIMER, FLEET_USE_RESTRICTION, FLEET_SALES_ROUTES, type FleetGuardStore } from "../src/fleet_guard";
+import { createFleetGuard, D1FleetGuardStore, MemoryFleetGuardStore, FLEET_DISCLAIMER, FLEET_DISCLAIMER_SHORT, FLEET_USE_RESTRICTION, FLEET_SALES_ROUTES, type FleetGuardStore } from "../src/fleet_guard";
 import { MemoryReplayGuard } from "../src/x402";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor, decodeB64Json } from "./helpers";
 
@@ -332,6 +332,38 @@ describe("Vigil final: the recently-valid marker slides while a key is in use", 
 });
 
 const unknownKeyLike = () => "fgk_" + "e".repeat(40);
+
+describe("Quill final: legal notes in the 402 body, not in the PAYMENT-REQUIRED header", () => {
+  it("body carries disclaimer, use_restriction and method_url; header bytes unchanged from b4bfccf", async () => {
+    const FULL = { EVM_PAY_TO: "0x5E617bac19912e6d212CB303ae84655E9E203532", EVM_NETWORK: "eip155:8453", EVM_FACILITATOR_URL: "https://evm-fac.test", EVM_CDP_ONLY_ROUTES: "none",
+      STELLAR_PAY_TO: "GCKTH26VNR4H4WLCXS5DX6563XRQQXWP5QKQWFD6CHOGTZJ2N5GKBU2L", STELLAR_NETWORK: "stellar:pubnet", STELLAR_FACILITATOR_URL: "https://st-fac.test", STELLAR_FACILITATOR_API_KEY: "test-key", PUBLIC_BASE_URL: "https://api.lumitrades.io", FLEET_GUARD_MONTHLY: "on" };
+    const s = setup({ env: FULL });
+    // Header lengths measured on b4bfccf (before the body fields) with this exact config and clock.
+    const baseline: Record<string, number> = {
+      "/v1/fleet/check?subject=a.io": 3592,
+      "/v1/fleet/check?subject=a.io,b.io,c.io": 3600,
+      "/v1/fleet/pack": 3448,
+      "/v1/fleet/plan/monthly": 3504,
+    };
+    for (const [p, len] of Object.entries(baseline)) {
+      const r = await s.get(p);
+      expect(r.status, p).toBe(402);
+      const b: any = await r.json();
+      expect(b.disclaimer, p).toBe(FLEET_DISCLAIMER_SHORT);
+      expect(b.disclaimer).toMatch(/Not OFAC\/AML screening, not a consumer report/);
+      expect(b.use_restriction, p).toBe(FLEET_USE_RESTRICTION);
+      expect(b.method_url, p).toBe("https://api.lumitrades.io/v1/fleet/methodology");
+      const h = r.headers.get("PAYMENT-REQUIRED")!;
+      expect(h.length, p).toBe(len);
+      expect(new TextEncoder().encode(h).length, p).toBeLessThan(4096);
+      const hp = decodeB64Json(h);
+      for (const k of ["disclaimer", "use_restriction", "method_url"]) expect(hp, p).not.toHaveProperty(k);
+    }
+    // other routes' 402s are untouched
+    const t: any = await (await s.get("/v1/trust/check/high-value?url=https://a.example/x&amount=4")).json();
+    expect(t).not.toHaveProperty("use_restriction");
+  });
+});
 
 describe("Vigil steering 1: owner admin works while FLEET_GUARD is off", () => {
   it("load, override and delete return 200 while public routes stay absent", async () => {
