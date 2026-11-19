@@ -15,8 +15,9 @@ import { MemoryReplayGuard, PAYMENT_REQUIRED_HEADER_SOFT_LIMIT } from "../src/x4
 import { DATA, FACILITATOR, PAY_TO, PAYER, NOW, happyFacilitator, makeFetch, paymentHeaderFor, decodeB64Json } from "./helpers";
 
 const SECRET = "fg-test-secret-0123456789abcdef0123456789";
+const KEY_SECRET = "fg-key-secret-fedcba9876543210fedcba9876543210";
 const OWNER = "k".repeat(52);
-const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", OWNER_MCP_KEY: OWNER, FLEET_GUARD: "on", FLEET_GUARD_HMAC_SECRET: SECRET };
+const ENV = { XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", OWNER_MCP_KEY: OWNER, FLEET_GUARD: "on", FLEET_GUARD_HMAC_SECRET: SECRET, FLEET_GUARD_KEY_SECRET: KEY_SECRET };
 const FULL = { ...ENV, EVM_PAY_TO: "0x5E617bac19912e6d212CB303ae84655E9E203532", EVM_NETWORK: "eip155:8453", EVM_FACILITATOR_URL: "https://evm-fac.test", EVM_CDP_ONLY_ROUTES: "none",
   STELLAR_PAY_TO: "GCKTH26VNR4H4WLCXS5DX6563XRQQXWP5QKQWFD6CHOGTZJ2N5GKBU2L", STELLAR_NETWORK: "stellar:pubnet", STELLAR_FACILITATOR_URL: "https://st-fac.test", STELLAR_FACILITATOR_API_KEY: "test-key", PUBLIC_BASE_URL: "https://api.lumitrades.io", FLEET_GUARD_MONTHLY: "on" };
 const BASE = "http://lumi.test";
@@ -82,26 +83,72 @@ describe("MED-1: no raw payer address in the shared idempotency table", () => {
     expect(s.d1!.dump()).not.toContain(PAYER);
   });
 
-  it("live routes: the saved row has no payer; the live response and the replay are otherwise unchanged", async () => {
+  it("live routes: the saved row (headers and body) has no payer; the paying client's own response is unchanged", async () => {
     const s = setup({ d1: true, env: { FLEET_GUARD: undefined } });
     const path = "/v1/trust/check/high-value?url=https://a.example/x&amount=4";
     const req: any = (await (await s.get(path)).json()).accepts[0];
     const h = { "PAYMENT-SIGNATURE": paymentHeaderFor(req), "Idempotency-Key": "retry-key-0123456789abcdef" };
     const first = await s.get(path, h);
     expect(first.status).toBe(200);
-    const firstBody = await first.text();
+    const firstBody = JSON.parse(await first.text());
     const live = decodeB64Json(first.headers.get("PAYMENT-RESPONSE"));
     expect(live.payer).toBe(PAYER); // the paying client still gets its own receipt in full
-    const row = s.d1!.db.prepare("SELECT headers FROM idempotency").get() as { headers: string };
+    expect(firstBody.payment.payer).toBe(PAYER);
+    const row = s.d1!.db.prepare("SELECT headers, body FROM idempotency").get() as { headers: string; body: string };
     const saved = decodeB64Json(JSON.parse(row.headers)["PAYMENT-RESPONSE"]);
     const { payer: _p, ...rest } = live;
     expect(saved).toEqual(rest);
+    const savedBody = JSON.parse(row.body);
+    expect(savedBody.payment).toBeTruthy();
+    expect(savedBody.payment).not.toHaveProperty("payer");
     expect(row.headers).not.toContain(PAYER);
+    expect(row.body).not.toContain(PAYER);
+    expect(s.d1!.dump()).not.toContain(PAYER);
+    // A real retry (same key, byte-identical signed header) still replays, without the payer.
     const again = await s.get(path, h);
     expect(again.status).toBe(200);
     expect(again.headers.get("Idempotent-Replayed")).toBe("true");
-    expect(await again.text()).toBe(firstBody);
+    const againText = await again.text();
+    expect(againText).not.toContain(PAYER);
+    const expected = JSON.parse(JSON.stringify(firstBody)); delete expected.payment.payer;
+    expect(JSON.parse(againText)).toEqual(expected);
     expect(s.fac.calls.filter((c) => c.path === "/settle").length).toBe(1);
+  });
+
+  it("trust route: a junk payment with the same Idempotency-Key and invoiceId gets no answer", async () => {
+    const s = setup({ d1: true, env: { FLEET_GUARD: undefined } });
+    const path = "/v1/trust/check/high-value?url=https://a.example/x&amount=4";
+    const req: any = (await (await s.get(path)).json()).accepts[0];
+    const IKT = "victim-key-0123456789abcdef";
+    const first = await s.get(path, { "PAYMENT-SIGNATURE": paymentHeaderFor(req), "Idempotency-Key": IKT });
+    expect(first.status).toBe(200);
+    const victim = await first.text();
+    const forged = Buffer.from(JSON.stringify({ x402Version: 2, accepted: { garbage: true }, payload: { signedTxBlob: "DEAD", invoiceId: req.extra.invoiceId } })).toString("base64");
+    const sameShape = Buffer.from(JSON.stringify({ x402Version: 2, accepted: req, payload: { signedTxBlob: "12000023", invoiceId: req.extra.invoiceId } })).toString("base64");
+    for (const junk of [forged, sameShape]) {
+      const r = await s.get(path, { "PAYMENT-SIGNATURE": junk, "Idempotency-Key": IKT, "CF-Connecting-IP": "9.9.9.9" });
+      expect([402, 409]).toContain(r.status);
+      expect(r.headers.get("Idempotent-Replayed")).toBeNull();
+      const t = await r.text();
+      expect(t).not.toContain(PAYER);
+      expect(t).not.toContain('"payment"');
+      expect(t).not.toBe(victim);
+    }
+    expect(s.fac.calls.filter((c) => c.path === "/settle").length).toBe(1);
+  });
+
+  it("the idempotency cache is scoped by route: the same key on another route is a fresh purchase, not a replay", async () => {
+    const s = setup({ env: { FLEET_GUARD: undefined } });
+    const IKT = "shared-key-0123456789abcdef";
+    const p1 = "/v1/trust/check/high-value?url=https://a.example/x&amount=4";
+    const p2 = "/v1/verdict?url=https://a.example/x";
+    const q1: any = (await (await s.get(p1)).json()).accepts[0];
+    expect((await s.get(p1, { "PAYMENT-SIGNATURE": paymentHeaderFor(q1), "Idempotency-Key": IKT })).status).toBe(200);
+    const q2: any = (await (await s.get(p2)).json()).accepts[0];
+    const r2 = await s.get(p2, { "PAYMENT-SIGNATURE": paymentHeaderFor(q2), "Idempotency-Key": IKT });
+    expect(r2.status).toBe(200);
+    expect(r2.headers.get("Idempotent-Replayed")).toBeNull();
+    expect((s.idem as MemoryIdempotencyStore).rows.size).toBe(2);
   });
 });
 
@@ -144,33 +191,86 @@ describe("MED-2: pack keys are derived from the settled tx and never stored in p
     expect(JSON.parse(row.body).key).toBe("derived_from_tx");
   });
 
-  it("the key depends on the server secret and the tx (not guessable from the public tx hash)", async () => {
+  it("the key depends on FLEET_GUARD_KEY_SECRET and the tx, not on the payer/subject HMAC secret", async () => {
     const a = await buyPack(setup());
-    const b = await buyPack(setup({ env: { FLEET_GUARD_HMAC_SECRET: SECRET.replace("0", "9") } }));
+    const b = await buyPack(setup({ env: { FLEET_GUARD_KEY_SECRET: KEY_SECRET.replace("f", "0") } }));
+    const c = await buyPack(setup({ env: { FLEET_GUARD_HMAC_SECRET: SECRET.replace("0", "9") } }));
+    expect(a.body.key).toMatch(/^fgk_[0-9a-f]{40}$/);
     expect(a.body.key).not.toBe(b.body.key);
-    expect(a.body.key).not.toContain("A".repeat(16).toLowerCase());
+    expect(a.body.key).toBe(c.body.key);
+  });
+
+  it("fails closed without a usable FLEET_GUARD_KEY_SECRET: packs and plans are not quoted, checks still work", async () => {
+    for (const v of [undefined, "short", SECRET]) {
+      const s = setup({ env: { FLEET_GUARD_KEY_SECRET: v, FLEET_GUARD_MONTHLY: "on" } });
+      for (const p of ["/v1/fleet/pack", "/v1/fleet/plan/monthly"]) {
+        const r = await s.get(p);
+        expect(r.status).toBe(503);
+        expect(r.headers.get("PAYMENT-REQUIRED")).toBeNull();
+        expect(((await r.json()) as any).error).toBe("fleet_keys_not_configured");
+      }
+      const q: any = await (await s.get("/v1/fleet/pack")).json();
+      const paid = await s.get("/v1/fleet/pack", { "PAYMENT-SIGNATURE": paymentHeaderFor({ extra: { invoiceId: "x" } }) });
+      expect(paid.status).toBe(503);
+      expect(q.accepts).toBeUndefined();
+      expect(s.fac.calls.length).toBe(0);
+      expect((await s.get("/v1/fleet/check?subject=a.example")).status).toBe(402);
+      const doc: any = await (await s.get("/v1/fleet")).json();
+      expect(doc.pack).toBeUndefined();
+      expect(doc.monthly).toBeUndefined();
+    }
   });
 });
 
-describe("MED-3: per-network limits on prepaid keys", () => {
-  it("prepaid checks: 60/min per IP, taken before the key is hashed", async () => {
+describe("MED-3: limits on prepaid keys", () => {
+  const unknownKey = (i: number) => "fgk_" + i.toString(16).padStart(40, "0");
+
+  it("valid keys: limited per key at keyPerMinute (1,200), not by the 60/min per-network cap", async () => {
+    const s = setup();
+    const { body } = await buyPack(s, {});
+    const st: Record<number, number> = {};
+    for (let i = 0; i < FLEET_GUARD.keyPerMinute + 1; i++) {
+      const r = await s.get("/v1/fleet/check?subject=a.example", { "X-Lumi-Fleet-Key": body.key, "CF-Connecting-IP": "7.7.7.7" });
+      st[r.status] = (st[r.status] ?? 0) + 1;
+    }
+    expect(st[200]).toBe(FLEET_GUARD.keyPerMinute);
+    expect(st[429]).toBe(1);
+    expect(s.uses()).toBe(FLEET_GUARD.keyPerMinute);
+  });
+
+  it("keys not yet known valid: 60/min per network (61 distinct real keys from one network → the 61st is 429)", async () => {
+    const s = setup();
+    const raws: string[] = [];
+    for (let i = 0; i < FLEET_GUARD.keyIpPerMinute + 1; i++) {
+      const raw = "fgk_" + (i + 1).toString(16).padStart(40, "a");
+      const h = [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw)))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      await s.store.mintKey({ key_hash: h, plan: "fleet_pack", calls: 10, used: 0, expires_at: NOW + 86_400_000, paid_tx: "T" + i, payer_hmac: null, created_at: NOW });
+      raws.push(raw);
+    }
+    const st: number[] = [];
+    for (const raw of raws) st.push((await s.get("/v1/fleet/key", { "X-Lumi-Fleet-Key": raw, "CF-Connecting-IP": "6.6.6.6" })).status);
+    expect(st.slice(0, FLEET_GUARD.keyIpPerMinute).every((x) => x === 200)).toBe(true);
+    expect(st[FLEET_GUARD.keyIpPerMinute]).toBe(429);
+    // once known valid, they are no longer under the per-network cap
+    expect((await s.get("/v1/fleet/key", { "X-Lumi-Fleet-Key": raws[0], "CF-Connecting-IP": "6.6.6.6" })).status).toBe(200);
+  });
+
+  it("a freshly minted key works from a network locked out by bad keys", async () => {
     const s = setup();
     const { body } = await buyPack(s, {});
     const st: number[] = [];
-    for (let i = 0; i < 62; i++) st.push((await s.get("/v1/fleet/check?subject=a.example", { "X-Lumi-Fleet-Key": body.key, "CF-Connecting-IP": "7.7.7.7" })).status);
-    expect(st.slice(0, 60).every((x) => x === 200)).toBe(true);
-    expect(st[60]).toBe(429);
-    expect(s.uses()).toBe(60);
-    // Another network is unaffected.
-    expect((await s.get("/v1/fleet/check?subject=a.example", { "X-Lumi-Fleet-Key": body.key, "CF-Connecting-IP": "8.8.8.8" })).status).toBe(200);
+    for (let i = 0; i < FLEET_GUARD.keyIpPerMinute; i++) st.push((await s.get("/v1/fleet/check?subject=a.example", { "X-Lumi-Fleet-Key": "nope-" + i, "CF-Connecting-IP": "3.3.3.3" })).status);
+    // bad-format keys are failures: 10 × 401 then 429 (lockout)
+    expect(st.filter((x) => x === 401).length).toBe(FLEET_GUARD.keyFailPer10Min);
+    // the valid key still works from the locked-out network (minted keys are marked valid)
+    expect((await s.get("/v1/fleet/check?subject=a.example", { "X-Lumi-Fleet-Key": body.key, "CF-Connecting-IP": "3.3.3.3" })).status).toBe(200);
   });
 
   it("random keys: a tighter failed-key limit returns 429 and stops further lookups", async () => {
     const s = setup();
     const st: Record<number, number> = {};
     for (let i = 0; i < 200; i++) {
-      const k = "fgk_" + i.toString(16).padStart(40, "0");
-      const r = await s.get("/v1/fleet/check?subject=a.example", { "X-Lumi-Fleet-Key": k, "CF-Connecting-IP": "7.7.7.7" });
+      const r = await s.get("/v1/fleet/check?subject=a.example", { "X-Lumi-Fleet-Key": unknownKey(i), "CF-Connecting-IP": "7.7.7.7" });
       st[r.status] = (st[r.status] ?? 0) + 1;
     }
     expect(st[402]).toBe(FLEET_GUARD.keyFailPer10Min);
@@ -178,20 +278,30 @@ describe("MED-3: per-network limits on prepaid keys", () => {
     expect(s.uses()).toBeLessThanOrEqual(FLEET_GUARD.keyFailPer10Min + 1);
   });
 
-  it("/v1/fleet/key: 60/min per IP, and failed keys are limited", async () => {
-    const s = setup();
-    const { body } = await buyPack(s, {});
-    const st: number[] = [];
-    for (let i = 0; i < 61; i++) st.push((await s.get("/v1/fleet/key", { "X-Lumi-Fleet-Key": body.key, "CF-Connecting-IP": "6.6.6.6" })).status);
-    expect(st.slice(0, 60).every((x) => x === 200)).toBe(true);
-    expect(st[60]).toBe(429);
-    const st2: Record<number, number> = {};
-    for (let i = 0; i < 50; i++) {
-      const r = await s.get("/v1/fleet/key", { "X-Lumi-Fleet-Key": "fgk_" + i.toString(16).padStart(40, "0"), "CF-Connecting-IP": "5.5.5.5" });
-      st2[r.status] = (st2[r.status] ?? 0) + 1;
+  it("a shared NAT / /64 / unknown bucket locked out by bad keys does not lock out a recently valid key (other isolate too)", async () => {
+    const counter = new MemoryQuotaCounter(() => NOW);
+    const store = new MemoryFleetGuardStore();
+    const mk = () => createApp(ENV as any, { fetch: makeFetch(happyFacilitator()), now: () => NOW, log: () => {}, fleetGuardStore: store, salesStore: new MemorySalesStore(), quotaCounter: counter, idempotencyStore: new MemoryIdempotencyStore() });
+    const A = mk(); const B = mk();
+    const get = (app: ReturnType<typeof mk>, p: string, h: Record<string, string>) => app.fetch(new Request(BASE + p, { headers: h }));
+    const q: any = await (await get(A, "/v1/fleet/pack", {})).json();
+    const key = ((await (await get(A, "/v1/fleet/pack", { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) })).json()) as any).key;
+    expect((await get(A, "/v1/fleet/key", { "X-Lumi-Fleet-Key": key, "CF-Connecting-IP": "8.8.8.8" })).status).toBe(200);
+    const nets: Record<string, string>[] = [{ "CF-Connecting-IP": "2001:db8:9:9::1" }, {}];
+    for (const ipH of nets) {
+      // lock the network out on isolate B (shared /64 and the header-less "unknown" bucket)
+      const st: number[] = [];
+      for (let i = 0; i < 15; i++) st.push((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": unknownKey(1000 + i), ...ipH })).status);
+      expect(st.slice(-3).every((x) => x === 429)).toBe(true);
+      expect((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": unknownKey(5000), ...ipH })).status).toBe(429);
+      // the valid key, first time on isolate B and on this network: recognised through the shared marker
+      expect((await get(B, "/v1/fleet/key", { "X-Lumi-Fleet-Key": key, ...ipH })).status).toBe(200);
+      expect((await get(B, "/v1/fleet/check?subject=a.example", { "X-Lumi-Fleet-Key": key, ...ipH })).status).toBe(200);
     }
-    expect(st2[404]).toBe(FLEET_GUARD.keyFailPer10Min);
-    expect(st2[429]).toBe(50 - FLEET_GUARD.keyFailPer10Min);
+  });
+
+  it("/v1/fleet/key: bad-format keys are failures too", async () => {
+    const s = setup();
     const bad: number[] = [];
     for (let i = 0; i < 12; i++) bad.push((await s.get("/v1/fleet/key", { "X-Lumi-Fleet-Key": "nope", "CF-Connecting-IP": "4.4.4.4" })).status);
     expect(bad.filter((x) => x === 401).length).toBe(FLEET_GUARD.keyFailPer10Min);

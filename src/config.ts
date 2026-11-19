@@ -51,6 +51,8 @@ export interface Env {
   FLEET_GUARD?: string;
   /** Fleet guard keyed-HMAC secret (>= 32 chars) for payer / member / IP hashes. `wrangler secret put FLEET_GUARD_HMAC_SECRET`. Unset = 503, never charged. */
   FLEET_GUARD_HMAC_SECRET?: string;
+  /** Fleet guard pack/plan key-derivation secret (>= 32 chars, different from FLEET_GUARD_HMAC_SECRET). `wrangler secret put FLEET_GUARD_KEY_SECRET`. Unset = packs and plans 503, never charged. */
+  FLEET_GUARD_KEY_SECRET?: string;
   /** Fleet guard flat monthly plan ($49 / 30 days, fair-use cap): exactly "on" offers it; default off (owner decision). */
   FLEET_GUARD_MONTHLY?: string;
   /** Lumi Check v0: ed25519 seed (64 hex) that signs check responses and badge verdicts. Not a wallet key and not an admin credential (must differ from CONTRIB_ADMIN_KEY / OWNER_MCP_KEY). Its PUBLIC key must be pinned in src/trust/lumi_keys.ts. Set at deploy time with `wrangler secret put LUMI_CHECK_SIGNING_KEY` (docs/lumi-check-keys.md). Unset = unsigned (signature null). */

@@ -326,7 +326,7 @@ const IDEMPOTENCY_PARAM = {
   name: "Idempotency-Key",
   in: "header",
   required: false,
-  description: "Optional retry key (16-128 characters: letters, digits, - or _). A retry with the same key and the same payment returns the cached response (header Idempotent-Replayed: true) and is never charged twice; the same key with a different payment is refused with 409. The x402 payment-identifier extension id works the same way. Cached for 24 hours.",
+  description: "Optional retry key (16-128 characters: letters, digits, - or _). A retry on the same route with the same key and the byte-identical payment header returns the cached response (header Idempotent-Replayed: true) and is never charged twice; the same key with any other payment is refused with 409. Keys are scoped per route. Replayed responses omit the payer address (PAYMENT-RESPONSE payer and body payment.payer). The x402 payment-identifier extension id works the same way. Cached for 24 hours.",
   schema: { type: "string", minLength: 16, maxLength: 128, pattern: "^[A-Za-z0-9_-]{16,128}$" },
 };
 
@@ -528,7 +528,7 @@ export function openApi(cfg: Config, base: string, coins: CoinRef[]) {
         `Each paid call is one x402 v2 'exact' payment: ${acceptsOrder(cfg)}` +
         (cfg.evm ? ` (Base: ${cfg.evm.network}, token ${cfg.evm.asset}; XRPL: ${cfg.network}${cfg.stellar ? `; Stellar: ${cfg.stellar.network}, token ${cfg.stellar.asset}` : ""})` : ` (${cfg.network})`) +
         `; pick an option by network and asset. Bad input returns 4xx, and 503 when Lumi cannot answer, before any payment is requested (not charged). ` +
-        `Retries: send the same Idempotency-Key header (or the x402 payment-identifier extension id) with the same payment and the cached response is returned without a second charge. ` +
+        `Retries: send the same Idempotency-Key header (or the x402 payment-identifier extension id) with the byte-identical payment header and the cached response (without the payer address) is returned without a second charge. ` +
         `Every response carries as_of. Full guide: ${base}/skill.md. Automated observations, not a rating or guarantee.`,
     },
     ...(freeTrialInfo(cfg) ? { "x-free-trial": freeTrialInfo(cfg) } : {}),
@@ -877,12 +877,14 @@ ${iouNote(cfg)}2. Sign (do not submit) an XRPL \`Payment\` for exactly \`amount\
    and the invoice bound via a Memo (\`MemoData = hex(utf8(invoiceId))\`) and/or \`InvoiceID = SHA-256(invoiceId)\`.
 3. Retry the same request with header \`PAYMENT-SIGNATURE: base64(JSON{ x402Version: 2, accepted: <accepts[${acceptsIndex(cfg).xrp}]>, payload: { signedTxBlob, invoiceId } })\`.
 4. The server has the facilitator (${cfg.facilitatorUrl}) verify and submit your payment. On a validated \`tesSUCCESS\` you get **200**
-   with the data and a \`PAYMENT-RESPONSE\` header: base64 \`{ success, transaction, network, payer }\`.
+   with the data and a \`PAYMENT-RESPONSE\` header: base64 \`{ success, transaction, network, payer }\`
+   (an idempotent replay omits \`payer\`, in the header and in the body's \`payment\`).
 
 Quotes expire after ${cfg.invoiceTtlSeconds}s and each invoice can be paid once. If you get 402 again, read \`error\` and pay the fresh quote.
 **Idempotent retries:** send \`Idempotency-Key: <16-128 chars of A-Z a-z 0-9 _ ->\` (or the x402 \`payment-identifier\` extension id) with your payment.
-Retrying with the same key and the same payment returns the cached response (header \`Idempotent-Replayed: true\`) and never settles again;
-the same key with a different payment gets 409 \`idempotency_key_reused\`, not charged.
+Retrying the same route with the same key and the byte-identical \`PAYMENT-SIGNATURE\` returns the cached response (header \`Idempotent-Replayed: true\`) and never settles again;
+the same key with any other payment gets 409 \`idempotency_key_reused\`, not charged. Keys are scoped per route. Replayed responses omit the payer address
+(\`payer\` in \`PAYMENT-RESPONSE\` and \`payment.payer\` in the body); the first, settled response carries it.
 503 with \`retryable: true, settlementAttempted: false\` is safe to retry with the same header. 409 \`settlement_status_unknown\`: look up your tx on the ledger before paying again.
 
 The x402-xrpl SDKs (T54, the reference XRPL implementation) do all of this for you.
@@ -954,7 +956,7 @@ const fetchPaid = wrapFetchWithPayment(fetch, client);   // picks the ${cfg.evm.
 
 const res = await fetchPaid("${base}${HIGH_VALUE_EXAMPLE}");
 console.log(res.status, await res.json());
-console.log(decodePaymentResponseHeader(res.headers.get("PAYMENT-RESPONSE")!)); // { success, transaction, network, payer }
+console.log(decodePaymentResponseHeader(res.headers.get("PAYMENT-RESPONSE")!)); // { success, transaction, network, payer }; an idempotent replay omits payer
 \`\`\`
 
 ## Example: Coinbase AgentKit (direct URL, USDC on ${cfg.evm.networkName})

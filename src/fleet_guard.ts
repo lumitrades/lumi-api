@@ -25,10 +25,10 @@
  *
  * Vigil re-review fixes (2026-11-19):
  *  - MED-1: the shared idempotency table stores PAYMENT-RESPONSE without `payer` (x402.ts redactPaymentResponseHeader).
- *  - MED-2: pack/plan keys = "fgk_" + HMAC(secret, plan + settled tx)[0..40]; the idempotency row keeps a placeholder and a
+ *  - MED-2: pack/plan keys = "fgk_" + HMAC(FLEET_GUARD_KEY_SECRET, plan + settled tx)[0..40] (own secret; packs off without it); the idempotency row keeps a placeholder and a
  *    replay recomputes the key from the cached tx hash. Fleet replays are bound to sha256 of the full signed payment header.
- *  - MED-3: prepaid checks and /v1/fleet/key: FLEET_GUARD.keyIpPerMinute per network before the key is hashed, and
- *    FLEET_GUARD.keyFailPer10Min failed keys per network, then 429 with no further lookups.
+ *  - MED-3: prepaid checks and /v1/fleet/key: recently valid keys are limited per key (keyPerMinute); unknown or failed
+ *    keys get FLEET_GUARD.keyIpPerMinute per network and FLEET_GUARD.keyFailPer10Min failures, then 429 with no lookup.
  *  - LOW-1 alert on a failed settle-record write (still served); LOW-2 underpay after settle is 409 + tx, never 402;
  *    LOW-3 allow-listed paywall log fields; LOW-5 CF-Connecting-IP only, IPv6 per /64, else one "unknown" bucket.
  */
@@ -56,9 +56,12 @@ export const FLEET_GUARD = {
   /** Per hashed IP (x402 path) or per key (prepaid path), per minute. */
   paidPerMinute: 600,
   keyPerMinute: 1_200,
-  /** Per network (/64 for IPv6), per minute, across prepaid checks and /v1/fleet/key, taken before the key is hashed. */
+  /**
+   * Keys not yet known to be valid (unknown, bad format or failed): per network (/64 for IPv6), per minute, across prepaid
+   * checks and /v1/fleet/key. A recently valid key skips this and the failed-key lockout; it is limited by keyPerMinute.
+   */
   keyIpPerMinute: 60,
-  /** Failed prepaid keys (bad format or unknown) per network per 10 minutes; over it, failures get 429. */
+  /** Failed prepaid keys (bad format or unknown) per network per 10 minutes; over it, unknown keys get 429. */
   keyFailPer10Min: 10,
   retentionDays: 90,
   keyRetentionDays: 30,
@@ -306,7 +309,7 @@ export interface Answer {
 
 // ---------------------------------------------------------------- service
 
-export interface FleetGuardEnv { FLEET_GUARD?: string; FLEET_GUARD_HMAC_SECRET?: string; FLEET_GUARD_MONTHLY?: string }
+export interface FleetGuardEnv { FLEET_GUARD?: string; FLEET_GUARD_HMAC_SECRET?: string; FLEET_GUARD_KEY_SECRET?: string; FLEET_GUARD_MONTHLY?: string }
 /** Exactly "on" (config.ts contract); "On ", "ON", "true" stay off. */
 export const fleetGuardOn = (env: FleetGuardEnv) => env.FLEET_GUARD === "on";
 
@@ -338,7 +341,17 @@ export function createFleetGuard(d: FleetGuardDeps) {
    * Pack/plan keys are derived, never stored (Vigil MED-2): HMAC(secret, plan + settled tx hash). Lumi keeps only the
    * key's SHA-256; an idempotent retry recomputes the key from the tx hash in the cached PAYMENT-RESPONSE.
    */
-  const deriveKey = async (planId: string, tx: string) => "fgk_" + (await hmacHex(secret(), `fg-key:${planId}:${tx}`)).slice(0, 40);
+  // Separate secret for key derivation (Vigil 2026-11-19): leaking the payer/subject HMAC secret must not reveal pack keys.
+  // Missing, short or equal to FLEET_GUARD_HMAC_SECRET = packs and plans are not offered (503, nothing quoted or charged).
+  const keySecret = () => {
+    const k = (d.env.FLEET_GUARD_KEY_SECRET ?? "").trim();
+    return k.length >= 32 && k !== secret() ? k : "";
+  };
+  const deriveKey = async (planId: string, tx: string) => {
+    const k = keySecret();
+    if (!k) throw new Error("fleet_guard_key_secret_missing");
+    return "fgk_" + (await hmacHex(k, `fg-key:${planId}:${tx}`)).slice(0, 40);
+  };
   const KEY_SENTINEL = "derived_from_tx";
   /** Wraps the shared idempotency store: fleet key responses are stored without the key and rehydrated on replay. */
   function fleetIdempotency(base: IdempotencyStore): IdempotencyStore {
@@ -360,7 +373,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
         if (!j || j.kind !== "lumi_fleet_key") return r;
         let tx = "";
         try { tx = String(JSON.parse(b64decodeUtf8(r.headers[HEADER_PAYMENT_RESPONSE] ?? "")).transaction ?? ""); } catch { /* below */ }
-        if (!tx || typeof j.plan !== "string") { alert("idempotent_key_unrecoverable", { route: j.plan }); return null; }
+        if (!tx || typeof j.plan !== "string" || !keySecret()) { alert("idempotent_key_unrecoverable", { route: j.plan }); return null; }
         j.key = await deriveKey(j.plan, tx);
         return { ...r, body: JSON.stringify(j, null, 2) };
       },
@@ -382,27 +395,54 @@ export function createFleetGuard(d: FleetGuardDeps) {
   const rateLimited = () => json(429, { error: "rate_limited", retry_after_s: 60, note: "Not charged." }, { ...NO_STORE, "Retry-After": "60" });
 
   /**
-   * Prepaid-key gate (Vigil MED-3), before any key is hashed or looked up: FLEET_GUARD.keyIpPerMinute per network across
-   * prepaid checks and /v1/fleet/key, and no lookups at all for a network that is over its failed-key limit. Fail-open on
-   * a counter outage (paid keys keep working); the failed-key block is also remembered in this isolate.
+   * Prepaid-key access (Vigil MED-3 + re-check 2026-11-19). A key hash that was valid recently (this isolate, or marked in
+   * the quota DO for ~1-2 days) is limited only per key (FLEET_GUARD.keyPerMinute), so a shared NAT, /64 or the "unknown"
+   * bucket cannot lock out a paying customer. Anything else (bad format, unknown, failed) is limited per network:
+   * FLEET_GUARD.keyIpPerMinute, and after FLEET_GUARD.keyFailPer10Min failures, 429 with no lookup. Counter outage:
+   * fail-open (paid keys keep working); the failed-key block is also remembered in this isolate.
    */
   const failBlocked = new Map<string, number>();
+  const validKeys = new Map<string, number>();
   const tenMinEnd = () => Math.floor(now() / 600_000) * 600_000 + 600_000;
-  async function keyGate(request: Request): Promise<{ ip: string; blocked: boolean }> {
-    const ip = await ipHmac(request);
-    const until = failBlocked.get(ip);
-    if (until !== undefined) { if (until > now()) return { ip, blocked: true }; failBlocked.delete(ip); }
-    const ok = await take(obj(ip), [{ key: `fg-ki:${ip}`, max: FLEET_GUARD.keyIpPerMinute, resetAt: minuteEnd() }], false);
-    return { ip, blocked: !ok };
+  const KEY_RE = /^fgk_[0-9a-f]{40}$/;
+  async function recentlyValid(kh: string): Promise<boolean> {
+    const until = validKeys.get(kh);
+    if (until !== undefined) { if (until > now()) return true; validKeys.delete(kh); }
+    try {
+      // max 0 never increments: a read of the marker count.
+      const r = await d.counter.take(obj(kh), [{ key: `fg-kv:${kh}`, max: 0, resetAt: dayEnd() + DAY }]);
+      if ((r.counts[0] ?? 0) > 0) { validKeys.set(kh, now() + 600_000); return true; }
+    } catch { /* treated as unknown: the per-network path still serves valid keys */ }
+    return false;
   }
-  /** Counts one failed key for this network; returns a 429 once over the limit (and blocks further lookups). */
+  async function markValid(kh: string) {
+    if (validKeys.size > 20_000) validKeys.clear();
+    validKeys.set(kh, now() + 600_000);
+    await take(obj(kh), [{ key: `fg-kv:${kh}`, max: 1_000_000_000, resetAt: dayEnd() + DAY }], false);
+  }
+  type KeyAccess = { deny: Response } | { deny?: undefined; ip: string; kh: string; known: boolean };
+  async function keyAccess(request: Request, keyRaw: string, badFormat: () => Response): Promise<KeyAccess> {
+    const ip = await ipHmac(request);
+    const kh = KEY_RE.test(keyRaw) ? await sha256Hex(keyRaw) : null;
+    if (kh && (await recentlyValid(kh))) {
+      if (!(await take(obj(kh), [{ key: `fg-k:${kh}`, max: FLEET_GUARD.keyPerMinute, resetAt: minuteEnd() }], false))) return { deny: rateLimited() };
+      return { ip, kh, known: true };
+    }
+    const until = failBlocked.get(ip);
+    if (until !== undefined) { if (until > now()) return { deny: failLimited() }; failBlocked.delete(ip); }
+    if (!(await take(obj(ip), [{ key: `fg-ki:${ip}`, max: FLEET_GUARD.keyIpPerMinute, resetAt: minuteEnd() }], false))) return { deny: rateLimited() };
+    if (!kh) return { deny: (await keyFailed(ip)) ?? badFormat() };
+    return { ip, kh, known: false };
+  }
+  const failLimited = () => json(429, { error: "too_many_invalid_keys", retry_after_s: 600, note: "Not charged." }, { ...NO_STORE, "Retry-After": "600" });
+  /** Counts one failed key for this network; returns a 429 once over the limit (and blocks further unknown-key lookups). */
   async function keyFailed(ip: string): Promise<Response | null> {
     const ok = await take(obj(ip), [{ key: `fg-kf:${ip}`, max: FLEET_GUARD.keyFailPer10Min, resetAt: tenMinEnd() }], false);
     if (ok) return null;
     if (failBlocked.size > 10_000) failBlocked.clear();
     failBlocked.set(ip, tenMinEnd());
     log({ event: "fleet_guard_key_fail_limited" });
-    return json(429, { error: "too_many_invalid_keys", retry_after_s: 600, note: "Not charged." }, { ...NO_STORE, "Retry-After": "600" });
+    return failLimited();
   }
 
   async function answers(subjects: Subject[]): Promise<{ results: (Answer & { index: number })[]; cacheHits: number }> {
@@ -483,7 +523,6 @@ export function createFleetGuard(d: FleetGuardDeps) {
       ...base,
       // Idempotent replays must present the exact same signed payment, and never get a stored plaintext key (MED-2).
       idempotency: base.idempotency ? fleetIdempotency(base.idempotency) : undefined,
-      idempotencyBinding: "signed_header",
       log: (e) => {
         const rest = redactLogEvent(e as Record<string, unknown>);
         base.log?.(rest);
@@ -538,19 +577,20 @@ export function createFleetGuard(d: FleetGuardDeps) {
     if (!parsed.ok) return json(400, parsed.error, NO_STORE);
     const n = parsed.subjects.length;
 
-    // Prepaid key: rate limit per key, then one atomic decrement of n credits, then serve.
+    // Prepaid key: access gate (per key if recently valid, else per network), one atomic decrement of n credits, serve.
     if (keyRaw && !hasPayment(request)) {
-      const gate = await keyGate(request);
-      if (gate.blocked) return rateLimited();
-      if (!/^fgk_[0-9a-f]{40}$/.test(keyRaw)) return (await keyFailed(gate.ip)) ?? json(401, { error: "invalid_fleet_key", note: "Not charged." }, NO_STORE);
-      const kh = await sha256Hex(keyRaw);
-      if (!(await take(obj(kh), [{ key: `fg-k:${kh}`, max: FLEET_GUARD.keyPerMinute, resetAt: minuteEnd() }], false))) return rateLimited();
-      const used = await d.store.useCredits(kh, n, now());
+      const a = await keyAccess(request, keyRaw, () => json(401, { error: "invalid_fleet_key", note: "Not charged." }, NO_STORE));
+      if (a.deny) return a.deny;
+      const used = await d.store.useCredits(a.kh, n, now());
       if (!used) {
         // Unknown, expired or exhausted: an exhausted real key is not a guess, but the store cannot tell them apart cheaply.
-        if (!(await d.store.key(kh))) { const lim = await keyFailed(gate.ip); if (lim) return lim; }
+        if (!a.known) {
+          if (await d.store.key(a.kh)) await markValid(a.kh);
+          else { const lim = await keyFailed(a.ip); if (lim) return lim; }
+        }
         return json(402, { error: "fleet_key_exhausted_or_expired", buy_pack: `${base}/v1/fleet/pack`, note: "Not charged." }, NO_STORE);
       }
+      if (!a.known) await markValid(a.kh);
       return json(200, await body(parsed.subjects, { mode: "prepaid", plan: used.plan, credits_used: n, credits_remaining: used.remaining, key_expires_at: new Date(used.expires_at).toISOString() }), NO_STORE);
     }
 
@@ -592,6 +632,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
   }
 
   async function buy(request: Request, base: string, plan: Plan, path: string, ctx?: { waitUntil(p: Promise<unknown>): void }): Promise<Response> {
+    if (!keySecret()) return json(503, { error: "fleet_keys_not_configured", detail: "Packs and plans are not on sale right now; per-call checks still work.", note: "Not charged." }, NO_STORE);
     const ip = await ipHmac(request);
     if (!(await take(obj(ip), [{ key: `fg-b:${ip}`, max: 30, resetAt: minuteEnd() }], false))) return rateLimited();
     const quote = quoteFor(plan.id, plan.usd, `${base}${path}`, `Lumi fleet guard ${plan.id === FLEET_GUARD.pack.id ? "pack" : "monthly plan"}: ${plan.calls.toLocaleString("en-US")} checks, valid ${plan.days} days.`);
@@ -605,6 +646,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
         alert("replay", { route: plan.id, tx: s.transaction });
         return json(409, { error: "payment_already_used", detail: "This settled transaction already minted a key." }, NO_STORE);
       }
+      await markValid(row.key_hash);
       return json(200, {
         kind: "lumi_fleet_key", plan: plan.id, key: raw, header: FLEET_KEY_HEADER, calls: plan.calls, expires_at: new Date(row.expires_at).toISOString(),
         note: "Lumi stores only its SHA-256. A retry with the same Idempotency-Key and the same signed payment returns it again within 24 hours. One credit per subject; send it as the header on /v1/fleet/check.",
@@ -640,8 +682,14 @@ export function createFleetGuard(d: FleetGuardDeps) {
       summary: "Is this payer or seller part of a known scripted payment fleet? Cache the answer for an hour.",
       check: { url: `${base}/v1/fleet/check?subject=<address, domain or URL>[,...]`, price_usd_per_subject: FLEET_GUARD.priceUsd, batch_max: FLEET_GUARD.batchMax, cache_ttl_s: FLEET_GUARD.cacheTtlSec },
       free: { url: `${base}/v1/fleet/check/free?subject=<one subject>`, cap: `${FLEET_GUARD.free.perIpDay}/day per network and per wallet header, ${FLEET_GUARD.free.perIpMinute}/min` },
-      pack: { url: `${base}/v1/fleet/pack`, usd: FLEET_GUARD.pack.usd, calls: FLEET_GUARD.pack.calls, valid_days: FLEET_GUARD.pack.days },
-      ...(monthlyOn() ? { monthly: { url: `${base}/v1/fleet/plan/monthly`, usd: FLEET_GUARD.monthly.usd, fair_use_calls: FLEET_GUARD.monthly.calls, days: FLEET_GUARD.monthly.days, auto_renew: false } } : {}),
+      ...(keySecret() ? { pack: { url: `${base}/v1/fleet/pack`, usd: FLEET_GUARD.pack.usd, calls: FLEET_GUARD.pack.calls, valid_days: FLEET_GUARD.pack.days } } : {}),
+      limits: {
+        paid_per_network_per_min: FLEET_GUARD.paidPerMinute,
+        prepaid_valid_key_per_min: FLEET_GUARD.keyPerMinute,
+        unknown_or_failed_key_per_network_per_min: FLEET_GUARD.keyIpPerMinute,
+        failed_keys_per_network_per_10min: FLEET_GUARD.keyFailPer10Min,
+      },
+      ...(monthlyOn() && keySecret() ? { monthly: { url: `${base}/v1/fleet/plan/monthly`, usd: FLEET_GUARD.monthly.usd, fair_use_calls: FLEET_GUARD.monthly.calls, days: FLEET_GUARD.monthly.days, auto_renew: false } } : {}),
       privacy: "Payer addresses are never stored or logged in the clear (keyed HMAC). Answers contain no payer data.",
     };
   }
@@ -666,12 +714,12 @@ export function createFleetGuard(d: FleetGuardDeps) {
         return buy(request, base, FLEET_GUARD.monthly, path, ctx);
       }
       if (path === "/v1/fleet/key" && get) {
-        const gate = await keyGate(request);
-        if (gate.blocked) return rateLimited();
         const k = request.headers.get(FLEET_KEY_HEADER)?.trim() ?? "";
-        if (!/^fgk_[0-9a-f]{40}$/.test(k)) return (await keyFailed(gate.ip)) ?? json(401, { error: "invalid_fleet_key" }, NO_STORE);
-        const row = await d.store.key(await sha256Hex(k));
-        if (!row) return (await keyFailed(gate.ip)) ?? json(404, { error: "unknown_key" }, NO_STORE);
+        const a = await keyAccess(request, k, () => json(401, { error: "invalid_fleet_key" }, NO_STORE));
+        if (a.deny) return a.deny;
+        const row = await d.store.key(a.kh);
+        if (!row) return (await keyFailed(a.ip)) ?? json(404, { error: "unknown_key" }, NO_STORE);
+        if (!a.known) await markValid(a.kh);
         return json(200, { plan: row.plan, calls: row.calls, used: row.used, remaining: Math.max(0, row.calls - row.used), expires_at: new Date(row.expires_at).toISOString() }, NO_STORE);
       }
       if (path === "/v1/fleet/admin/members" && request.method === "POST") return admin(request);

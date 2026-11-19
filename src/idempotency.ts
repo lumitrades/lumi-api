@@ -1,9 +1,11 @@
 /**
  * Idempotent retries on paid routes. A client may send an `Idempotency-Key` header, or the x402 `payment-identifier`
  * extension id (payload.extensions["payment-identifier"].info.id). After a paid call is served, its response is cached
- * under the hashed key together with a hash of the payment (the invoice id). A retry with the same key and the same
- * payment gets the cached response (header `Idempotent-Replayed: true`) and is never settled again; the same key with a
- * different payment is refused with 409 before anything is verified or settled. Rows live 24 hours.
+ * under a hash of (route, key) together with a hash of the full signed payment header. A retry with the same key and the
+ * byte-identical payment header on the same route gets the cached response (header `Idempotent-Replayed: true`) and is
+ * never settled again; the same key with any other payment (even one copying the invoiceId) is refused with 409 before
+ * anything is verified or settled. Stored rows and replays carry no payer address (PAYMENT-RESPONSE `payer` and the
+ * body's `payment.payer` are stripped). Rows live 24 hours.
  */
 import type { D1Like } from "./config";
 

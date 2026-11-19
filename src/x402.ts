@@ -639,18 +639,28 @@ export interface PaywallDeps {
   onSale?: (sale: SaleEvent) => Promise<void> | void;
   /** Idempotent-retry cache (Idempotency-Key / payment-identifier). Absent = retries rely on the replay guard alone. */
   idempotency?: IdempotencyStore;
-  /**
-   * What a cached idempotent response is bound to. "invoice" (default, all live routes): sha256("invoice:"+invoiceId).
-   * "signed_header": sha256 of the full signed payment header, so a retry must present the exact same signed payment
-   * (fleet guard: a junk payment that only copies the invoiceId never gets a cached response).
-   */
-  idempotencyBinding?: "invoice" | "signed_header";
 }
 
 /**
  * PAYMENT-RESPONSE without the payer address (Vigil MED-1, 2026-11-19). Used before an idempotent response is written to
  * the shared idempotency table, so no raw payer address is stored. null = undecodable (the header is then not stored).
  */
+/** A JSON response body without a top-level `payer` or `payment.payer` (idempotency rows and replays). Non-JSON: as is. */
+export function redactPayerInBody(body: string): string {
+  let j: unknown;
+  try { j = JSON.parse(body); } catch { return body; }
+  if (!j || typeof j !== "object" || Array.isArray(j)) return body;
+  const o = j as Record<string, unknown>;
+  let changed = false;
+  if ("payer" in o) { delete o.payer; changed = true; }
+  const p = o.payment;
+  if (p && typeof p === "object" && !Array.isArray(p) && "payer" in (p as Record<string, unknown>)) {
+    delete (p as Record<string, unknown>).payer;
+    changed = true;
+  }
+  return changed ? JSON.stringify(o, null, 2) : body;
+}
+
 export function redactPaymentResponseHeader(v: string): string | null {
   try {
     const j = JSON.parse(b64decodeUtf8(v));
@@ -723,12 +733,21 @@ export async function requirePayment(
     (typeof payload?.payload?.invoiceId === "string" && payload.payload.invoiceId) ||
     (typeof payload?.accepted?.extra?.invoiceId === "string" && (payload.accepted.extra.invoiceId as string)) ||
     "";
-  const keyHash = await sha256Hex(k.key);
-  const paymentHash = await sha256Hex(
-    deps.idempotencyBinding === "signed_header" ? `signed:${header}` : invoiceId ? `invoice:${invoiceId}` : `header:${header}`,
-  );
-  const replay = (r: { status: number; headers: Record<string, string>; body: string }) =>
-    new Response(r.body, { status: r.status, headers: { ...CORS, ...r.headers, "Cache-Control": "no-store", "Idempotent-Replayed": "true" } });
+  // Vigil 2026-11-19: (1) the cache is scoped to this route (same key on another route never sees this row);
+  // (2) a hit must present the exact same signed payment header (a legitimate retry resends it byte for byte), not
+  // just the same invoiceId, which a junk payment can copy. (invoiceId stays in the hash input for clarity only.)
+  const keyHash = await sha256Hex(`route:${quote.routeKey}\n${k.key}`);
+  const paymentHash = await sha256Hex(`signed:${invoiceId}\n${header}`);
+  // Replays never carry the payer address: PAYMENT-RESPONSE and the body's payment.payer are stripped before storing,
+  // and again on the way out (rows written before this change).
+  const replay = (r: { status: number; headers: Record<string, string>; body: string }) => {
+    const headers = { ...r.headers };
+    if (headers[HEADER_PAYMENT_RESPONSE]) {
+      const v = redactPaymentResponseHeader(headers[HEADER_PAYMENT_RESPONSE]);
+      if (v) headers[HEADER_PAYMENT_RESPONSE] = v; else delete headers[HEADER_PAYMENT_RESPONSE];
+    }
+    return new Response(redactPayerInBody(r.body), { status: r.status, headers: { ...CORS, ...headers, "Cache-Control": "no-store", "Idempotent-Replayed": "true" } });
+  };
   const lookup = async () => {
     try {
       return await store.get(keyHash, Date.now());
@@ -740,7 +759,7 @@ export async function requirePayment(
 
   const hit = await lookup();
   if (hit) {
-    if (hit.payment_hash !== paymentHash) {
+    if (hit.payment_hash !== paymentHash || hit.route !== quote.routeKey) {
       return json(409, {
         error: "idempotency_key_reused",
         detail: "This idempotency key was already used with a different payment. Use a new key for a new purchase.",
@@ -764,7 +783,7 @@ export async function requirePayment(
     if (body.length <= IDEMPOTENCY_MAX_BODY) {
       const t = Date.now();
       await store
-        .put({ key_hash: keyHash, payment_hash: paymentHash, route: quote.routeKey, status: 200, headers, body, created_at: t, expires_at: t + IDEMPOTENCY_TTL_MS })
+        .put({ key_hash: keyHash, payment_hash: paymentHash, route: quote.routeKey, status: 200, headers, body: redactPayerInBody(body), created_at: t, expires_at: t + IDEMPOTENCY_TTL_MS })
         .catch((e) => deps.log?.({ event: "idempotency_store_error", phase: "put", error: String(e).slice(0, 200) }));
     }
     return new Response(body, { status: resp.status, headers: resp.headers });
@@ -774,7 +793,7 @@ export async function requirePayment(
     const err = await resp.clone().json().then((b: { error?: string }) => b?.error).catch(() => undefined);
     if (err === "invoice_already_used") {
       const again = await lookup();
-      if (again && again.payment_hash === paymentHash) return replay(again);
+      if (again && again.payment_hash === paymentHash && again.route === quote.routeKey) return replay(again);
     }
   }
   return resp;

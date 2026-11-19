@@ -41,7 +41,11 @@ describe("idempotent retries on paid routes", () => {
       // Same receipt, minus the payer address (never stored in the idempotency table: Vigil MED-1, 2026-11-19).
       const { payer: _p, ...withoutPayer } = decodeB64Json(receipt!);
       expect(decodeB64Json(again.headers.get("PAYMENT-RESPONSE")!)).toEqual(withoutPayer);
-      expect(await again.text()).toBe(firstBody);
+      // Same answer, minus payment.payer (stripped from stored and replayed bodies: Vigil re-check 2026-11-19).
+      const fb = JSON.parse(firstBody);
+      expect(fb.payment.payer).toBeTruthy();
+      delete fb.payment.payer;
+      expect(JSON.parse(await again.text())).toEqual(fb);
     }
     expect(fac.calls).toHaveLength(2); // never verified or settled again
   });
