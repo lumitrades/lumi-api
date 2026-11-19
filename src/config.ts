@@ -319,6 +319,8 @@ export interface Config {
   payerPurge: boolean;
   /** Max payer-retention writes per nightly tick (default 500). */
   payerPurgeMaxRows: number;
+  /** True when PAYER_HMAC_SECRET (or PREV) equals INVOICE_SECRET or a FLEET_GUARD_* secret. */
+  payerHmacSecretReused: boolean;
 }
 
 export type EvmNetwork = "eip155:8453" | "eip155:84532";
@@ -674,6 +676,13 @@ export function loadConfig(env: Env): Config {
     payerPurgeMaxRows: (() => {
       const n = env.PAYER_PURGE_MAX_ROWS == null || String(env.PAYER_PURGE_MAX_ROWS).trim() === "" ? NaN : Number(env.PAYER_PURGE_MAX_ROWS);
       return Number.isInteger(n) && n >= 1 && n <= 10_000 ? n : 500;
+    })(),
+    payerHmacSecretReused: (() => {
+      const same = (a?: string, b?: string) => !!(a && b && a.trim().length >= 32 && a.trim() === b.trim());
+      const p = (env.PAYER_HMAC_SECRET || "").trim();
+      const prev = (env.PAYER_HMAC_SECRET_PREV || "").trim();
+      const others = [env.INVOICE_SECRET, invoiceSecret, env.FLEET_GUARD_HMAC_SECRET, env.FLEET_GUARD_HMAC_SECRET_PREV, env.FLEET_GUARD_KEY_SECRET];
+      return others.some((o) => same(p, o) || same(prev, o));
     })(),
   };
 }

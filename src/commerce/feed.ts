@@ -119,9 +119,12 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
     if (!b) return bad("invalid_json");
     const p = await verifyProof(deps.cfg.invoiceSecret, "feed-key", b, now(), deps.fetch, deps.xrplRpc);
     if (!p.ok) return json(p.reason === "ledger_unavailable_retry" ? 503 : 403, { error: "wallet_proof_failed", reason: p.reason, challenge: `${base}/v1/feed/challenge?wallet=<address>` }, NO_STORE);
-    // Fail safe: do not bind a new (or rotate an existing) key by wallet when the HMAC secret is missing.
+    // Fail safe: do not bind a new (or rotate an existing) key by wallet when the HMAC secret is missing or reused.
     if (!payerHmacSecretOk(deps.cfg.payerHmacSecret)) {
       return json(503, { error: "payer_hmac_unconfigured", note: "Not charged." }, NO_STORE);
+    }
+    if (deps.cfg.payerHmacSecretReused) {
+      return json(503, { error: "payer_hmac_secret_reused", note: "Not charged." }, NO_STORE);
     }
     // One key per wallet; signing again rotates the secret (single-use nonce: the nonce is the rotation marker).
     const hmacs = await hmacPayerAll([deps.cfg.payerHmacSecret, deps.cfg.payerHmacSecretPrev], p.address);
@@ -319,6 +322,9 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
   }
 
   async function subscribe(request: Request, url: URL, plan: PlanId, base: string, ctx?: WaitUntil) {
+    if (deps.cfg.payerHmacSecretReused) {
+      return json(503, { error: "payer_hmac_secret_reused", note: "Not charged." }, NO_STORE);
+    }
     const kid = url.searchParams.get("key_id") ?? "";
     const paid = !!(request.headers.get(HEADER_PAYMENT_SIGNATURE) || request.headers.get(HEADER_X_PAYMENT));
     const k = KEY_ID_RE.test(kid) ? await store.keyById(kid) : null;

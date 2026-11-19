@@ -227,6 +227,17 @@ function secretsOf(opts: PayerRetentionOpts): string[] {
   return [opts.secret, opts.secretPrev].filter((s, i, a): s is string => payerHmacSecretOk(s) && a.indexOf(s) === i);
 }
 
+function hashBudget(opts: PayerRetentionOpts): { remaining: number } {
+  return { remaining: opts.maxRows ?? DEFAULT_PAYER_PURGE_MAX_ROWS };
+}
+
+/** Writes (backfill / re-hash) only when the current secret is valid and not reused as an invoice or fleet-guard key. */
+function mayWritePayerHmac(opts: PayerRetentionOpts): boolean {
+  if (!payerHmacSecretOk(opts.secret)) return false;
+  const others = opts.otherSecrets ?? [];
+  return !payerSecretReused(opts.secret, others) && !payerSecretReused(opts.secretPrev, others);
+}
+
 async function hashOpen(secret: string | undefined, addr: string | null | undefined): Promise<string | null> {
   if (!payerHmacSecretOk(secret) || !addr || !addr.trim()) return null;
   return hmacPayer(secret, addr);
@@ -501,13 +512,13 @@ function inventoryFromMatches(m: ReturnType<typeof memoryMatches>, retentionDays
 }
 
 export async function inventoryMemory(stores: PayerMemoryStores, wallet: string, opts: PayerRetentionOpts): Promise<PayerInventory> {
-  if (opts.secret) await backfillMemory(stores, opts.secret);
+  if (mayWritePayerHmac(opts)) await backfillMemory(stores, opts.secret, hashBudget(opts));
   const hmacs = await hmacPayerAll(secretsOf(opts), wallet);
   return inventoryFromMatches(memoryMatches(stores, hmacs, wallet), opts.retentionDays);
 }
 
 export async function eraseMemory(stores: PayerMemoryStores, wallet: string, opts: PayerRetentionOpts): Promise<EraseResult> {
-  if (opts.secret) await backfillMemory(stores, opts.secret);
+  if (mayWritePayerHmac(opts)) await backfillMemory(stores, opts.secret, hashBudget(opts));
   const hmacs = await hmacPayerAll(secretsOf(opts), wallet);
   const m = memoryMatches(stores, hmacs, wallet);
   const tables = copyCounts();
@@ -550,6 +561,24 @@ async function runCatch(db: D1Like, sql: string, ...args: unknown[]): Promise<nu
     if (/no such (table|column)/i.test(String(e))) return 0;
     throw e;
   }
+}
+
+async function pagedSelect<T extends { id: string | number }>(db: D1Like, idCol: string, columns: string, tableAndWhere: string): Promise<T[]> {
+  const out: T[] = [];
+  let after: string | number | null = null;
+  const page = PAYER_PURGE_PAGE_SIZE;
+  const andAfter = /\bWHERE\b/i.test(tableAndWhere) ? ` AND ${idCol} > ?1` : ` WHERE ${idCol} > ?1`;
+  while (true) {
+    const sql = after == null
+      ? `SELECT ${idCol} AS id, ${columns} FROM ${tableAndWhere} ORDER BY ${idCol} LIMIT ${page}`
+      : `SELECT ${idCol} AS id, ${columns} FROM ${tableAndWhere}${andAfter} ORDER BY ${idCol} LIMIT ${page}`;
+    const rows: T[] = after == null ? await allRows<T>(db, sql) : await allRows<T>(db, sql, after);
+    if (!rows.length) break;
+    out.push(...rows);
+    after = rows[rows.length - 1]!.id;
+    if (rows.length < page) break;
+  }
+  return out;
 }
 
 export async function backfillD1(db: D1Like, secret: string | undefined, budget?: { remaining: number }): Promise<{ backfilled: TableCounts; rotated: TableCounts; truncated: boolean }> {
@@ -636,19 +665,19 @@ async function retainMapD1(db: D1Like): Promise<Map<string, number>> {
     if (!id || typeof ts !== "number" || !Number.isFinite(ts) || ts <= 0) return;
     m.set(id, Math.max(m.get(id) ?? 0, ts));
   };
-  for (const r of await allRows<{ hmac: string | null; raw: string | null; ts: number }>(db, "SELECT payer_hmac AS hmac, payer AS raw, ts FROM sales")) {
+  for (const r of await pagedSelect<{ id: number; hmac: string | null; raw: string | null; ts: number }>(db, "id", "payer_hmac AS hmac, payer AS raw, ts", "sales")) {
     add(payerIdent(r.hmac, r.raw), r.ts);
   }
   const payByKey = new Map<string, { ts: number; id: string | null }[]>();
-  for (const r of await allRows<{ hmac: string | null; raw: string | null; ts: number; key_id: string }>(db, "SELECT payer_hmac AS hmac, payer AS raw, ts, key_id FROM feed_payments")) {
+  for (const r of await pagedSelect<{ id: string; hmac: string | null; raw: string | null; ts: number; key_id: string }>(db, "tx", "payer_hmac AS hmac, payer AS raw, ts, key_id", "feed_payments")) {
     const id = payerIdent(r.hmac, r.raw);
     add(id, r.ts);
     const list = payByKey.get(r.key_id) ?? [];
     list.push({ ts: r.ts, id });
     payByKey.set(r.key_id, list);
   }
-  for (const k of await allRows<{ hmac: string | null; raw: string | null; plan_ends_at: number | null; created_at: number; rotated_at: number | null; id: string }>(
-    db, "SELECT wallet_hmac AS hmac, COALESCE(wallet, wallet_lc) AS raw, plan_ends_at, created_at, rotated_at, id FROM feed_keys",
+  for (const k of await pagedSelect<{ id: string; hmac: string | null; raw: string | null; plan_ends_at: number | null; created_at: number; rotated_at: number | null }>(
+    db, "id", "wallet_hmac AS hmac, COALESCE(wallet, wallet_lc) AS raw, plan_ends_at, created_at, rotated_at", "feed_keys",
   )) {
     const id = payerIdent(k.hmac, k.raw);
     add(id, k.plan_ends_at ?? undefined);
@@ -659,15 +688,15 @@ async function retainMapD1(db: D1Like): Promise<Map<string, number>> {
       add(p.id, k.plan_ends_at ?? undefined);
     }
   }
-  for (const r of await allRows<{ hmac: string | null; raw: string | null; created_at: number; ends_at: number }>(db, "SELECT payer_hmac AS hmac, payer AS raw, created_at, ends_at FROM monitor_plans")) {
+  for (const r of await pagedSelect<{ id: string; hmac: string | null; raw: string | null; created_at: number; ends_at: number }>(db, "id", "payer_hmac AS hmac, payer AS raw, created_at, ends_at", "monitor_plans")) {
     const id = payerIdent(r.hmac, r.raw);
     add(id, r.created_at);
     add(id, r.ends_at);
   }
-  for (const r of await allRows<{ hmac: string | null; raw: string | null; created_at: number }>(db, "SELECT payer_hmac AS hmac, payer AS raw, created_at FROM monitor_pack_refusals")) {
+  for (const r of await pagedSelect<{ id: string; hmac: string | null; raw: string | null; created_at: number }>(db, "paid_tx", "payer_hmac AS hmac, payer AS raw, created_at", "monitor_pack_refusals")) {
     add(payerIdent(r.hmac, r.raw), r.created_at);
   }
-  for (const r of await allRows<{ hmac: string | null; raw: string | null; ts: number }>(db, "SELECT wallet_hmac AS hmac, wallet AS raw, ts FROM trial_uses")) {
+  for (const r of await pagedSelect<{ id: string; hmac: string | null; raw: string | null; ts: number }>(db, "nonce", "wallet_hmac AS hmac, wallet AS raw, ts", "trial_uses")) {
     add(payerIdent(r.hmac, r.raw), r.ts);
   }
   return m;
@@ -680,21 +709,21 @@ export async function purgeD1(db: D1Like, opts: PayerRetentionOpts): Promise<Pur
   const retain = await retainMapD1(db);
   const due = (id: string | null) => duePayer(retain, id, opts);
 
-  const collectDue = async (sql: string): Promise<Array<string | number>> => {
+  const collectDue = async (idCol: string, columns: string, tableAndWhere: string): Promise<Array<string | number>> => {
     const ids: Array<string | number> = [];
-    for (const r of await allRows<{ id: string | number; hmac: string | null; raw: string | null }>(db, sql)) {
+    for (const r of await pagedSelect<{ id: string | number; hmac: string | null; raw: string | null }>(db, idCol, columns, tableAndWhere)) {
       if (hmacFilled(r.hmac) && rawFilled(r.raw) && due(payerIdent(r.hmac, r.raw))) ids.push(r.id);
     }
     return ids;
   };
 
   const would = copyCounts();
-  const dueSales = await collectDue("SELECT id, payer_hmac AS hmac, payer AS raw FROM sales WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
-  const dueKeys = await collectDue("SELECT id, wallet_hmac AS hmac, COALESCE(wallet, wallet_lc) AS raw FROM feed_keys WHERE ((wallet IS NOT NULL AND TRIM(wallet) != '') OR (wallet_lc IS NOT NULL AND TRIM(wallet_lc) != '')) AND wallet_hmac IS NOT NULL AND TRIM(wallet_hmac) != ''");
-  const duePays = await collectDue("SELECT tx AS id, payer_hmac AS hmac, payer AS raw FROM feed_payments WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
-  const duePlans = await collectDue("SELECT id, payer_hmac AS hmac, payer AS raw FROM monitor_plans WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
-  const dueRefusals = await collectDue("SELECT paid_tx AS id, payer_hmac AS hmac, payer AS raw FROM monitor_pack_refusals WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
-  const dueTrials = await collectDue("SELECT nonce AS id, wallet_hmac AS hmac, wallet AS raw FROM trial_uses WHERE wallet IS NOT NULL AND TRIM(wallet) != '' AND wallet_hmac IS NOT NULL AND TRIM(wallet_hmac) != ''");
+  const dueSales = await collectDue("id", "payer_hmac AS hmac, payer AS raw", "sales WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
+  const dueKeys = await collectDue("id", "wallet_hmac AS hmac, COALESCE(wallet, wallet_lc) AS raw", "feed_keys WHERE ((wallet IS NOT NULL AND TRIM(wallet) != '') OR (wallet_lc IS NOT NULL AND TRIM(wallet_lc) != '')) AND wallet_hmac IS NOT NULL AND TRIM(wallet_hmac) != ''");
+  const duePays = await collectDue("tx", "payer_hmac AS hmac, payer AS raw", "feed_payments WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
+  const duePlans = await collectDue("id", "payer_hmac AS hmac, payer AS raw", "monitor_plans WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
+  const dueRefusals = await collectDue("paid_tx", "payer_hmac AS hmac, payer AS raw", "monitor_pack_refusals WHERE payer IS NOT NULL AND TRIM(payer) != '' AND payer_hmac IS NOT NULL AND TRIM(payer_hmac) != ''");
+  const dueTrials = await collectDue("nonce", "wallet_hmac AS hmac, wallet AS raw", "trial_uses WHERE wallet IS NOT NULL AND TRIM(wallet) != '' AND wallet_hmac IS NOT NULL AND TRIM(wallet_hmac) != ''");
   would.sales = dueSales.length;
   would.feed_keys = dueKeys.length;
   would.feed_payments = duePays.length;
@@ -753,7 +782,7 @@ function inList(n: number, offset = 1): string {
 }
 
 export async function inventoryD1(db: D1Like, wallet: string, opts: PayerRetentionOpts): Promise<PayerInventory> {
-  if (opts.secret) await backfillD1(db, opts.secret);
+  if (mayWritePayerHmac(opts)) await backfillD1(db, opts.secret, hashBudget(opts));
   const hmacs = await hmacPayerAll(secretsOf(opts), wallet);
   const lc = normalizePayer(wallet);
   const records: PayerRecord[] = [];
@@ -819,7 +848,7 @@ export async function inventoryD1(db: D1Like, wallet: string, opts: PayerRetenti
 }
 
 export async function eraseD1(db: D1Like, wallet: string, opts: PayerRetentionOpts): Promise<EraseResult> {
-  if (opts.secret) await backfillD1(db, opts.secret);
+  if (mayWritePayerHmac(opts)) await backfillD1(db, opts.secret, hashBudget(opts));
   const hmacs = await hmacPayerAll(secretsOf(opts), wallet);
   const lc = normalizePayer(wallet);
   const args = [...hmacs, lc];

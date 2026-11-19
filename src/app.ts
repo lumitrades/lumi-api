@@ -1752,6 +1752,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
         retentionDays: config.payerRetentionDays,
         now: now(),
         wallet,
+        maxRows: config.payerPurgeMaxRows,
+        otherSecrets: [env.INVOICE_SECRET, config.invoiceSecret, env.FLEET_GUARD_HMAC_SECRET, env.FLEET_GUARD_HMAC_SECRET_PREV, env.FLEET_GUARD_KEY_SECRET],
       };
       const erase = path === "/v1/owner/payer-data/delete";
       if (erase) {

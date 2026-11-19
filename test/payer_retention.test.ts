@@ -433,6 +433,33 @@ describe("Vigil B1 / PAYER_PURGE / rotation / batch / secrets", () => {
     expect(onlyHmac[0].payerHmac).toBe(h);
     expect(onlyHmac[0].tx).toBe("0xb");
   });
+
+  it("owner inventory/erase backfill is budgeted and skips a reused secret", async () => {
+    const sales = new MemorySalesStore();
+    await sales.insert(sale(WALLET, NOW - 3 * DAY, "INV1"));
+    await sales.insert(sale(OTHER, NOW - 3 * DAY, "INV2"));
+    const mem = () => memoryStoresFrom(sales, new MemoryCommerceStore(), new MemoryTrialStore());
+    const r1 = await inventoryPayer({ memory: mem(), wallet: WALLET, secret: SECRET, retentionDays: 90, now: NOW, maxRows: 1 });
+    expect(r1.matched).toBe(true);
+    expect(sales.rows.filter((x) => x.payerHmac).length).toBe(1);
+    // A reused secret must not write HMACs, but raw lookup still works.
+    const sales2 = new MemorySalesStore();
+    await sales2.insert(sale(WALLET, NOW - 3 * DAY, "REUSEINV"));
+    const inv = await inventoryPayer({
+      memory: memoryStoresFrom(sales2, new MemoryCommerceStore(), new MemoryTrialStore()),
+      wallet: WALLET, secret: SECRET, retentionDays: 90, now: NOW, otherSecrets: [SECRET],
+    });
+    expect(inv.matched).toBe(true);
+    expect(sales2.rows[0].payerHmac).toBeFalsy();
+    expect(sales2.rows[0].payer).toBe(WALLET);
+    const erased = await erasePayer({
+      memory: memoryStoresFrom(sales2, new MemoryCommerceStore(), new MemoryTrialStore()),
+      wallet: WALLET, secret: SECRET, retentionDays: 90, now: NOW, otherSecrets: [SECRET],
+    });
+    expect(erased.raw_nulled).toBe(1);
+    expect(sales2.rows[0].payer).toBeNull();
+    expect(sales2.rows[0].payerHmac).toBeFalsy();
+  });
 });
 
 

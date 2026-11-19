@@ -188,6 +188,21 @@ describe("trust data feed", () => {
     expect(b.note).toMatch(/Not charged/);
   });
 
+  it("refuses feed-key signup and subscribe with 503 when PAYER_HMAC_SECRET is reused", async () => {
+    const reused = "test-payer-hmac-secret-32bytes-min";
+    const s = setup({ PAYER_HMAC_SECRET: reused, INVOICE_SECRET: reused });
+    const ch = await (await s.req(`/v1/feed/challenge?wallet=${EVM.address}`)).json();
+    const signature = await EVM.signMessage({ message: ch.message });
+    const r = await s.post("/v1/feed/keys", { message: ch.message, signature });
+    expect(r.status).toBe(503);
+    const b = await r.json();
+    expect(b.error).toBe("payer_hmac_secret_reused");
+    expect(b.note).toMatch(/Not charged/);
+    const sub = await s.req("/v1/feed/subscribe/feed");
+    expect(sub.status).toBe(503);
+    expect((await sub.json()).error).toBe("payer_hmac_secret_reused");
+  });
+
   it("issues a free key with an EIP-191 signature, meters usage and enforces the quota", async () => {
     const s = setup();
     const ch = await (await s.req(`/v1/feed/challenge?wallet=${EVM.address}`)).json();
