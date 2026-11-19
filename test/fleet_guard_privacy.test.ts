@@ -11,7 +11,7 @@ import { loadConfig, type D1Like, type D1Statement } from "../src/config";
 import { MemorySalesStore } from "../src/sales";
 import { MemoryQuotaCounter } from "../src/free_quota";
 import { MemoryIdempotencyStore } from "../src/idempotency";
-import { createFleetGuard, D1FleetGuardStore, MemoryFleetGuardStore, FLEET_DISCLAIMER, FLEET_DISCLAIMER_SHORT, FLEET_USE_RESTRICTION, FLEET_SALES_ROUTES, type FleetGuardStore } from "../src/fleet_guard";
+import { createFleetGuard, D1FleetGuardStore, MemoryFleetGuardStore, FLEET_DISCLAIMER, FLEET_DISCLAIMER_SHORT, FLEET_USE_RESTRICTION, FLEET_SALES_ROUTES, FLEET_CHECK_RAILS_TEXT, FLEET_PACK_RAILS_TEXT, type FleetGuardStore } from "../src/fleet_guard";
 import { MemoryReplayGuard } from "../src/x402";
 import { DATA, FACILITATOR, PAY_TO, NOW, happyFacilitator, makeFetch, paymentHeaderFor, decodeB64Json } from "./helpers";
 
@@ -359,8 +359,8 @@ describe("Quill final: legal notes in the 402 body, not in the PAYMENT-REQUIRED 
     const s = setup({ env: FULL });
     // Header lengths measured on b4bfccf (before the body fields) with this exact config and clock.
     const baseline: Record<string, number> = {
-      "/v1/fleet/check?subject=a.io": 3592,
-      "/v1/fleet/check?subject=a.io,b.io,c.io": 3600,
+      "/v1/fleet/check?subject=a.io": 2988, // 2026-11-19: no Base accept (was 3592; the rails note is body-only)
+      "/v1/fleet/check?subject=a.io,b.io,c.io": 2996, // 2026-11-19: no Base accept (was 3600)
       "/v1/fleet/pack": 3448,
       "/v1/fleet/plan/monthly": 3504,
     };
@@ -427,3 +427,70 @@ describe("pricing text and the monthly plan", () => {
 });
 
 void FLEET_SALES_ROUTES;
+
+describe("2026-11-19: per-call check is not offered in Base USDC (below the facilitator minimum); the pack still is", () => {
+  const FULL = { EVM_PAY_TO: "0x5E617bac19912e6d212CB303ae84655E9E203532", EVM_NETWORK: "eip155:8453", EVM_FACILITATOR_URL: "https://evm-fac.test", EVM_CDP_ONLY_ROUTES: "none",
+    STELLAR_PAY_TO: "GCKTH26VNR4H4WLCXS5DX6563XRQQXWP5QKQWFD6CHOGTZJ2N5GKBU2L", STELLAR_NETWORK: "stellar:pubnet", STELLAR_FACILITATOR_URL: "https://st-fac.test", STELLAR_FACILITATOR_API_KEY: "test-key", PUBLIC_BASE_URL: "https://api.lumitrades.io" };
+  const nets = (pr: any) => pr.accepts.map((a: any) => a.network).sort();
+
+  it("check 402 (body and header) has XRPL + Stellar accepts only, a rails note, and no Base how_to_pay", async () => {
+    const s = setup({ env: FULL });
+    for (const p of ["/v1/fleet/check?subject=a.io", "/v1/fleet/check?subject=a.io,b.io", "/v1/fleet/check?subject=0x" + "1".repeat(40)]) {
+      const r = await s.get(p);
+      expect(r.status, p).toBe(402);
+      const b: any = await r.json();
+      const h = decodeB64Json(r.headers.get("PAYMENT-REQUIRED"));
+      for (const pr of [b, h]) {
+        expect(nets(pr), p).toEqual(["stellar:pubnet", "xrpl:1", "xrpl:1", "xrpl:1"]);
+        expect(pr.accepts.some((a: any) => String(a.network).startsWith("eip155:")), p).toBe(false);
+        expect(pr, p).not.toHaveProperty("how_to_pay");
+      }
+      expect(b.note, p).toBe(FLEET_CHECK_RAILS_TEXT); // body-only key; the header stays the x402 PaymentRequired
+      expect(h, p).not.toHaveProperty("note");
+      expect(new TextEncoder().encode(r.headers.get("PAYMENT-REQUIRED")!).length, p).toBeLessThan(4096);
+    }
+  });
+
+  it("pack 402 still offers Base USDC (500-unit floor does not apply: $4 = 4,000,000 units)", async () => {
+    const s = setup({ env: FULL });
+    const r = await s.get("/v1/fleet/pack");
+    expect(r.status).toBe(402);
+    const b: any = await r.json();
+    expect(nets(b)).toEqual(["eip155:8453", "stellar:pubnet", "xrpl:1", "xrpl:1", "xrpl:1"]);
+    expect(b.accepts.find((a: any) => a.network === "eip155:8453").amount).toBe("4000000");
+    expect(b).toHaveProperty("how_to_pay");
+  });
+
+  it("a Base USDC payment presented to the check is refused before any facilitator call and never served", async () => {
+    const s = setup({ env: FULL });
+    const pack: any = await (await s.get("/v1/fleet/pack")).json();
+    const evm = { ...pack.accepts.find((a: any) => a.network === "eip155:8453"), amount: "500" };
+    const r = await s.get("/v1/fleet/check?subject=a.io", { "PAYMENT-SIGNATURE": paymentHeaderFor(evm) });
+    expect(r.status).not.toBe(200);
+    expect(s.fac.calls.length).toBe(0);
+    const b: any = await r.json();
+    expect(b.kind).not.toBe("lumi_fleet_check");
+  });
+
+  it("XRPL per-call payment still works", async () => {
+    const s = setup({ env: FULL });
+    const { r, b } = await s.check("a.io");
+    expect(r.status).toBe(200);
+    expect(b.kind).toBe("lumi_fleet_check");
+  });
+
+  it("docs, methodology and /.well-known/x402 say per call is XRPL / Stellar and the pack is also on Base", async () => {
+    const s = setup({ env: FULL });
+    const d: any = await (await s.get("/v1/fleet")).json();
+    expect(d.check.rails).toEqual(["xrpl", "stellar"]);
+    expect(d.check.payment).toBe(FLEET_CHECK_RAILS_TEXT);
+    expect(d.pack.rails).toEqual(["base", "xrpl", "stellar"]);
+    expect(d.pack.payment).toBe(FLEET_PACK_RAILS_TEXT);
+    const m: any = await (await s.get("/v1/fleet/methodology")).json();
+    expect(m.payment).toContain("Base USDC is not offered per call");
+    const wk: any = await (await s.get("/.well-known/x402")).json();
+    const fr = wk.resources.find((x: any) => String(x.url ?? x.resource ?? "").includes("/v1/fleet/check"));
+    expect(fr.description).toMatch(/per call on XRPL or Stellar/);
+    expect(fr.description).toMatch(/also payable in Base USDC/);
+  });
+});

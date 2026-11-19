@@ -444,7 +444,7 @@ describe("flag parsing and PAYMENT-REQUIRED size", () => {
     expect((await s.get("/v1/fleet/plan/monthly")).status).toBe(404);
   });
 
-  it("all five accepts (Base USDC, XRP, RLUSD, USDC on XRPL, Stellar USDC) stay under 4,096 bytes in the worst case", async () => {
+  it("all accepts (pack: Base USDC, XRP, RLUSD, USDC on XRPL, Stellar USDC; check: the same minus Base) stay under 4,096 bytes in the worst case", async () => {
     const s = setup({ env: FULL });
     /** A valid domain of exactly `len` characters (labels of 59 characters at most) ending in "<tag>.io". */
     const domain = (len: number, tag: string) => {
@@ -476,7 +476,9 @@ describe("flag parsing and PAYMENT-REQUIRED size", () => {
       expect(r.status, p).toBe(402);
       const h = r.headers.get("PAYMENT-REQUIRED")!;
       const pr = decodeB64Json(h);
-      expect(pr.accepts.map((a: any) => a.network).sort()).toEqual(["eip155:8453", "stellar:pubnet", "xrpl:1", "xrpl:1", "xrpl:1"]);
+      // 2026-11-19: the per-call check has no Base USDC accept (below the facilitator minimum); pack/plan keep all five.
+      const want = p.startsWith("/v1/fleet/check") ? ["stellar:pubnet", "xrpl:1", "xrpl:1", "xrpl:1"] : ["eip155:8453", "stellar:pubnet", "xrpl:1", "xrpl:1", "xrpl:1"];
+      expect(pr.accepts.map((a: any) => a.network).sort(), p).toEqual(want);
       expect(new TextEncoder().encode(h).length, p).toBeLessThan(4096);
       expect(h.length, p).toBeLessThanOrEqual(PAYMENT_REQUIRED_HEADER_SOFT_LIMIT);
       worst = Math.max(worst, h.length);

@@ -7,7 +7,7 @@
  *
  *   GET  /v1/fleet                       free doc (prices, caps, endpoints, legal)
  *   GET  /v1/fleet/methodology           free: method, label rules, retention, disputes (the method_url)
- *   GET  /v1/fleet/check?subject=a[,b..] paid x402, 0.0005 USD per call (one subject = one call; max FLEET_GUARD.batchMax);
+ *   GET  /v1/fleet/check?subject=a[,b..] paid x402 on XRPL / Stellar only (not Base), 0.0005 USD per call (one subject = one call; max FLEET_GUARD.batchMax);
  *                                        or prepaid with X-Lumi-Fleet-Key (one credit per subject, decremented atomically)
  *   GET  /v1/fleet/check/free?subject=a  free, capped per hashed IP AND per hashed wallet header AND globally (fail-closed)
  *   GET  /v1/fleet/pack                  paid x402, $4 → key with 10,000 calls, lasts 365 days, no auto-renew
@@ -420,6 +420,10 @@ export const FLEET_USE_RESTRICTION =
 export const FLEET_DISPUTES = "To dispute or correct a label, or to ask Lumi to exclude an address that is yours, email hello@lumitrades.io with the address and network. Lumi can only find a hashed record if you give the address.";
 export const FLEET_PRICE_TEXT = "0.0005 USD per call (each subject checked is one call; a batch of n subjects costs n x 0.0005 USD).";
 export const FLEET_PACK_TEXT = "$4 pack of 10,000 calls, lasts 365 days, no auto-renew.";
+/** Per-call rails (2026-11-19): 0.0005 USD is below the Base USDC facilitator minimum (verify_failed:amount_too_low on the
+ *  live test), so the per-call check is offered on XRPL (XRP / RLUSD / USDC) and Stellar USDC only. Base USDC buys the pack. */
+export const FLEET_CHECK_RAILS_TEXT = "Per-call x402 payment: XRPL (XRP, RLUSD or USDC) or Stellar USDC. Base USDC is not offered per call (the amount is below the Base facilitator minimum); on Base, buy the $4 pack and send its key in X-Lumi-Fleet-Key.";
+export const FLEET_PACK_RAILS_TEXT = "Pack payment: Base USDC, XRPL (XRP, RLUSD or USDC) or Stellar USDC.";
 
 // ---------------------------------------------------------------- service
 
@@ -673,7 +677,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
     };
   }
 
-  function quoteFor(route: string, usd: string, resourceUrl: string, description: string, base: string): Quote {
+  function quoteFor(route: string, usd: string, resourceUrl: string, description: string, base: string, opts: { evm?: boolean; note?: string } = {}): Quote {
     const cfg = d.cfg;
     const rate = cfg.xrpRate?.usd ?? cfg.xrpUsdFallback;
     const atomic6 = String(Math.round(Number(usd) * 1e6));
@@ -684,13 +688,14 @@ export function createFleetGuard(d: FleetGuardDeps) {
       liveDrops: true,
       xrpUsd: rate,
       amountsIou: Object.fromEntries(cfg.ious.map((o) => [o.symbol, usd])),
-      amountEvm: cfg.evm ? atomic6 : undefined,
+      amountEvm: cfg.evm && opts.evm !== false ? atomic6 : undefined,
       amountStellar: cfg.stellar ? atomic7 : undefined,
       description,
       resourceUrl,
       bazaar: { info: { input: { type: "http", method: "GET" }, output: { type: "json" } } },
       service: { serviceName: "Lumi fleet guard", tags: ["x402", "trust", "fleet"] },
       legal: { disclaimer: FLEET_DISCLAIMER_SHORT, use_restriction: FLEET_USE_RESTRICTION, method_url: methodUrl(base) },
+      ...(opts.note ? { note: opts.note } : {}),
     };
   }
 
@@ -793,7 +798,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
     // The invoice binds this URL. It never echoes a subject (Quill 2026-11-19): always a keyed hash of the normalized query
     // (HMAC, so an address cannot be confirmed by hashing candidates), recomputed on the paid retry.
     const resourceUrl = `${base}/v1/fleet/check?n=${n}&qh=${(await hmacHex(secret(), `fg-qh:${FLEET_GUARD.version}|${parsed.canonical}`)).slice(0, 32)}`;
-    const quote = quoteFor(`fleet_check:n${n}`, usd, resourceUrl, `Lumi wallet pattern check: dated pattern-match label for ${n} identifier(s), ${FLEET_GUARD.priceUsd} USD per call, cache 1h.`, base);
+    const quote = quoteFor(`fleet_check:n${n}`, usd, resourceUrl, `Lumi wallet pattern check: dated pattern-match label for ${n} identifier(s), ${FLEET_GUARD.priceUsd} USD per call, cache 1h.`, base, { evm: false, note: FLEET_CHECK_RAILS_TEXT });
     if (!hasPayment(request)) {
       return paymentRequiredResponse(d.cfg, quote, "PAYMENT-SIGNATURE header is required", {
         pack: { url: `${base}/v1/fleet/pack`, usd: FLEET_GUARD.pack.usd, calls: FLEET_GUARD.pack.calls },
@@ -927,6 +932,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
       limits: "Pattern observation, not a finding of intent or wrongdoing. False and missed matches occur. Absence of a match is not a clearance.",
       price: FLEET_PRICE_TEXT,
       pack: keySecret() ? FLEET_PACK_TEXT : undefined,
+      payment: keySecret() ? `${FLEET_CHECK_RAILS_TEXT} ${FLEET_PACK_RAILS_TEXT}` : "Per-call x402 payment: XRPL (XRP, RLUSD or USDC) or Stellar USDC. Base USDC is not offered per call.",
       retention: {
         memberships_hmac: "90 days from the last load or reconfirmation, then deleted",
         settled_payments: "90 days (transaction hash, route, hashed payer, time), then deleted; transaction hashes are public on-chain, so this is pseudonymous, not anonymous",
@@ -945,9 +951,9 @@ export function createFleetGuard(d: FleetGuardDeps) {
       summary: "Wallet pattern check: a dated label saying whether a payer or seller identifier matches an automated payment-pattern cluster under Lumi's method. Cache the answer for an hour.",
       labels: [matchLabel("<date>", methodUrl(base)), LABEL_NO_MATCH, LABEL_INSUFFICIENT],
       price: FLEET_PRICE_TEXT,
-      check: { url: `${base}/v1/fleet/check?subject=<address, domain or URL>[,...]`, price_usd_per_call: FLEET_GUARD.priceUsd, batch_max: FLEET_GUARD.batchMax, cache_ttl_s: FLEET_GUARD.cacheTtlSec },
+      check: { url: `${base}/v1/fleet/check?subject=<address, domain or URL>[,...]`, price_usd_per_call: FLEET_GUARD.priceUsd, batch_max: FLEET_GUARD.batchMax, cache_ttl_s: FLEET_GUARD.cacheTtlSec, rails: ["xrpl", "stellar"], payment: FLEET_CHECK_RAILS_TEXT },
       free: { url: `${base}/v1/fleet/check/free?subject=<one subject>`, cap: `${FLEET_GUARD.free.perIpDay}/day per network and per wallet header, ${FLEET_GUARD.free.perIpMinute}/min` },
-      ...(keySecret() ? { pack: { url: `${base}/v1/fleet/pack`, usd: FLEET_GUARD.pack.usd, calls: FLEET_GUARD.pack.calls, valid_days: FLEET_GUARD.pack.days, auto_renew: false, text: FLEET_PACK_TEXT } } : {}),
+      ...(keySecret() ? { pack: { url: `${base}/v1/fleet/pack`, usd: FLEET_GUARD.pack.usd, calls: FLEET_GUARD.pack.calls, valid_days: FLEET_GUARD.pack.days, auto_renew: false, text: FLEET_PACK_TEXT, rails: ["base", "xrpl", "stellar"], payment: FLEET_PACK_RAILS_TEXT } } : {}),
       limits: {
         paid_per_network_per_min: FLEET_GUARD.paidPerMinute,
         prepaid_valid_key_per_min: FLEET_GUARD.keyPerMinute,
@@ -964,7 +970,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
     on: () => fleetGuardOn(d.env),
     discovery(base: string) {
       if (!fleetGuardOn(d.env)) return [];
-      return [{ name: "Wallet pattern check (fleet guard)", url: `${base}/v1/fleet/check?subject=api.example.com`, mimeType: "application/json", method: "GET", description: `Dated pattern-match label (automated cluster / no match / insufficient data) for a payer or seller identifier. ${FLEET_GUARD.priceUsd} USD per call, cache 1h${keySecret() ? `; ${FLEET_PACK_TEXT}` : ""}. Not OFAC/AML screening, not a consumer report.` }];
+      return [{ name: "Wallet pattern check (fleet guard)", url: `${base}/v1/fleet/check?subject=api.example.com`, mimeType: "application/json", method: "GET", description: `Dated pattern-match label (automated cluster / no match / insufficient data) for a payer or seller identifier. ${FLEET_GUARD.priceUsd} USD per call on XRPL or Stellar, cache 1h${keySecret() ? `; ${FLEET_PACK_TEXT} The pack is also payable in Base USDC.` : ""}. Not OFAC/AML screening, not a consumer report.` }];
     },
     methodology: (base: string) => methodology(base),
     async handle(request: Request, path: string, base: string, ctx?: { waitUntil(p: Promise<unknown>): void }): Promise<Response | null> {
