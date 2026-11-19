@@ -14,6 +14,7 @@ import { FEED_LICENSE } from "./policy";
 import { makeChallenge, verifyProof } from "./proof";
 import { NO_STORE, bad, bearer, monthKey, readJson, safeHttpsUrl, type CommerceDeps, type WaitUntil } from "./common";
 import type { FeedKey } from "./store";
+import { bindPayer, hmacPayerAll, payerHmacSecretOk } from "../payer_retention";
 
 const KEY_ID_RE = /^fk_[a-f0-9]{20}$/;
 export const FEED_POST_PATHS = ["/v1/feed/keys", "/v1/feed/lookup", "/v1/feed/webhook"];
@@ -105,8 +106,9 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
 
   async function newKey(wallet: string | null, network: string | null): Promise<{ key: FeedKey; secret: string }> {
     const secret = `lumi_fk_${randHex(24)}`;
+    const bound = await bindPayer(deps.cfg.payerHmacSecret, wallet);
     const key: FeedKey = {
-      id: `fk_${randHex(10)}`, key_hash: await sha256(secret), wallet, wallet_lc: wallet?.toLowerCase() ?? null, network, plan: "free", plan_ends_at: null, credits: 0,
+      id: `fk_${randHex(10)}`, key_hash: await sha256(secret), wallet: bound.payer, wallet_lc: bound.payer?.toLowerCase() ?? null, wallet_hmac: bound.payer_hmac, network, plan: "free", plan_ends_at: null, credits: 0,
       is_test: isTestWallet(wallet, deps.extraTestWallets), webhook_url: null, webhook_secret: null, webhook_cursor: 0, created_at: now(), rotated_at: null,
     };
     return { key, secret };
@@ -117,8 +119,13 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
     if (!b) return bad("invalid_json");
     const p = await verifyProof(deps.cfg.invoiceSecret, "feed-key", b, now(), deps.fetch, deps.xrplRpc);
     if (!p.ok) return json(p.reason === "ledger_unavailable_retry" ? 503 : 403, { error: "wallet_proof_failed", reason: p.reason, challenge: `${base}/v1/feed/challenge?wallet=<address>` }, NO_STORE);
+    // Fail safe: do not bind a new (or rotate an existing) key by wallet when the HMAC secret is missing.
+    if (!payerHmacSecretOk(deps.cfg.payerHmacSecret)) {
+      return json(503, { error: "payer_hmac_unconfigured", note: "Not charged." }, NO_STORE);
+    }
     // One key per wallet; signing again rotates the secret (single-use nonce: the nonce is the rotation marker).
-    const existing = await store.keyByWallet(p.address.toLowerCase());
+    const hmacs = await hmacPayerAll([deps.cfg.payerHmacSecret, deps.cfg.payerHmacSecretPrev], p.address);
+    const existing = await store.keyByWallet(p.address.toLowerCase(), hmacs);
     if (existing) {
       if (existing.rotated_at && existing.rotated_at > now() - 60_000) return json(429, { error: "rotated_recently" }, NO_STORE);
       const secret = `lumi_fk_${randHex(24)}`;
@@ -341,7 +348,8 @@ export function createFeed(deps: CommerceDeps, relationships: (payTos: string[],
         key = n.key;
         secret = n.secret;
       }
-      const ins = await store.addPayment({ tx: s.transaction || `unknown_${randHex(8)}`, key_id: key.id, product: plan, usd: Number(usd), is_test: test || key.is_test, network: s.network, asset: assetLabel(req), amount: String(req.amount), payer: s.payer ?? null, ts: t });
+      const paid = await bindPayer(deps.cfg.payerHmacSecret, s.payer ?? null);
+      const ins = await store.addPayment({ tx: s.transaction || `unknown_${randHex(8)}`, key_id: key.id, product: plan, usd: Number(usd), is_test: test || key.is_test, network: s.network, asset: assetLabel(req), amount: String(req.amount), payer: paid.payer, payer_hmac: paid.payer_hmac, ts: t });
       if (ins === "inserted") {
         if (plan === "feed_credits") await store.addCredits(key.id, FEED_LIMITS.creditsPerPurchase);
         else {

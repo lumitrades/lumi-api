@@ -9,3 +9,8 @@ PRIVATE_NAMES=
 EVM_NETWORK=eip155:84532
 EVM_PAY_TO=0xYourBaseSepoliaReceiverAddress
 EVM_FACILITATOR_URL=https://x402.org/facilitator
+# Customer wallet HMAC (>= 32 chars). Required for new feed-key binds. Never commit the real value.
+PAYER_HMAC_SECRET=
+# Optional previous secret during a rotation.
+# PAYER_HMAC_SECRET_PREV=
+# PAYER_RETENTION_DAYS=90

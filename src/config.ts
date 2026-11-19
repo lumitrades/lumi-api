@@ -169,6 +169,12 @@ export interface Env {
   TRAFFIC_LOG?: string;
   /** Optional key for the private traffic log's IP hash (falls back to INVOICE_SECRET). Secret. */
   TRAFFIC_SALT?: string;
+  /** HMAC-SHA256 key (>= 32 chars) for customer wallet matching after raw addresses are nulled. `wrangler secret put PAYER_HMAC_SECRET`. Missing or short = feed-key bind/signup returns 503 (not charged); sales still record. */
+  PAYER_HMAC_SECRET?: string;
+  /** Previous PAYER_HMAC_SECRET during a rotation (>= 32 chars). Lookups and owner access/deletion also match hashes made with it. Remove 90 days after rotating. */
+  PAYER_HMAC_SECRET_PREV?: string;
+  /** Days to keep a raw customer wallet after the later of the last payment or key/plan expiry. Default 90. Integer 1..3650. */
+  PAYER_RETENTION_DAYS?: string;
 }
 
 /** Minimal Cloudflare D1 surface used by the trust store. */
@@ -299,6 +305,12 @@ export interface Config {
   xrpUsdFallback: number;
   /** The rate behind the current pricesDrops when xrpPricing is live. */
   xrpRate?: { usd: number; source: string; as_of: string };
+  /** Set only when PAYER_HMAC_SECRET is present and at least 32 characters. */
+  payerHmacSecret?: string;
+  /** Previous payer HMAC secret during a rotation. */
+  payerHmacSecretPrev?: string;
+  /** Raw-wallet retention window in days (default 90). */
+  payerRetentionDays: number;
 }
 
 export type EvmNetwork = "eip155:8453" | "eip155:84532";
@@ -644,6 +656,12 @@ export function loadConfig(env: Env): Config {
     ) as Record<PaidRoute, string>,
     xrpPricing: (env.XRP_PRICING || "").trim().toLowerCase() === "live" ? "live" : "fixed",
     xrpUsdFallback: Number(env.XRP_USD_FALLBACK) > 0 ? Number(env.XRP_USD_FALLBACK) : 1.32,
+    payerHmacSecret: (() => { const s = (env.PAYER_HMAC_SECRET || "").trim(); return s.length >= 32 ? s : undefined; })(),
+    payerHmacSecretPrev: (() => { const s = (env.PAYER_HMAC_SECRET_PREV || "").trim(); return s.length >= 32 ? s : undefined; })(),
+    payerRetentionDays: (() => {
+      const n = env.PAYER_RETENTION_DAYS == null || String(env.PAYER_RETENTION_DAYS).trim() === "" ? NaN : Number(env.PAYER_RETENTION_DAYS);
+      return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : 90;
+    })(),
   };
 }
 

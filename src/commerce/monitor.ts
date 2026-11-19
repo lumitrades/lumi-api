@@ -17,6 +17,7 @@ export { COUNTING_TEXT } from "./counting";
 import type { BuyRow } from "../trust/catalog";
 import { NO_STORE, acceptAsset, acceptUsd, bad, bearer, parse402, readJson, safeEmail, safeHttpsUrl, type CommerceDeps, type WaitUntil } from "./common";
 import type { EndpointChain, Enrollment, FindingRow, MonitorEndpoint, PackJobRow, PlanRow, RunRow, UptimeRow } from "./store";
+import { bindPayer } from "../payer_retention";
 
 /** Company keys for the Founder offer: the payTo plus every registrable domain the enrolment uses. Enrolments sharing any key are one company. */
 export function founderCompanyKeys(x: Enrollment): Set<string> {
@@ -463,6 +464,7 @@ export function createMonitor(deps: CommerceDeps) {
     const quote = planQuote(deps.cfg, plan, e.id, usd, `${resourceUrl}?enrollment=${e.id}${qs}`, e.is_test, qty);
     return requirePayment(request, deps.cfg, deps.paywall(ctx), quote, async (s: Settlement, req: PaymentRequirements) => {
       const t = now();
+      const paid = await bindPayer(deps.cfg.payerHmacSecret, s.payer ?? null);
       const prev = (await store.plansFor(e.id)).filter((p) => p.plan === plan && p.ends_at > t);
       let start = plan === "audit" ? t : Math.max(t, ...prev.map((p) => p.ends_at));
       const tx = s.transaction || `unknown_${randHex(8)}`;
@@ -473,7 +475,7 @@ export function createMonitor(deps: CommerceDeps) {
         const budget = wp ? Math.round(wp.per_term_usd * MONITOR_LIMITS.budgetShare * 1e6) / 1e6 : Number(def.usd) * MONITOR_LIMITS.budgetShare;
         rows.push({
           id: `mpl_${randHex(10)}`, enrollment_id: e.id, plan, starts_at: start, ends_at: start + 30 * DAY_MS, paid_tx: k === 1 ? tx : `${tx}#${k}`,
-          paid_network: s.network, paid_asset: assetLabel(req), paid_amount: k === 1 ? String(req.amount) : "0", payer: s.payer ?? null, usd: Math.round(termUsd * 1e6) / 1e6,
+          paid_network: s.network, paid_asset: assetLabel(req), paid_amount: k === 1 ? String(req.amount) : "0", payer: paid.payer, payer_hmac: paid.payer_hmac, usd: Math.round(termUsd * 1e6) / 1e6,
           budget_usd: budget, spent_usd: 0, is_test: e.is_test, reminded: 0, created_at: t, ...(per ? { endpoints: qty.endpoints, unit_usd: Number(def.usd) } : {}),
         });
         start += 30 * DAY_MS;
@@ -1312,10 +1314,11 @@ export function createMonitor(deps: CommerceDeps) {
     const quote = planQuote(deps.cfg, plan, e.id, usd, `${base}${def.path}?enrollment=${e.id}`, false);
     return requirePayment(request, deps.cfg, deps.paywall(ctx), quote, async (s: Settlement, req: PaymentRequirements) => {
       const t = now();
+      const paid = await bindPayer(deps.cfg.payerHmacSecret, s.payer ?? null);
       const tx = s.transaction || `unknown_${randHex(8)}`;
       const row: PlanRow = {
         id: `mpl_${randHex(10)}`, enrollment_id: e.id, plan, starts_at: t, ends_at: t + k.expiryDays * DAY_MS, paid_tx: tx, paid_network: s.network, paid_asset: assetLabel(req),
-        paid_amount: String(req.amount), payer: s.payer ?? null, usd: Number(usd), budget_usd: Math.round(k.buys * PACK_LIMITS.maxBuyUsd * 1e6) / 1e6, spent_usd: 0,
+        paid_amount: String(req.amount), payer: paid.payer, payer_hmac: paid.payer_hmac, usd: Number(usd), budget_usd: Math.round(k.buys * PACK_LIMITS.maxBuyUsd * 1e6) / 1e6, spent_usd: 0,
         is_test: e.is_test, reminded: 0, created_at: t, credits: k.buys,
       };
       // Founder pack: the place and the purchase number are claimed atomically HERE, at settlement (the pre-payment check
@@ -1323,7 +1326,7 @@ export function createMonitor(deps: CommerceDeps) {
       if (k.founder && !e.is_test) {
         const c = await store.claimFounder({ keys: [...founderCompanyKeys(e)], enrollment_id: e.id, plan_id: row.id, paid_tx: tx, t, seats: k.founder.seats, maxPurchases: k.founder.maxPurchases });
         if (!c.ok && c.reason !== "duplicate_payment") {
-          await store.addPackRefusal({ paid_tx: tx, enrollment_id: e.id, plan, reason: c.reason, paid_network: s.network, paid_asset: assetLabel(req), paid_amount: String(req.amount), payer: s.payer ?? null, usd: Number(usd), is_test: e.is_test, created_at: t })
+          await store.addPackRefusal({ paid_tx: tx, enrollment_id: e.id, plan, reason: c.reason, paid_network: s.network, paid_asset: assetLabel(req), paid_amount: String(req.amount), payer: paid.payer, payer_hmac: paid.payer_hmac, usd: Number(usd), is_test: e.is_test, created_at: t })
             .catch((err) => deps.log({ event: "monitor_pack_refusal_error", error: String(err) }));
           deps.log({ event: "monitor_pack_refused_at_settlement", plan, enrollment: e.id, reason: c.reason, tx });
           deps.saleOutcome?.(tx, { kind: "refused", reason: c.reason });

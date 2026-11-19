@@ -11,7 +11,7 @@ const EVM_PAY_TO = "0x5E617bac19912e6d212CB303ae84655E9E203532";
 const EVM_FAC = "https://evm-facilitator.test";
 const HOOK = "https://hooks.example.test/sales";
 const ENV = {
-  XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", OWNER_MCP_KEY: KEY,
+  XRPL_NETWORK: "xrpl:1", PAY_TO, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", PAYER_HMAC_SECRET: "test-payer-hmac-secret-32bytes-min", OWNER_MCP_KEY: KEY,
   EVM_PAY_TO, EVM_NETWORK: "eip155:84532", EVM_FACILITATOR_URL: EVM_FAC, EVM_CDP_ONLY_ROUTES: "none",
 };
 const BASE = "http://lumi.test";
@@ -111,6 +111,11 @@ describe("sales ledger", () => {
     expect(hooks).toHaveLength(1);
     expect(hooks[0].text).toMatch(/^Lumi sale: verdict paid 0\.01 USDC on Base \(~\$0\.01\) tx 0x/);
     expect(hooks[0].sale.route).toBe("verdict");
+    expect(hooks[0].sale.payer).toBeUndefined();
+    expect(hooks[0].sale.payerHmac).toBeUndefined();
+    expect(salesStore.rows[0].payer).toBeTruthy();
+    expect(JSON.stringify(hooks[0])).not.toContain(salesStore.rows[0].payer);
+    expect(JSON.stringify(hooks[0])).not.toContain(salesStore.rows[0].payerHmac);
 
     // Lumi's own buyer wallet: recorded as test, no alert.
     const ownKeyAccount = buyer(); // stands in for an own wallet via SALES_TEST_WALLETS

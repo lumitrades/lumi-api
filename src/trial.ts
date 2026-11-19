@@ -243,13 +243,14 @@ export async function xrplTrialAccount(
 
 // ---------------------------------------------------------------- storage
 
-export interface TrialUse { nonce: string; wallet: string; ip_hash: string | null; day: string; route: string; ts: number }
+export interface TrialUse { nonce: string; wallet: string; wallet_hmac?: string | null; ip_hash: string | null; day: string; route: string; ts: number }
 export type ClaimResult = { ok: true; used: number } | { ok: false; reason: "nonce_used" | "wallet_trial_used_up" | "ip_daily_cap" | "global_daily_cap" };
 
 export interface TrialStore {
   /** Atomically record one trial use if every cap allows it. */
   claim(u: TrialUse): Promise<ClaimResult>;
-  usedByWallet(wallet: string): Promise<number>;
+  /** Count uses for this wallet; pass HMACs so the lifetime cap still holds after the raw wallet is nulled. */
+  usedByWallet(wallet: string, hmacs?: string[]): Promise<number>;
 }
 
 const L = TRIAL_LIMITS;
@@ -258,46 +259,82 @@ export class MemoryTrialStore implements TrialStore {
   rows: TrialUse[] = [];
   async claim(u: TrialUse): Promise<ClaimResult> {
     if (this.rows.some((r) => r.nonce === u.nonce)) return { ok: false, reason: "nonce_used" };
-    const w = this.rows.filter((r) => r.wallet === u.wallet).length;
+    const w = await this.usedByWallet(u.wallet, u.wallet_hmac ? [u.wallet_hmac] : []);
     if (w >= L.perWallet) return { ok: false, reason: "wallet_trial_used_up" };
     if (u.ip_hash && this.rows.filter((r) => r.ip_hash === u.ip_hash && r.day === u.day).length >= L.perIpDay) return { ok: false, reason: "ip_daily_cap" };
     if (this.rows.filter((r) => r.day === u.day).length >= L.globalDay) return { ok: false, reason: "global_daily_cap" };
     this.rows.push(u);
     return { ok: true, used: w + 1 };
   }
-  async usedByWallet(wallet: string) {
-    return this.rows.filter((r) => r.wallet === wallet).length;
+  async usedByWallet(wallet: string, hmacs?: string[]) {
+    const hset = new Set((hmacs ?? []).filter(Boolean));
+    return this.rows.filter((r) => (r.wallet && r.wallet === wallet) || (r.wallet_hmac && hset.has(r.wallet_hmac))).length;
   }
 }
 
 export class D1TrialStore implements TrialStore {
   constructor(private db: D1Like) {}
   async claim(u: TrialUse): Promise<ClaimResult> {
-    const r = (await this.db
-      .prepare(
-        "INSERT OR IGNORE INTO trial_uses (nonce, wallet, ip_hash, day, route, ts) SELECT ?,?,?,?,?,? WHERE " +
-          "(SELECT COUNT(*) FROM trial_uses WHERE wallet = ?) < ? AND " +
-          "(? IS NULL OR (SELECT COUNT(*) FROM trial_uses WHERE ip_hash = ? AND day = ?) < ?) AND " +
-          "(SELECT COUNT(*) FROM trial_uses WHERE day = ?) < ?",
-      )
-      .bind(u.nonce, u.wallet, u.ip_hash, u.day, u.route, u.ts, u.wallet, L.perWallet, u.ip_hash, u.ip_hash, u.day, L.perIpDay, u.day, L.globalDay)
-      .run()) as { meta?: { changes?: number } };
-    if ((r?.meta?.changes ?? 0) === 1) return { ok: true, used: await this.usedByWallet(u.wallet) };
+    const hmac = u.wallet_hmac ?? null;
+    const walletMatch = "(wallet = ? OR (? IS NOT NULL AND wallet_hmac = ?))";
+    let r: { meta?: { changes?: number } };
+    try {
+      r = (await this.db
+        .prepare(
+          "INSERT OR IGNORE INTO trial_uses (nonce, wallet, wallet_hmac, ip_hash, day, route, ts) SELECT ?,?,?,?,?,?,? WHERE " +
+            `(SELECT COUNT(*) FROM trial_uses WHERE ${walletMatch}) < ? AND ` +
+            "(? IS NULL OR (SELECT COUNT(*) FROM trial_uses WHERE ip_hash = ? AND day = ?) < ?) AND " +
+            "(SELECT COUNT(*) FROM trial_uses WHERE day = ?) < ?",
+        )
+        .bind(u.nonce, u.wallet, hmac, u.ip_hash, u.day, u.route, u.ts, u.wallet, hmac, hmac, L.perWallet, u.ip_hash, u.ip_hash, u.day, L.perIpDay, u.day, L.globalDay)
+        .run()) as { meta?: { changes?: number } };
+    } catch (e) {
+      if (!/no (such )?column|has no column named wallet_hmac/i.test(String(e))) throw e;
+      r = (await this.db
+        .prepare(
+          "INSERT OR IGNORE INTO trial_uses (nonce, wallet, ip_hash, day, route, ts) SELECT ?,?,?,?,?,? WHERE " +
+            "(SELECT COUNT(*) FROM trial_uses WHERE wallet = ?) < ? AND " +
+            "(? IS NULL OR (SELECT COUNT(*) FROM trial_uses WHERE ip_hash = ? AND day = ?) < ?) AND " +
+            "(SELECT COUNT(*) FROM trial_uses WHERE day = ?) < ?",
+        )
+        .bind(u.nonce, u.wallet, u.ip_hash, u.day, u.route, u.ts, u.wallet, L.perWallet, u.ip_hash, u.ip_hash, u.day, L.perIpDay, u.day, L.globalDay)
+        .run()) as { meta?: { changes?: number } };
+    }
+    if ((r?.meta?.changes ?? 0) === 1) return { ok: true, used: await this.usedByWallet(u.wallet, hmac ? [hmac] : []) };
     const row = await this.db
       .prepare(
-        "SELECT (SELECT COUNT(*) FROM trial_uses WHERE nonce = ?) AS n, (SELECT COUNT(*) FROM trial_uses WHERE wallet = ?) AS w, " +
+        "SELECT (SELECT COUNT(*) FROM trial_uses WHERE nonce = ?) AS n, (SELECT COUNT(*) FROM trial_uses WHERE wallet = ? OR (? IS NOT NULL AND wallet_hmac = ?)) AS w, " +
           "(SELECT COUNT(*) FROM trial_uses WHERE ip_hash = ? AND day = ?) AS i",
       )
-      .bind(u.nonce, u.wallet, u.ip_hash, u.day)
-      .first<{ n: number; w: number; i: number }>();
+      .bind(u.nonce, u.wallet, hmac, hmac, u.ip_hash, u.day)
+      .first<{ n: number; w: number; i: number }>().catch(async (e) => {
+        if (!/no such column/i.test(String(e))) throw e;
+        return this.db
+          .prepare(
+            "SELECT (SELECT COUNT(*) FROM trial_uses WHERE nonce = ?) AS n, (SELECT COUNT(*) FROM trial_uses WHERE wallet = ?) AS w, " +
+              "(SELECT COUNT(*) FROM trial_uses WHERE ip_hash = ? AND day = ?) AS i",
+          )
+          .bind(u.nonce, u.wallet, u.ip_hash, u.day)
+          .first<{ n: number; w: number; i: number }>();
+      });
     if (Number(row?.n) > 0) return { ok: false, reason: "nonce_used" };
     if (Number(row?.w) >= L.perWallet) return { ok: false, reason: "wallet_trial_used_up" };
     if (Number(row?.i) >= L.perIpDay) return { ok: false, reason: "ip_daily_cap" };
     return { ok: false, reason: "global_daily_cap" };
   }
-  async usedByWallet(wallet: string) {
-    const row = await this.db.prepare("SELECT COUNT(*) AS c FROM trial_uses WHERE wallet = ?").bind(wallet).first<{ c: number }>();
-    return Number(row?.c ?? 0);
+  async usedByWallet(wallet: string, hmacs?: string[]) {
+    const hs = (hmacs ?? []).filter(Boolean);
+    try {
+      const sql = hs.length
+        ? `SELECT COUNT(*) AS c FROM trial_uses WHERE wallet = ?1 OR wallet_hmac IN (${hs.map((_, i) => `?${i + 2}`).join(",")})`
+        : "SELECT COUNT(*) AS c FROM trial_uses WHERE wallet = ?1";
+      const row = await this.db.prepare(sql).bind(wallet, ...hs).first<{ c: number }>();
+      return Number(row?.c ?? 0);
+    } catch (e) {
+      if (!/no such column/i.test(String(e))) throw e;
+      const row = await this.db.prepare("SELECT COUNT(*) AS c FROM trial_uses WHERE wallet = ?").bind(wallet).first<{ c: number }>();
+      return Number(row?.c ?? 0);
+    }
   }
 }
 

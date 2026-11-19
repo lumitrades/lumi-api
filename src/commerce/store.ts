@@ -11,7 +11,7 @@ export interface Enrollment {
 }
 export interface PlanRow {
   id: string; enrollment_id: string; plan: string; starts_at: number; ends_at: number; paid_tx: string; paid_network: string; paid_asset: string; paid_amount: string;
-  payer: string | null; usd: number | null; budget_usd: number; spent_usd: number; is_test: boolean; reminded: number; created_at: number;
+  payer: string | null; payer_hmac?: string | null; usd: number | null; budget_usd: number; spent_usd: number; is_test: boolean; reminded: number; created_at: number;
   /** Watch tiers: endpoints covered and per-endpoint list price (migration 0025). Null/absent on legacy rows. */
   endpoints?: number | null; unit_usd?: number | null;
   /** Test-buy packs: test-buys bought with this row (migration 0030). Null/absent on every other plan. */
@@ -31,7 +31,7 @@ export type FounderClaimResult =
 /** A settled pack payment that was refused at settlement (no credit was added). Kept for manual review; never refunded automatically. */
 export interface PackRefusalRow {
   paid_tx: string; enrollment_id: string; plan: string; reason: string; paid_network: string; paid_asset: string; paid_amount: string;
-  payer: string | null; usd: number | null; is_test: boolean; created_at: number;
+  payer: string | null; payer_hmac?: string | null; usd: number | null; is_test: boolean; created_at: number;
 }
 export interface TrialRow { id: string; enrollment_id: string; plan_id: string; domain_lc: string; pay_to_lc: string; nonce: string; proof: string; created_at: number }
 export interface UptimeRow {
@@ -48,11 +48,11 @@ export interface ReplyRow { id?: number; enrollment_id: string; finding_id: numb
 export interface ReportRow { plan_id: string; enrollment_id: string; report: string; report_hash: string; signature: string; public_key: string; signer: string; created_at: number }
 export interface CorrectionRow { id?: number; ts: number; subject: string; summary: string; ref: string | null }
 export interface FeedKey {
-  id: string; key_hash: string; wallet: string | null; wallet_lc: string | null; network: string | null; plan: "free" | "feed" | "feed_pro"; plan_ends_at: number | null;
+  id: string; key_hash: string; wallet: string | null; wallet_lc: string | null; wallet_hmac?: string | null; network: string | null; plan: "free" | "feed" | "feed_pro"; plan_ends_at: number | null;
   credits: number; is_test: boolean; webhook_url: string | null; webhook_secret: string | null; webhook_cursor: number; created_at: number; rotated_at: number | null;
 }
 export interface UsageRow { key_id: string; month: string; lookups: number; requests: number; minute: number; minute_requests: number }
-export interface FeedPayment { tx: string; key_id: string; product: string; usd: number | null; is_test: boolean; network: string | null; asset: string | null; amount: string | null; payer: string | null; ts: number }
+export interface FeedPayment { tx: string; key_id: string; product: string; usd: number | null; is_test: boolean; network: string | null; asset: string | null; amount: string | null; payer: string | null; payer_hmac?: string | null; ts: number }
 export interface ChangeRow { id?: number; ts: number; resource: string; field: string; old: string | null; new: string | null }
 
 export interface CommerceStore {
@@ -100,7 +100,8 @@ export interface CommerceStore {
   addKey(k: FeedKey): Promise<void>;
   keyById(id: string): Promise<FeedKey | null>;
   keyByHash(h: string): Promise<FeedKey | null>;
-  keyByWallet(lc: string): Promise<FeedKey | null>;
+  /** Look up by HMAC (preferred) and, for unmigrated rows, by the lowercase raw wallet. */
+  keyByWallet(lc: string, hmacs?: string[]): Promise<FeedKey | null>;
   updateKey(id: string, patch: Partial<FeedKey>): Promise<void>;
   addCredits(id: string, n: number): Promise<void>;
   keys(limit: number): Promise<FeedKey[]>;
@@ -215,7 +216,11 @@ export class MemoryCommerceStore implements CommerceStore {
   async addKey(k: FeedKey) { this.fkeys.set(k.id, { ...k }); }
   async keyById(id: string) { const k = this.fkeys.get(id); return k ? { ...k } : null; }
   async keyByHash(h: string) { const k = [...this.fkeys.values()].find((x) => x.key_hash === h); return k ? { ...k } : null; }
-  async keyByWallet(lc: string) { const k = [...this.fkeys.values()].find((x) => x.wallet_lc === lc); return k ? { ...k } : null; }
+  async keyByWallet(lc: string, hmacs?: string[]) {
+    const hset = new Set((hmacs ?? []).filter(Boolean));
+    const k = [...this.fkeys.values()].find((x) => (x.wallet_hmac && hset.has(x.wallet_hmac)) || x.wallet_lc === lc);
+    return k ? { ...k } : null;
+  }
   async updateKey(id: string, patch: Partial<FeedKey>) { const k = this.fkeys.get(id); if (k) Object.assign(k, patch); }
   async addCredits(id: string, n: number) { const k = this.fkeys.get(id); if (k) k.credits = Math.max(0, k.credits + n); }
   async keys(limit: number) { return [...this.fkeys.values()].slice(0, limit); }
@@ -271,9 +276,9 @@ export class D1CommerceStore implements CommerceStore {
   async enrollments(limit: number) { return (await this.all<any>("SELECT * FROM monitor_enrollments ORDER BY created_at DESC LIMIT ?1", limit)).map(enrollFrom); }
   async addPlan(p: PlanRow) {
     const r = await this.run(
-      `INSERT OR IGNORE INTO monitor_plans (id, enrollment_id, plan, starts_at, ends_at, paid_tx, paid_network, paid_asset, paid_amount, payer, usd, budget_usd, spent_usd, is_test, reminded, created_at, endpoints, unit_usd${p.credits != null ? ", credits" : ""})
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18${p.credits != null ? ",?19" : ""})`,
-      p.id, p.enrollment_id, p.plan, p.starts_at, p.ends_at, p.paid_tx, p.paid_network, p.paid_asset, p.paid_amount, p.payer, p.usd, p.budget_usd, p.spent_usd, p.is_test ? 1 : 0, p.reminded, p.created_at, p.endpoints ?? null, p.unit_usd ?? null,
+      `INSERT OR IGNORE INTO monitor_plans (id, enrollment_id, plan, starts_at, ends_at, paid_tx, paid_network, paid_asset, paid_amount, payer, payer_hmac, usd, budget_usd, spent_usd, is_test, reminded, created_at, endpoints, unit_usd${p.credits != null ? ", credits" : ""})
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19${p.credits != null ? ",?20" : ""})`,
+      p.id, p.enrollment_id, p.plan, p.starts_at, p.ends_at, p.paid_tx, p.paid_network, p.paid_asset, p.paid_amount, p.payer, p.payer_hmac ?? null, p.usd, p.budget_usd, p.spent_usd, p.is_test ? 1 : 0, p.reminded, p.created_at, p.endpoints ?? null, p.unit_usd ?? null,
       ...(p.credits != null ? [p.credits] : []),
     );
     return (r?.meta?.changes ?? 1) > 0 ? ("inserted" as const) : ("duplicate" as const);
@@ -336,8 +341,8 @@ export class D1CommerceStore implements CommerceStore {
   }
   async addPackRefusal(r: PackRefusalRow) {
     await this.run(
-      "INSERT OR IGNORE INTO monitor_pack_refusals (paid_tx, enrollment_id, plan, reason, paid_network, paid_asset, paid_amount, payer, usd, is_test, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-      r.paid_tx, r.enrollment_id, r.plan, r.reason, r.paid_network, r.paid_asset, r.paid_amount, r.payer, r.usd, r.is_test ? 1 : 0, r.created_at,
+      "INSERT OR IGNORE INTO monitor_pack_refusals (paid_tx, enrollment_id, plan, reason, paid_network, paid_asset, paid_amount, payer, payer_hmac, usd, is_test, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+      r.paid_tx, r.enrollment_id, r.plan, r.reason, r.paid_network, r.paid_asset, r.paid_amount, r.payer, r.payer_hmac ?? null, r.usd, r.is_test ? 1 : 0, r.created_at,
     );
   }
   async packRefusals(limit: number) {
@@ -421,14 +426,23 @@ export class D1CommerceStore implements CommerceStore {
   }
   async addKey(k: FeedKey) {
     await this.run(
-      `INSERT INTO feed_keys (id, key_hash, wallet, wallet_lc, network, plan, plan_ends_at, credits, is_test, webhook_url, webhook_secret, webhook_cursor, created_at, rotated_at)
-       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)`,
-      k.id, k.key_hash, k.wallet, k.wallet_lc, k.network, k.plan, k.plan_ends_at, k.credits, k.is_test ? 1 : 0, k.webhook_url, k.webhook_secret, k.webhook_cursor, k.created_at, k.rotated_at,
+      `INSERT INTO feed_keys (id, key_hash, wallet, wallet_lc, wallet_hmac, network, plan, plan_ends_at, credits, is_test, webhook_url, webhook_secret, webhook_cursor, created_at, rotated_at)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)`,
+      k.id, k.key_hash, k.wallet, k.wallet_lc, k.wallet_hmac ?? null, k.network, k.plan, k.plan_ends_at, k.credits, k.is_test ? 1 : 0, k.webhook_url, k.webhook_secret, k.webhook_cursor, k.created_at, k.rotated_at,
     );
   }
   async keyById(id: string) { const r = await this.first<any>("SELECT * FROM feed_keys WHERE id = ?1", id); return r ? keyFrom(r) : null; }
   async keyByHash(h: string) { const r = await this.first<any>("SELECT * FROM feed_keys WHERE key_hash = ?1", h); return r ? keyFrom(r) : null; }
-  async keyByWallet(lc: string) { const r = await this.first<any>("SELECT * FROM feed_keys WHERE wallet_lc = ?1 ORDER BY created_at LIMIT 1", lc); return r ? keyFrom(r) : null; }
+  async keyByWallet(lc: string, hmacs?: string[]) {
+    const hs = (hmacs ?? []).filter(Boolean);
+    const r = hs.length
+      ? await this.first<any>(
+          `SELECT * FROM feed_keys WHERE wallet_hmac IN (${hs.map((_, i) => `?${i + 1}`).join(",")}) OR wallet_lc = ?${hs.length + 1} ORDER BY created_at LIMIT 1`,
+          ...hs, lc,
+        )
+      : await this.first<any>("SELECT * FROM feed_keys WHERE wallet_lc = ?1 ORDER BY created_at LIMIT 1", lc);
+    return r ? keyFrom(r) : null;
+  }
   async updateKey(id: string, patch: Partial<FeedKey>) {
     const cols = Object.keys(patch).filter((c) => /^[a-z_]+$/.test(c) && c !== "id");
     if (!cols.length) return;
@@ -439,8 +453,8 @@ export class D1CommerceStore implements CommerceStore {
   async keys(limit: number) { return (await this.all<any>("SELECT * FROM feed_keys ORDER BY created_at DESC LIMIT ?1", limit)).map(keyFrom); }
   async addPayment(p: FeedPayment) {
     const r = await this.run(
-      "INSERT OR IGNORE INTO feed_payments (tx, key_id, product, usd, is_test, network, asset, amount, payer, ts) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
-      p.tx, p.key_id, p.product, p.usd, p.is_test ? 1 : 0, p.network, p.asset, p.amount, p.payer, p.ts,
+      "INSERT OR IGNORE INTO feed_payments (tx, key_id, product, usd, is_test, network, asset, amount, payer, payer_hmac, ts) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+      p.tx, p.key_id, p.product, p.usd, p.is_test ? 1 : 0, p.network, p.asset, p.amount, p.payer, p.payer_hmac ?? null, p.ts,
     );
     return (r?.meta?.changes ?? 1) > 0 ? ("inserted" as const) : ("duplicate" as const);
   }

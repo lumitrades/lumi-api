@@ -15,7 +15,7 @@ const SELLER = deriveAddress(kp.publicKey);
 const EVM = privateKeyToAccount(("0x" + "11".repeat(32)) as `0x${string}`);
 
 function setup(extra: Record<string, string> = {}) {
-  const env = { XRPL_NETWORK: "xrpl:1", PAY_TO: SELLER, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", PUBLIC_BASE_URL: BASE, OWNER_MCP_KEY: OWNER, ...extra };
+  const env = { XRPL_NETWORK: "xrpl:1", PAY_TO: SELLER, FACILITATOR_URL: FACILITATOR, DATA_BASE_URL: DATA, INVOICE_SECRET: "s3cret", PAYER_HMAC_SECRET: "test-payer-hmac-secret-32bytes-min", PUBLIC_BASE_URL: BASE, OWNER_MCP_KEY: OWNER, ...extra };
   let t = NOW;
   const fac = happyFacilitator();
   const app = createApp(env as any, { fetch: makeFetch(fac), log: () => {}, now: () => t });
@@ -177,6 +177,17 @@ describe("seller monitoring (legacy Monitor terms, simulated as bought before th
 });
 
 describe("trust data feed", () => {
+  it("refuses a feed-key signup with 503 when PAYER_HMAC_SECRET is missing", async () => {
+    const s = setup({ PAYER_HMAC_SECRET: "" });
+    const ch = await (await s.req(`/v1/feed/challenge?wallet=${EVM.address}`)).json();
+    const signature = await EVM.signMessage({ message: ch.message });
+    const r = await s.post("/v1/feed/keys", { message: ch.message, signature });
+    expect(r.status).toBe(503);
+    const b = await r.json();
+    expect(b.error).toBe("payer_hmac_unconfigured");
+    expect(b.note).toMatch(/Not charged/);
+  });
+
   it("issues a free key with an EIP-191 signature, meters usage and enforces the quota", async () => {
     const s = setup();
     const ch = await (await s.req(`/v1/feed/challenge?wallet=${EVM.address}`)).json();

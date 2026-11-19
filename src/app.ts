@@ -76,6 +76,7 @@ import { liveProbe, liveAlertView, LIVE_ALERT_PREFIX, LIVE_CHECK_NOTE, type Live
 import { createActivity, activityPublic, activityOwnerView, activityFlags, qualifyOrganicPayers, D1ActivityStore, MemoryActivityStore, type ActivityStore } from "./trust/activity";
 import { CONTACT_EMAIL } from "./trust/index";
 import { D1SalesStore, MemorySalesStore, firstHighValueRefunds, salesSummary, sendSaleAlert, toRow, alertEnabled, insertWithRetry, DEFERRED_ALERT_ROUTES, DEFERRED_ALERT_WAIT_MS, REFUSED_ALERT_NOTE, type SalesStore, type AlertConfig, type SaleOutcome } from "./sales";
+import { bindPayer, erasePayer, hmacPayerAll, inventoryPayer, memoryStoresFrom, payerSecretsFromEnv, purgeCustomerPayers, submittedWallet } from "./payer_retention";
 
 export interface AppOptions {
   /** OFAC SDN address snapshot override (tests); default = bundled data/ofac_sdn_addresses.json (+ optional SANCTIONS_KV). */
@@ -215,7 +216,7 @@ export type Prepared =
 export interface App {
   fetch(request: Request, ctx?: WaitUntil): Promise<Response>;
   /** Cron entry: free, unpaid 402-quote probes of the trust allowlist + the x402 catalog slice. */
-  scheduled(): Promise<{ probes: unknown; catalog: unknown; commerce?: unknown }>;
+  scheduled(): Promise<{ probes: unknown; catalog: unknown; commerce?: unknown; payer_retention?: unknown }>;
   /** One-minute cron: refresh the most overdue market-data feed (per-coin signal recompute retired 2026-10-25). */
   liveRefresh(): Promise<unknown>;
   live: LiveStore;
@@ -340,11 +341,14 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     ...deps,
     onSale: async (sale) => {
       const row = toRow(sale, now(), extraTestWallets);
+      const bound = await bindPayer(config.payerHmacSecret, row.payer);
+      row.payerHmac = bound.payer_hmac;
       // Lets the request log tag this request's paid call as Lumi's own test (ctx is per request).
       if (ctx) paidByCtx.set(ctx, row.isTest);
       const inserted = await insertWithRetry(sales, row).catch((e) => {
-        // Both attempts failed: log the whole row (public addresses only, no IP) so it can be backfilled from Workers Logs.
-        deps.log?.({ event: "sale_record_error", tx: row.tx, error: String(e), row });
+        // Both attempts failed: log accounting fields only (never the raw payer) so the sale can be backfilled from the tx.
+        const { payer: _p, payerHmac: _h, ...safe } = row;
+        deps.log?.({ event: "sale_record_error", tx: row.tx, error: String(e), row: safe });
         return true;
       });
       if (inserted && alertEnabled(alertCfg) && DEFERRED_ALERT_ROUTES.has(row.route) && ctx) {
@@ -1728,6 +1732,40 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       }
       return json(400, { error: "invalid_action", allowed: ["approve", "reject", "appeal"] }, noStore);
     }
+    // Owner-only access / deletion of customer payer data, keyed by a submitted wallet (Authorization: Bearer <OWNER_MCP_KEY>).
+    // Prefer POST {wallet} so the address is not in the URL. GET ?wallet= is also accepted. Raw addresses are never returned.
+    if (path === "/v1/owner/payer-data" || path === "/v1/owner/payer-data/delete") {
+      const bearerTok = /^Bearer\s+(.+)$/i.exec(request.headers.get("Authorization") ?? "")?.[1]?.trim();
+      if (!bearerTok || !(await isOwnerKey(bearerTok, env.OWNER_MCP_KEY))) {
+        return json(401, { error: "owner_key_required", hint: "Authorization: Bearer <OWNER_MCP_KEY>" }, { "Cache-Control": "no-store", "WWW-Authenticate": "Bearer" });
+      }
+      const erase = path === "/v1/owner/payer-data/delete";
+      if (erase && request.method !== "POST") return json(405, { error: "method_not_allowed", hint: "POST {wallet}" }, { "Cache-Control": "no-store", Allow: "POST" });
+      if (!erase && request.method !== "GET" && request.method !== "POST") return json(405, { error: "method_not_allowed", hint: "GET ?wallet= or POST {wallet}" }, { "Cache-Control": "no-store", Allow: "GET, POST" });
+      let walletRaw: unknown = url.searchParams.get("wallet");
+      if (request.method === "POST") {
+        const b = await request.json().catch(() => null) as Record<string, unknown> | null;
+        if (b && "wallet" in b) walletRaw = b.wallet;
+      }
+      const wallet = submittedWallet(walletRaw);
+      if (!wallet) return json(400, { error: "wallet_required", hint: "Submit the wallet address in the JSON body as {wallet}, preferably not as a query string." }, { "Cache-Control": "no-store" });
+      const secrets = payerSecretsFromEnv(env);
+      const common = {
+        db: env.TRUST_DB,
+        memory: env.TRUST_DB ? null : memoryStoresFrom(sales, commerceStore, trials),
+        secret: secrets.current ?? config.payerHmacSecret,
+        secretPrev: secrets.prev ?? config.payerHmacSecretPrev,
+        retentionDays: config.payerRetentionDays,
+        now: now(),
+        wallet,
+      };
+      if (erase) {
+        const r = await erasePayer(common);
+        deps.log?.({ event: "payer_erasure", raw_nulled: r.raw_nulled, matched: r.matched, tables: r.tables });
+        return json(200, r, { "Cache-Control": "no-store" });
+      }
+      return json(200, await inventoryPayer(common), { "Cache-Control": "no-store" });
+    }
     if (request.method !== "GET" && request.method !== "HEAD") {
       return json(405, { error: "method_not_allowed" }, { Allow: "GET, HEAD, OPTIONS" });
     }
@@ -2102,7 +2140,8 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const v = await verifySiwx(config.invoiceSecret, payload, uri, now(), trialChains(config.evm?.network, config.network));
     if (!v.ok) return v;
     // One trial per wallet: Base and XRPL wallets share the same ledger and caps (wallet column: 0x lowercase or r-address).
-    if ((await trials.usedByWallet(v.wallet).catch(() => 0)) >= TRIAL_LIMITS.perWallet) return { ok: false, reason: "wallet_trial_used_up" };
+    const trialHmacs = await hmacPayerAll([config.payerHmacSecret, config.payerHmacSecretPrev], v.wallet);
+    if ((await trials.usedByWallet(v.wallet, trialHmacs).catch(() => 0)) >= TRIAL_LIMITS.perWallet) return { ok: false, reason: "wallet_trial_used_up" };
     if (v.chain === "xrpl") {
       const acct = await xrplTrialAccount(doFetch, xrplRpc, v.wallet, v.signingKeyAddress!);
       if (!acct.ok) return acct;
@@ -2114,7 +2153,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
     const ts = now();
     const day = new Date(ts).toISOString().slice(0, 10);
     const ipHash = await trialIpHash(request, env.TRAFFIC_SALT || config.invoiceSecret, day);
-    const c = await trials.claim({ nonce: v.nonce, wallet: v.wallet, ip_hash: ipHash, day, route, ts }).catch((e) => {
+    const c = await trials.claim({ nonce: v.nonce, wallet: v.wallet, wallet_hmac: trialHmacs[0] ?? null, ip_hash: ipHash, day, route, ts }).catch((e) => {
       deps.log?.({ event: "trial_store_error", error: String(e) });
       return { ok: false as const, reason: "trial_store_unavailable" };
     });
@@ -2162,7 +2201,7 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       return r;
     },
     async scheduled() {
-      // Contributor retention purge + check-outcomes nightly rollup: once a day on the 03:00 UTC tick.
+      // Contributor retention purge + check-outcomes nightly rollup + customer payer purge: once a day on the 03:00 UTC tick.
       // scheduled() only runs on the */30 cron (the per-minute cron goes to liveRefresh), so the old "03:07" gate never
       // matched; see isNightlyTick.
       const nightly = isNightlyTick(now());
@@ -2170,12 +2209,32 @@ export function createApp(env: Env, opts: AppOptions = {}): App {
       // Fleet-guard retention runs nightly whether or not the feature is on (data can outlive a switch-off). Before migration
       // 0034 is applied the tables do not exist: that error is expected and only logged.
       if (nightly) await fleetGuard.purge().catch((e) => deps.log?.({ event: "fleet_guard_purge_error", error: String(e).slice(0, 120) }));
-      const prune = Promise.all([trafficBuf.flush().catch(trafficErr), (nightly ? outcomes.nightly().then((r) => deps.log?.({ event: "check_outcomes_nightly", ...r, rolled: r.rolled.length, rerolled: r.rerolled.length, purged_days: r.purged_days.length })) : outcomes.flush()).catch(() => {}), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge]);
+      let payerRetention: unknown;
+      const payerPurge = nightly
+        ? purgeCustomerPayers({
+            db: env.TRUST_DB,
+            memory: env.TRUST_DB ? null : memoryStoresFrom(sales, commerceStore, trials),
+            secret: config.payerHmacSecret,
+            secretPrev: config.payerHmacSecretPrev,
+            retentionDays: config.payerRetentionDays,
+            now: now(),
+          }).then((r) => {
+            payerRetention = r;
+            deps.log?.({ event: "payer_retention_purge", ...r });
+            return r;
+          }).catch((e) => {
+            const err = { error: String(e).slice(0, 200) };
+            payerRetention = err;
+            deps.log?.({ event: "payer_retention_purge_error", ...err });
+          })
+        : Promise.resolve();
+      const prune = Promise.all([trafficBuf.flush().catch(trafficErr), (nightly ? outcomes.nightly().then((r) => deps.log?.({ event: "check_outcomes_nightly", ...r, rolled: r.rolled.length, rerolled: r.rerolled.length, purged_days: r.purged_days.length })) : outcomes.flush()).catch(() => {}), traffic.prune(now() - TRAFFIC_RETENTION_DAYS * 86_400_000).catch(() => {}), contribPurge, payerPurge]);
       const [probes, cat, , com] = await Promise.allSettled([trust.runProbes(), catalog.cron(), prune, commerce.cron(config.publicBaseUrl ?? "https://api.lumitrades.io")]);
       return {
         probes: probes.status === "fulfilled" ? probes.value : { error: String(probes.reason) },
         catalog: cat.status === "fulfilled" ? cat.value : { error: String(cat.reason) },
         commerce: com.status === "fulfilled" ? com.value : { error: String(com.reason) },
+        ...(payerRetention ? { payer_retention: payerRetention } : {}),
       };
     },
     queue: async (job: CatalogJob) => {

@@ -932,7 +932,6 @@ async function requirePaymentOnce(
     amountDrops: expected.asset === "XRP" ? quote.amountDrops : undefined,
     network: settlement.network,
     tx: settlement.transaction,
-    payer: settlement.payer,
   });
   await emitSale(deps, {
     route: quote.routeKey.split(":")[0],
@@ -1185,7 +1184,6 @@ async function requireEvmPayment(
     amount: expected.amount,
     network: settlement.network,
     tx: settlement.transaction,
-    payer: settlement.payer,
     facilitator: settleFac.name,
   });
   await emitSale(deps, {
@@ -1421,7 +1419,7 @@ async function requireStellarPayment(
     network: String(s.network || expected.network),
     payer: typeof s.payer === "string" ? s.payer : verifiedPayer,
   };
-  deps.log?.({ event: "x402_settled", route: quote.routeKey, asset: "USDC", amount: expected.amount, network: settlement.network, tx, payer: settlement.payer, facilitator: "openzeppelin" });
+  deps.log?.({ event: "x402_settled", route: quote.routeKey, asset: "USDC", amount: expected.amount, network: settlement.network, tx, facilitator: "openzeppelin" });
   await emitSale(deps, {
     route: quote.routeKey.split(":")[0],
     routeKey: quote.routeKey,

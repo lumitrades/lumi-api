@@ -36,6 +36,8 @@ export interface SaleRow extends Required<Omit<SaleEvent, "routeKey" | "usd" | "
   client: string | null;
   usd: number | null;
   payer: string | null;
+  /** HMAC-SHA256 of the payer under PAYER_HMAC_SECRET; kept after the raw payer is nulled. */
+  payerHmac?: string | null;
   facilitator: string | null;
   isTest: boolean;
 }
@@ -71,19 +73,43 @@ export class D1SalesStore implements SalesStore {
     try {
       res = (await this.db
         .prepare(
-          "INSERT OR IGNORE INTO sales (ts, route, route_key, rail, network, asset, amount, usd, payer, tx, facilitator, is_test, client) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          "INSERT OR IGNORE INTO sales (ts, route, route_key, rail, network, asset, amount, usd, payer, payer_hmac, tx, facilitator, is_test, client) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         )
-        .bind(r.ts, r.route, r.routeKey, r.rail, r.network, r.asset, r.amount, r.usd, r.payer, r.tx, r.facilitator, r.isTest ? 1 : 0, r.client)
+        .bind(r.ts, r.route, r.routeKey, r.rail, r.network, r.asset, r.amount, r.usd, r.payer, r.payerHmac ?? null, r.tx, r.facilitator, r.isTest ? 1 : 0, r.client)
         .run()) as { meta?: { changes?: number } } | undefined;
     } catch (e) {
-      // Migration 0023 (sales.client) not applied yet: record the sale without the client column rather than lose it.
-      if (!/no (such )?column|has no column named client/i.test(String(e))) throw e;
-      res = (await this.db
-        .prepare(
-          "INSERT OR IGNORE INTO sales (ts, route, route_key, rail, network, asset, amount, usd, payer, tx, facilitator, is_test) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-        )
-        .bind(r.ts, r.route, r.routeKey, r.rail, r.network, r.asset, r.amount, r.usd, r.payer, r.tx, r.facilitator, r.isTest ? 1 : 0)
-        .run()) as { meta?: { changes?: number } } | undefined;
+      const msg = String(e);
+      // Migration 0035 (payer_hmac) or 0023 (client) not applied yet: record the sale rather than lose it.
+      if (!/no (such )?column|has no column named (client|payer_hmac)/i.test(msg)) throw e;
+      const noHmac = /payer_hmac/i.test(msg);
+      const noClient = /\bclient\b/i.test(msg);
+      const withClientNoHmac = () =>
+        this.db
+          .prepare(
+            "INSERT OR IGNORE INTO sales (ts, route, route_key, rail, network, asset, amount, usd, payer, tx, facilitator, is_test, client) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          )
+          .bind(r.ts, r.route, r.routeKey, r.rail, r.network, r.asset, r.amount, r.usd, r.payer, r.tx, r.facilitator, r.isTest ? 1 : 0, r.client)
+          .run() as Promise<{ meta?: { changes?: number } }>;
+      const withHmacNoClient = () =>
+        this.db
+          .prepare(
+            "INSERT OR IGNORE INTO sales (ts, route, route_key, rail, network, asset, amount, usd, payer, payer_hmac, tx, facilitator, is_test) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          )
+          .bind(r.ts, r.route, r.routeKey, r.rail, r.network, r.asset, r.amount, r.usd, r.payer, r.payerHmac ?? null, r.tx, r.facilitator, r.isTest ? 1 : 0)
+          .run() as Promise<{ meta?: { changes?: number } }>;
+      const bare = () =>
+        this.db
+          .prepare(
+            "INSERT OR IGNORE INTO sales (ts, route, route_key, rail, network, asset, amount, usd, payer, tx, facilitator, is_test) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+          )
+          .bind(r.ts, r.route, r.routeKey, r.rail, r.network, r.asset, r.amount, r.usd, r.payer, r.tx, r.facilitator, r.isTest ? 1 : 0)
+          .run() as Promise<{ meta?: { changes?: number } }>;
+      try {
+        res = await (noClient && !noHmac ? withHmacNoClient() : withClientNoHmac());
+      } catch (e2) {
+        if (!/no (such )?column|has no column named (client|payer_hmac)/i.test(String(e2))) throw e2;
+        res = await bare();
+      }
     }
     return (res?.meta?.changes ?? 1) > 0;
   }
@@ -102,6 +128,7 @@ export class D1SalesStore implements SalesStore {
       amount: String(x.amount),
       usd: x.usd == null ? null : Number(x.usd),
       payer: (x.payer as string) ?? null,
+      payerHmac: (x.payer_hmac as string) ?? null,
       tx: String(x.tx),
       facilitator: (x.facilitator as string) ?? null,
       client: (x.client as string) ?? null,
@@ -143,6 +170,7 @@ export function toRow(e: SaleEvent, now: number, extraTestWallets: string[] = []
     amount: e.amount,
     usd: typeof e.usd === "number" && Number.isFinite(e.usd) ? e.usd : null,
     payer: e.payer ?? null,
+    payerHmac: null,
     tx: e.tx,
     facilitator: e.facilitator ?? null,
     client: e.client ? e.client.slice(0, 40) : null,
@@ -160,7 +188,7 @@ function windowStats(rows: SaleRow[]) {
     byAsset[r.asset] = round((byAsset[r.asset] ?? 0) + Number(r.amount));
     usd += r.usd ?? 0;
   }
-  return { sales: rows.length, usd_list_total: round(usd, 4), by_asset: byAsset, payers: new Set(rows.map((r) => r.payer ?? "?")).size };
+  return { sales: rows.length, usd_list_total: round(usd, 4), by_asset: byAsset, payers: new Set(rows.map((r) => r.payerHmac ?? r.payer ?? "?")).size };
 }
 
 /** Owner summary: today (UTC), 7d, 30d and by-route, excluding Lumi's own test wallets. */
@@ -237,6 +265,13 @@ export function alertText(r: SaleRow, note?: string): string {
   return `${note ? `[${note}] ` : ""}Lumi sale: ${r.routeKey ?? r.route} paid ${r.amount} ${r.asset} on ${r.rail === "base" ? "Base" : r.rail === "stellar" ? "Stellar" : "XRPL"}${r.usd != null ? ` (~$${r.usd})` : ""}${r.isTest ? " [test wallet]" : ""} tx ${r.tx}`;
 }
 
+/** Webhook JSON: route, amount and tx only. Never includes payer, payerHmac or wallet. Email text already omits the wallet. */
+export function saleAlertPayload(r: SaleRow, note?: string): Record<string, unknown> {
+  const text = alertText(r, note);
+  const { payer: _payer, payerHmac: _hmac, ...rest } = r;
+  return { text, content: text, sale: { ...rest, ts: new Date(r.ts).toISOString() }, ...(note ? { note } : {}) };
+}
+
 export function alertEnabled(cfg: AlertConfig): boolean {
   return Boolean(cfg.webhookUrl || (cfg.email && cfg.emailBinding && cfg.emailFrom));
 }
@@ -252,7 +287,7 @@ export async function sendSaleAlert(cfg: AlertConfig, row: SaleRow, doFetch: typ
       const r = await doFetch(cfg.webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, content: text, sale: { ...row, ts: new Date(row.ts).toISOString() }, ...(note ? { note } : {}) }),
+        body: JSON.stringify(saleAlertPayload(row, note)),
       });
       if (r.ok) sent.push("webhook");
     } catch {
