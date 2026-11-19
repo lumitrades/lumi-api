@@ -316,3 +316,38 @@ describe("v1.0 docs: free trial documented everywhere", () => {
     expect(html).not.toMatch(/premium/i);
   });
 });
+
+describe("Base: no raw payer address in replay keys or mismatch logs (Vigil LOW-3, 2026-11-19)", () => {
+  function kv() {
+    const m = new Map<string, string>();
+    return { m, get: async (k: string) => m.get(k) ?? null, put: async (k: string, v: string) => { m.set(k, v); } };
+  }
+  it("stores the EIP-3009 nonce replay key as a hash and still refuses reuse of one authorization", async () => {
+    const store = kv();
+    const { get } = setup({ env: { USED_INVOICES: store } });
+    const { account, client } = buyer();
+    const first = await (await get("/v1/verdict?url=https://a.example/x")).json();
+    const { header, payload } = await signBase(first, client);
+    expect((await get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": header })).status).toBe(200);
+    const keys = [...store.m.keys()];
+    expect(keys.some((k) => /^inv:eip3009h:[0-9a-f]{64}$/.test(k))).toBe(true);
+    expect(keys.join("|").toLowerCase()).not.toContain(account.address.toLowerCase().slice(2));
+    const second = await (await get("/v1/verdict?url=https://a.example/x")).json();
+    const reused = { ...payload, accepted: second.accepts[0] };
+    const r = await get("/v1/verdict?url=https://a.example/x", { "PAYMENT-SIGNATURE": Buffer.from(JSON.stringify(reused)).toString("base64") });
+    expect(r.status).toBe(402);
+    expect((await r.json()).error).toBe("authorization_already_used");
+  });
+  it("logs a facilitator payer mismatch with the tx hash only", async () => {
+    const other = "0x" + "c".repeat(40);
+    const evm = evmFacilitator({ settle: (b) => jsonResponse(200, { success: true, transaction: TX, network: b.paymentRequirements.network, payer: other }) });
+    const { appFetch, logs } = setup({ evm }) as any;
+    const { account, client } = buyer();
+    const r = await wrapFetchWithPayment(appFetch, client)(BASE + "/v1/verdict?url=https://a.example/x");
+    expect(r.status).toBe(200);
+    const m = logs.find((l: any) => l.event === "x402_payer_mismatch");
+    expect(m).toMatchObject({ tx: TX });
+    expect(JSON.stringify(m).toLowerCase()).not.toContain(account.address.toLowerCase());
+    expect(JSON.stringify(m)).not.toContain(other);
+  });
+});

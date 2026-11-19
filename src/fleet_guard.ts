@@ -22,11 +22,21 @@
  *    a credit decrement), so a cached answer is never free.
  *  - Nothing expensive before payment: before verify we only parse/validate the query (bounded) and take a rate-limit count.
  *  - Retention: settle records FLEET_GUARD.retentionDays, spent/expired keys FLEET_GUARD.keyRetentionDays (purgeFleetGuard).
+ *
+ * Vigil re-review fixes (2026-11-19):
+ *  - MED-1: the shared idempotency table stores PAYMENT-RESPONSE without `payer` (x402.ts redactPaymentResponseHeader).
+ *  - MED-2: pack/plan keys = "fgk_" + HMAC(secret, plan + settled tx)[0..40]; the idempotency row keeps a placeholder and a
+ *    replay recomputes the key from the cached tx hash. Fleet replays are bound to sha256 of the full signed payment header.
+ *  - MED-3: prepaid checks and /v1/fleet/key: FLEET_GUARD.keyIpPerMinute per network before the key is hashed, and
+ *    FLEET_GUARD.keyFailPer10Min failed keys per network, then 429 with no further lookups.
+ *  - LOW-1 alert on a failed settle-record write (still served); LOW-2 underpay after settle is 409 + tx, never 402;
+ *    LOW-3 allow-listed paywall log fields; LOW-5 CF-Connecting-IP only, IPv6 per /64, else one "unknown" bucket.
  */
 import type { Config, D1Like, KVLike } from "./config";
 import { usdToDrops } from "./pricing";
+import type { IdempotencyRecord, IdempotencyStore } from "./idempotency";
 import {
-  encodeHeader, HEADER_PAYMENT_RESPONSE, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, json, paymentRequiredResponse,
+  b64decodeUtf8, encodeHeader, HEADER_PAYMENT_RESPONSE, HEADER_PAYMENT_SIGNATURE, HEADER_X_PAYMENT, json, paymentRequiredResponse,
   requirePayment, isEvmRequirement, isStellarRequirement, type PaymentRequirements, type PaywallDeps, type Quote, type Settlement,
 } from "./x402";
 import type { QuotaCounter, QuotaKey } from "./free_quota";
@@ -46,9 +56,15 @@ export const FLEET_GUARD = {
   /** Per hashed IP (x402 path) or per key (prepaid path), per minute. */
   paidPerMinute: 600,
   keyPerMinute: 1_200,
+  /** Per network (/64 for IPv6), per minute, across prepaid checks and /v1/fleet/key, taken before the key is hashed. */
+  keyIpPerMinute: 60,
+  /** Failed prepaid keys (bad format or unknown) per network per 10 minutes; over it, failures get 429. */
+  keyFailPer10Min: 10,
   retentionDays: 90,
   keyRetentionDays: 30,
   adminMaxMembers: 5_000,
+  /** Canonical queries up to this many characters are echoed in the invoice URL; longer ones bind a hash (header size). */
+  echoMaxChars: 200,
 } as const;
 
 const DAY = 86_400_000;
@@ -66,6 +82,47 @@ export async function hmacHex(secret: string, msg: string): Promise<string> {
 async function sha256Hex(s: string): Promise<string> {
   const d = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s)));
   return [...d].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Rate-limit bucket for a client address (Vigil LOW-5): CF-Connecting-IP only (never X-Forwarded-For, which the client
+ * controls); IPv6 grouped by /64 (one subscriber's allocation); IPv4-mapped IPv6 counted as the IPv4; else "unknown".
+ */
+export function ipBucket(raw: string | null | undefined): string {
+  const ip = (raw ?? "").trim().replace(/%.*$/, "").toLowerCase();
+  if (!ip) return "unknown";
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return ip.split(".").every((o) => Number(o) <= 255) ? ip : "unknown";
+  if (!ip.includes(":") || ip.length > 45) return "unknown";
+  let v6 = ip;
+  const v4 = v6.match(/^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (v4) {
+    if (/^(0{0,4}:){0,5}:?ffff:$|^::ffff:$/.test(v4[1])) return ipBucket(v4[2]);
+    const o = v4[2].split(".").map(Number);
+    if (o.some((x) => x > 255)) return "unknown";
+    v6 = v4[1] + ((o[0] << 8) | o[1]).toString(16) + ":" + ((o[2] << 8) | o[3]).toString(16);
+  }
+  const halves = v6.split("::");
+  if (halves.length > 2) return "unknown";
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 1 ? fill !== 0 : fill < 1) return "unknown";
+  const groups = [...head, ...Array(halves.length === 2 ? fill : 0).fill("0"), ...tail];
+  if (groups.length !== 8 || !groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return "unknown";
+  return "v6:" + groups.slice(0, 4).map((g) => g.padStart(4, "0")).join(":") + "::/64";
+}
+
+const ADDRESS_LIKE = /\b(?:r[1-9A-HJ-NP-Za-km-z]{24,34}|0x[0-9a-fA-F]{40}(?![0-9a-fA-F])|G[A-Z2-7]{55})\b/g;
+/** Log keys the fleet guard passes through from the shared paywall (Vigil LOW-3); everything else is dropped. */
+const LOG_ALLOW = new Set(["event", "route", "phase", "status", "reason", "error", "from", "tx", "network", "asset", "amount", "amountDrops", "facilitator", "svc"]);
+export function redactLogEvent(e: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(e)) {
+    if (k === "payer") { if (v) out.payer = "redacted"; continue; }
+    if (!LOG_ALLOW.has(k)) continue;
+    out[k] = typeof v === "string" && k !== "tx" ? v.replace(ADDRESS_LIKE, "[address]") : v;
+  }
+  return out;
 }
 
 export type SubjectKind = "xrpl" | "evm" | "stellar" | "solana" | "domain";
@@ -250,7 +307,8 @@ export interface Answer {
 // ---------------------------------------------------------------- service
 
 export interface FleetGuardEnv { FLEET_GUARD?: string; FLEET_GUARD_HMAC_SECRET?: string; FLEET_GUARD_MONTHLY?: string }
-export const fleetGuardOn = (env: FleetGuardEnv) => (env.FLEET_GUARD ?? "").trim().toLowerCase() === "on";
+/** Exactly "on" (config.ts contract); "On ", "ON", "true" stay off. */
+export const fleetGuardOn = (env: FleetGuardEnv) => env.FLEET_GUARD === "on";
 
 export interface FleetGuardDeps {
   cfg: Config;
@@ -272,10 +330,42 @@ export function createFleetGuard(d: FleetGuardDeps) {
   const alert = (kind: string, extra: Record<string, unknown> = {}) => log({ event: "fleet_guard_alert", kind, ...extra });
   const cache = d.cache ?? new AnswerCache();
   const secret = () => (d.env.FLEET_GUARD_HMAC_SECRET ?? "").trim();
-  const monthlyOn = () => (d.env.FLEET_GUARD_MONTHLY ?? "").trim().toLowerCase() === "on";
+  const monthlyOn = () => d.env.FLEET_GUARD_MONTHLY === "on";
   const subjHmac = (s: Subject) => hmacHex(secret(), `fg-subj:${s.kind === "domain" ? "d" : "a"}:${s.norm}`);
   const payerHmac = async (p?: string | null) => (p ? hmacHex(secret(), `fg-payer:${/^0x/i.test(p) ? p.toLowerCase() : p}`) : null);
-  const ipHmac = async (r: Request) => hmacHex(secret(), `fg-ip:${r.headers.get("CF-Connecting-IP") ?? r.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ?? "unknown"}`);
+  const ipHmac = async (r: Request) => hmacHex(secret(), `fg-ip:${ipBucket(r.headers.get("CF-Connecting-IP"))}`);
+  /**
+   * Pack/plan keys are derived, never stored (Vigil MED-2): HMAC(secret, plan + settled tx hash). Lumi keeps only the
+   * key's SHA-256; an idempotent retry recomputes the key from the tx hash in the cached PAYMENT-RESPONSE.
+   */
+  const deriveKey = async (planId: string, tx: string) => "fgk_" + (await hmacHex(secret(), `fg-key:${planId}:${tx}`)).slice(0, 40);
+  const KEY_SENTINEL = "derived_from_tx";
+  /** Wraps the shared idempotency store: fleet key responses are stored without the key and rehydrated on replay. */
+  function fleetIdempotency(base: IdempotencyStore): IdempotencyStore {
+    return {
+      async put(rec: IdempotencyRecord) {
+        let body = rec.body;
+        try {
+          const j = JSON.parse(body);
+          if (j && j.kind === "lumi_fleet_key") { j.key = KEY_SENTINEL; body = JSON.stringify(j); }
+        } catch { /* not JSON: stored as is unless it carries a key */ }
+        if (/fgk_[0-9a-f]{40}/.test(body)) return; // never store a plaintext key
+        await base.put({ ...rec, body });
+      },
+      async get(keyHash: string, t: number) {
+        const r = await base.get(keyHash, t);
+        if (!r) return null;
+        let j: any;
+        try { j = JSON.parse(r.body); } catch { return r; }
+        if (!j || j.kind !== "lumi_fleet_key") return r;
+        let tx = "";
+        try { tx = String(JSON.parse(b64decodeUtf8(r.headers[HEADER_PAYMENT_RESPONSE] ?? "")).transaction ?? ""); } catch { /* below */ }
+        if (!tx || typeof j.plan !== "string") { alert("idempotent_key_unrecoverable", { route: j.plan }); return null; }
+        j.key = await deriveKey(j.plan, tx);
+        return { ...r, body: JSON.stringify(j, null, 2) };
+      },
+    };
+  }
 
   /** Reuses the InvoiceGuard DO quota objects ("quota-0".."quota-15"); keys are fleet-guard prefixed hashes only. */
   const obj = (hex: string) => `quota-${parseInt(hex.slice(0, 2), 16) % 16}`;
@@ -290,6 +380,30 @@ export function createFleetGuard(d: FleetGuardDeps) {
   const minuteEnd = () => Math.floor(now() / 60_000) * 60_000 + 60_000;
   const dayEnd = () => Math.floor(now() / DAY) * DAY + DAY;
   const rateLimited = () => json(429, { error: "rate_limited", retry_after_s: 60, note: "Not charged." }, { ...NO_STORE, "Retry-After": "60" });
+
+  /**
+   * Prepaid-key gate (Vigil MED-3), before any key is hashed or looked up: FLEET_GUARD.keyIpPerMinute per network across
+   * prepaid checks and /v1/fleet/key, and no lookups at all for a network that is over its failed-key limit. Fail-open on
+   * a counter outage (paid keys keep working); the failed-key block is also remembered in this isolate.
+   */
+  const failBlocked = new Map<string, number>();
+  const tenMinEnd = () => Math.floor(now() / 600_000) * 600_000 + 600_000;
+  async function keyGate(request: Request): Promise<{ ip: string; blocked: boolean }> {
+    const ip = await ipHmac(request);
+    const until = failBlocked.get(ip);
+    if (until !== undefined) { if (until > now()) return { ip, blocked: true }; failBlocked.delete(ip); }
+    const ok = await take(obj(ip), [{ key: `fg-ki:${ip}`, max: FLEET_GUARD.keyIpPerMinute, resetAt: minuteEnd() }], false);
+    return { ip, blocked: !ok };
+  }
+  /** Counts one failed key for this network; returns a 429 once over the limit (and blocks further lookups). */
+  async function keyFailed(ip: string): Promise<Response | null> {
+    const ok = await take(obj(ip), [{ key: `fg-kf:${ip}`, max: FLEET_GUARD.keyFailPer10Min, resetAt: tenMinEnd() }], false);
+    if (ok) return null;
+    if (failBlocked.size > 10_000) failBlocked.clear();
+    failBlocked.set(ip, tenMinEnd());
+    log({ event: "fleet_guard_key_fail_limited" });
+    return json(429, { error: "too_many_invalid_keys", retry_after_s: 600, note: "Not charged." }, { ...NO_STORE, "Retry-After": "600" });
+  }
 
   async function answers(subjects: Subject[]): Promise<{ results: (Answer & { index: number })[]; cacheHits: number }> {
     const t = now();
@@ -353,7 +467,12 @@ export function createFleetGuard(d: FleetGuardDeps) {
     const a = String(paid.amount);
     if (isEvmRequirement(paid)) return BigInt(a) >= BigInt(Math.round(minUsd * 1e6));
     if (isStellarRequirement(paid)) return BigInt(a) >= BigInt(Math.round(minUsd * 1e7));
-    if (paid.asset === "XRP") return BigInt(a) >= BigInt(quote.amountDrops) && BigInt(a) > 0n;
+    // XRP: the paid drops were fixed by the (MAC-checked) invoice at quote time and the live rate can move before the
+    // payment lands, so the floor is the price at a rate 25% above today's (a fall of up to 20% is never "underpaid").
+    if (paid.asset === "XRP") {
+      const rate = d.cfg.xrpRate?.usd ?? d.cfg.xrpUsdFallback;
+      return BigInt(a) > 0n && BigInt(a) >= BigInt(usdToDrops(String(minUsd), rate * 1.25));
+    }
     return Number(a) + 1e-12 >= minUsd;
   }
 
@@ -362,9 +481,12 @@ export function createFleetGuard(d: FleetGuardDeps) {
     const base = d.paywall(ctx);
     return {
       ...base,
+      // Idempotent replays must present the exact same signed payment, and never get a stored plaintext key (MED-2).
+      idempotency: base.idempotency ? fleetIdempotency(base.idempotency) : undefined,
+      idempotencyBinding: "signed_header",
       log: (e) => {
-        const { payer, ...rest } = e as Record<string, unknown>;
-        base.log?.({ ...rest, ...(payer ? { payer: "redacted" } : {}) });
+        const rest = redactLogEvent(e as Record<string, unknown>);
+        base.log?.(rest);
         if (typeof rest.event === "string" && /settle_failed|settlement_unknown|invoice_already_used/.test(String(rest.error ?? rest.event))) alert("settle_problem", { route: rest.route });
       },
       onSale: base.onSale ? async (sale) => base.onSale!({ ...sale, payer: (await payerHmac(sale.payer)) ?? undefined }) : undefined,
@@ -376,9 +498,16 @@ export function createFleetGuard(d: FleetGuardDeps) {
       const ph = await payerHmac(s.payer);
       if (!amountOk(req, minUsd, quote)) {
         alert("underpaid", { route: quote.routeKey.split(":")[0], tx: s.transaction });
-        return json(402, { error: "amount_below_minimum", note: "Settled amount below the server price; contact Lumi with the tx hash." }, NO_STORE);
+        // 409, not 402: the payment settled, so a 402 would invite the client to pay again (Vigil LOW-2).
+        return json(409, { error: "amount_below_minimum", tx: s.transaction, note: "Settled amount below the server price. Do not pay again; contact Lumi with this tx hash." }, NO_STORE);
       }
-      const first = await d.store.recordSettle(s.transaction, quote.routeKey.split(":")[0], ph, now()).catch((e) => { log({ event: "fleet_guard_store_error", phase: "settle_record", error: String(e).slice(0, 120) }); return true; });
+      // Paid and settled: serve even if the settle record cannot be written (the payer must not lose the answer), but alert
+      // (Vigil LOW-1). Pack keys stay one-per-tx through mintKey; the replay guard already claimed the invoice.
+      const first = await d.store.recordSettle(s.transaction, quote.routeKey.split(":")[0], ph, now()).catch((e) => {
+        log({ event: "fleet_guard_store_error", phase: "settle_record", error: String(e).slice(0, 120) });
+        alert("settle_record_failed", { route: quote.routeKey.split(":")[0], tx: s.transaction });
+        return true;
+      });
       if (!first) {
         alert("replay", { route: quote.routeKey.split(":")[0], tx: s.transaction });
         return json(409, { error: "payment_already_used", detail: "This settled transaction already paid for a fleet-guard answer." }, NO_STORE);
@@ -411,11 +540,17 @@ export function createFleetGuard(d: FleetGuardDeps) {
 
     // Prepaid key: rate limit per key, then one atomic decrement of n credits, then serve.
     if (keyRaw && !hasPayment(request)) {
-      if (!/^fgk_[0-9a-f]{40}$/.test(keyRaw)) return json(401, { error: "invalid_fleet_key", note: "Not charged." }, NO_STORE);
+      const gate = await keyGate(request);
+      if (gate.blocked) return rateLimited();
+      if (!/^fgk_[0-9a-f]{40}$/.test(keyRaw)) return (await keyFailed(gate.ip)) ?? json(401, { error: "invalid_fleet_key", note: "Not charged." }, NO_STORE);
       const kh = await sha256Hex(keyRaw);
       if (!(await take(obj(kh), [{ key: `fg-k:${kh}`, max: FLEET_GUARD.keyPerMinute, resetAt: minuteEnd() }], false))) return rateLimited();
       const used = await d.store.useCredits(kh, n, now());
-      if (!used) return json(402, { error: "fleet_key_exhausted_or_expired", buy_pack: `${base}/v1/fleet/pack`, note: "Not charged." }, NO_STORE);
+      if (!used) {
+        // Unknown, expired or exhausted: an exhausted real key is not a guess, but the store cannot tell them apart cheaply.
+        if (!(await d.store.key(kh))) { const lim = await keyFailed(gate.ip); if (lim) return lim; }
+        return json(402, { error: "fleet_key_exhausted_or_expired", buy_pack: `${base}/v1/fleet/pack`, note: "Not charged." }, NO_STORE);
+      }
       return json(200, await body(parsed.subjects, { mode: "prepaid", plan: used.plan, credits_used: n, credits_remaining: used.remaining, key_expires_at: new Date(used.expires_at).toISOString() }), NO_STORE);
     }
 
@@ -425,7 +560,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
     const usd = checkPriceUsd(n);
     // The invoice binds this URL. Long batches bind a hash of the normalized query instead of echoing it, so the
     // PAYMENT-REQUIRED header stays a few KB whatever the batch (the paid retry recomputes the same value).
-    const resourceUrl = parsed.canonical.length <= 300
+    const resourceUrl = parsed.canonical.length <= FLEET_GUARD.echoMaxChars
       ? `${base}/v1/fleet/check?subject=${encodeURIComponent(parsed.canonical)}`
       : `${base}/v1/fleet/check?n=${n}&qh=${(await sha256Hex(`${FLEET_GUARD.version}|${parsed.canonical}`)).slice(0, 32)}`;
     const quote = quoteFor(`fleet_check:n${n}`, usd, resourceUrl, `Lumi fleet guard: is this payer or seller part of a known scripted payment fleet? ${n} subject(s), $${FLEET_GUARD.priceUsd} each, cache 1h.`);
@@ -462,7 +597,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
     const quote = quoteFor(plan.id, plan.usd, `${base}${path}`, `Lumi fleet guard ${plan.id === FLEET_GUARD.pack.id ? "pack" : "monthly plan"}: ${plan.calls.toLocaleString("en-US")} checks, valid ${plan.days} days.`);
     if (!hasPayment(request)) return paymentRequiredResponse(d.cfg, quote, "PAYMENT-SIGNATURE header is required", { idempotency: "Send Idempotency-Key with the paid retry; a repeat with the same key and payment returns the same key." });
     return paid(request, ctx, quote, Number(plan.usd), async (s, ph) => {
-      const raw = "fgk_" + [...crypto.getRandomValues(new Uint8Array(20))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      const raw = await deriveKey(plan.id, s.transaction);
       const t = now();
       const row: FleetKeyRow = { key_hash: await sha256Hex(raw), plan: plan.id, calls: plan.calls, used: 0, expires_at: t + plan.days * DAY, paid_tx: s.transaction, payer_hmac: ph, created_at: t };
       const minted = await d.store.mintKey(row);
@@ -472,7 +607,7 @@ export function createFleetGuard(d: FleetGuardDeps) {
       }
       return json(200, {
         kind: "lumi_fleet_key", plan: plan.id, key: raw, header: FLEET_KEY_HEADER, calls: plan.calls, expires_at: new Date(row.expires_at).toISOString(),
-        note: "Shown once. Lumi stores only its SHA-256. One credit per subject; send it as the header on /v1/fleet/check.",
+        note: "Lumi stores only its SHA-256. A retry with the same Idempotency-Key and the same signed payment returns it again within 24 hours. One credit per subject; send it as the header on /v1/fleet/check.",
       }, NO_STORE);
     });
   }
@@ -531,10 +666,12 @@ export function createFleetGuard(d: FleetGuardDeps) {
         return buy(request, base, FLEET_GUARD.monthly, path, ctx);
       }
       if (path === "/v1/fleet/key" && get) {
+        const gate = await keyGate(request);
+        if (gate.blocked) return rateLimited();
         const k = request.headers.get(FLEET_KEY_HEADER)?.trim() ?? "";
-        if (!/^fgk_[0-9a-f]{40}$/.test(k)) return json(401, { error: "invalid_fleet_key" }, NO_STORE);
+        if (!/^fgk_[0-9a-f]{40}$/.test(k)) return (await keyFailed(gate.ip)) ?? json(401, { error: "invalid_fleet_key" }, NO_STORE);
         const row = await d.store.key(await sha256Hex(k));
-        if (!row) return json(404, { error: "unknown_key" }, NO_STORE);
+        if (!row) return (await keyFailed(gate.ip)) ?? json(404, { error: "unknown_key" }, NO_STORE);
         return json(200, { plan: row.plan, calls: row.calls, used: row.used, remaining: Math.max(0, row.calls - row.used), expires_at: new Date(row.expires_at).toISOString() }, NO_STORE);
       }
       if (path === "/v1/fleet/admin/members" && request.method === "POST") return admin(request);

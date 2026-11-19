@@ -38,7 +38,9 @@ describe("idempotent retries on paid routes", () => {
       const again = await get("/v1/trust/check/high-value?url=https://a.example/x&amount=4", h);
       expect(again.status).toBe(200);
       expect(again.headers.get("Idempotent-Replayed")).toBe("true");
-      expect(again.headers.get("PAYMENT-RESPONSE")).toBe(receipt);
+      // Same receipt, minus the payer address (never stored in the idempotency table: Vigil MED-1, 2026-11-19).
+      const { payer: _p, ...withoutPayer } = decodeB64Json(receipt!);
+      expect(decodeB64Json(again.headers.get("PAYMENT-RESPONSE")!)).toEqual(withoutPayer);
       expect(await again.text()).toBe(firstBody);
     }
     expect(fac.calls).toHaveLength(2); // never verified or settled again

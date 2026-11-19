@@ -639,6 +639,27 @@ export interface PaywallDeps {
   onSale?: (sale: SaleEvent) => Promise<void> | void;
   /** Idempotent-retry cache (Idempotency-Key / payment-identifier). Absent = retries rely on the replay guard alone. */
   idempotency?: IdempotencyStore;
+  /**
+   * What a cached idempotent response is bound to. "invoice" (default, all live routes): sha256("invoice:"+invoiceId).
+   * "signed_header": sha256 of the full signed payment header, so a retry must present the exact same signed payment
+   * (fleet guard: a junk payment that only copies the invoiceId never gets a cached response).
+   */
+  idempotencyBinding?: "invoice" | "signed_header";
+}
+
+/**
+ * PAYMENT-RESPONSE without the payer address (Vigil MED-1, 2026-11-19). Used before an idempotent response is written to
+ * the shared idempotency table, so no raw payer address is stored. null = undecodable (the header is then not stored).
+ */
+export function redactPaymentResponseHeader(v: string): string | null {
+  try {
+    const j = JSON.parse(b64decodeUtf8(v));
+    if (!j || typeof j !== "object" || Array.isArray(j)) return null;
+    const { payer: _payer, ...rest } = j as Record<string, unknown>;
+    return encodeHeader(rest);
+  } catch {
+    return null;
+  }
 }
 
 /** USD list price of a quote (its stablecoin amount), so XRP and USDC sales can be summed on one scale. */
@@ -703,7 +724,9 @@ export async function requirePayment(
     (typeof payload?.accepted?.extra?.invoiceId === "string" && (payload.accepted.extra.invoiceId as string)) ||
     "";
   const keyHash = await sha256Hex(k.key);
-  const paymentHash = await sha256Hex(invoiceId ? `invoice:${invoiceId}` : `header:${header}`);
+  const paymentHash = await sha256Hex(
+    deps.idempotencyBinding === "signed_header" ? `signed:${header}` : invoiceId ? `invoice:${invoiceId}` : `header:${header}`,
+  );
   const replay = (r: { status: number; headers: Record<string, string>; body: string }) =>
     new Response(r.body, { status: r.status, headers: { ...CORS, ...r.headers, "Cache-Control": "no-store", "Idempotent-Replayed": "true" } });
   const lookup = async () => {
@@ -734,7 +757,9 @@ export async function requirePayment(
     const headers: Record<string, string> = {};
     for (const h of ["Content-Type", HEADER_PAYMENT_RESPONSE, "Access-Control-Expose-Headers"]) {
       const v = resp.headers.get(h);
-      if (v) headers[h] = v;
+      // Never store the raw payer address: PAYMENT-RESPONSE is saved without `payer` (the live response keeps it).
+      const keep = v && h === HEADER_PAYMENT_RESPONSE ? redactPaymentResponseHeader(v) : v;
+      if (keep) headers[h] = keep;
     }
     if (body.length <= IDEMPOTENCY_MAX_BODY) {
       const t = Date.now();
@@ -1009,8 +1034,13 @@ async function requireEvmPayment(
   if (BigInt(auth.validBefore) < BigInt(nowS + MIN_VALIDITY_SECONDS)) return paymentRequiredResponse(cfg, quote, "authorization_expired");
   if (BigInt(auth.validAfter) > BigInt(nowS + 5)) return paymentRequiredResponse(cfg, quote, "authorization_not_yet_valid");
 
-  const nonceKey = `eip3009:${expected.network}:${expected.asset.toLowerCase()}:${auth.from.toLowerCase()}:${auth.nonce.toLowerCase()}`;
-  if (await deps.replay.isUsed(nonceKey)) return paymentRequiredResponse(cfg, quote, "authorization_already_used");
+  // Replay key for the authorization nonce: a hash of (network, asset, from, nonce), so the stored key carries no raw payer
+  // address (Vigil LOW-3). The pre-2026-11-19 raw-address key is only looked up (never written) until its 7-day TTL ends.
+  const nonceTuple = `${expected.network}:${expected.asset.toLowerCase()}:${auth.from.toLowerCase()}:${auth.nonce.toLowerCase()}`;
+  const nonceKey = `eip3009h:${await sha256Hex(nonceTuple)}`;
+  if ((await deps.replay.isUsed(nonceKey)) || (await deps.replay.isUsed(`eip3009:${nonceTuple}`))) {
+    return paymentRequiredResponse(cfg, quote, "authorization_already_used");
+  }
 
   const cdpOnly = isCdpOnlyQuote(cfg, quote);
   const fac = evmFacilitators(cfg, payload, expected, quote, deps);
@@ -1120,7 +1150,8 @@ async function requireEvmPayment(
   };
   const facPayer = typeof settleJson.payer === "string" ? settleJson.payer : "";
   if (facPayer && facPayer.toLowerCase() !== auth.from.toLowerCase()) {
-    deps.log?.({ event: "x402_payer_mismatch", route: quote.routeKey, signed: auth.from, facilitator: facPayer, tx });
+    // No addresses in the log (Vigil LOW-3): the tx hash is enough to look both up on-chain.
+    deps.log?.({ event: "x402_payer_mismatch", route: quote.routeKey, tx });
   }
   deps.log?.({
     event: "x402_settled",
