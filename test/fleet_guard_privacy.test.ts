@@ -281,6 +281,58 @@ describe("Quill 8: HMAC rotation (current + previous secret)", () => {
   });
 });
 
+describe("Vigil final: PREV-only overrides are re-keyed under the current secret", () => {
+  it("an override survives removing PREV after one lookup", async () => {
+    const store = new MemoryFleetGuardStore();
+    const old = setup({ store });
+    await old.load();
+    expect((await old.admin("POST", "/v1/fleet/admin/override", { subject: FLEET_PAYER, label: "No match" })).status).toBe(200);
+    expect(store.overrideMap.size).toBe(1); // old-secret hash only
+    const rotated = setup({ store, env: { FLEET_GUARD_HMAC_SECRET: NEW_SECRET, FLEET_GUARD_HMAC_SECRET_PREV: SECRET } });
+    rotated.reset();
+    expect((await rotated.check(FLEET_PAYER)).b.results[0].label).toBe("No match");
+    expect(store.overrideMap.size).toBe(2); // re-keyed under the new secret
+    const noPrev = setup({ store, env: { FLEET_GUARD_HMAC_SECRET: NEW_SECRET } });
+    noPrev.reset();
+    expect((await noPrev.check(FLEET_PAYER)).b.results[0]).toMatchObject({ label: "No match", match: false });
+  });
+});
+
+describe("Vigil final: admin owner check comes before the configuration 503", () => {
+  it("non-owner gets 401 even when the HMAC secret is missing; owner gets 503", async () => {
+    const s = setup({ env: { FLEET_GUARD: "off", FLEET_GUARD_HMAC_SECRET: undefined } });
+    for (const [m, p] of [["POST", "/v1/fleet/admin/members"], ["DELETE", "/v1/fleet/admin/members"], ["POST", "/v1/fleet/admin/override"]]) {
+      const r = await s.admin(m, p, {}, false);
+      expect(r.status, `${m} ${p}`).toBe(401);
+      expect(await r.text()).not.toMatch(/not_configured/);
+      expect((await s.admin(m, p, {})).status, `${m} ${p}`).toBe(503);
+    }
+  });
+});
+
+describe("Vigil final: the recently-valid marker slides while a key is in use", () => {
+  it("a key used continuously past 10 minutes is not locked out by 11 junk keys from its bucket", async () => {
+    // Mint 1 minute into a 10-minute lockout window, so a lockout tripped at 9.5 min lasts until 19 min.
+    const start = Math.ceil(NOW / 600_000) * 600_000 + 60_000;
+    const clock = { t: start };
+    const s = setup({ clock });
+    const q: any = await (await s.get("/v1/fleet/pack")).json();
+    const key = ((await (await s.get("/v1/fleet/pack", { "PAYMENT-SIGNATURE": paymentHeaderFor(q.accepts[0]) })).json()) as any).key;
+    const ip = { "CF-Connecting-IP": "2001:db8:77:1::5" };
+    const use = async (label: string) => expect((await s.get(`/v1/fleet/check?subject=${CLEAN}`, { "X-Lumi-Fleet-Key": key, ...ip })).status, label).toBe(200);
+    for (let m = 0; m <= 9; m++) { clock.t = start + m * 60_000; await use(`minute ${m}`); }
+    clock.t = start + 9.5 * 60_000;
+    const junk: number[] = [];
+    for (let i = 0; i < 11; i++) junk.push((await s.get("/v1/fleet/key", { "X-Lumi-Fleet-Key": `junk-${i}`, ...ip })).status);
+    expect(junk.at(-1)).toBe(429); // the bucket is locked out until minute 19
+    // Past the 10 minutes since mint: still served, because each use extended the marker.
+    for (const m of [10.5, 12, 15, 18]) { clock.t = start + m * 60_000; await use(`minute ${m}`); }
+    expect((await s.get("/v1/fleet/key", { "X-Lumi-Fleet-Key": unknownKeyLike(), ...ip })).status).toBe(429);
+  });
+});
+
+const unknownKeyLike = () => "fgk_" + "e".repeat(40);
+
 describe("Vigil steering 1: owner admin works while FLEET_GUARD is off", () => {
   it("load, override and delete return 200 while public routes stay absent", async () => {
     const store = new MemoryFleetGuardStore();

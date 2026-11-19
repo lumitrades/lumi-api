@@ -565,8 +565,13 @@ export function createFleetGuard(d: FleetGuardDeps) {
   async function keyAccess(request: Request, keyRaw: string, badFormat: () => Response): Promise<KeyAccess> {
     const ip = await ipHmac(request);
     const kh = KEY_RE.test(keyRaw) ? await sha256Hex(keyRaw) : null;
-    const perKey = async (h: string): Promise<KeyAccess> =>
-      (await take(obj(h), [{ key: `fg-k:${h}`, max: FLEET_GUARD.keyPerMinute, resetAt: minuteEnd() }], false)) ? { ip, kh: h, known: true } : { deny: rateLimited() };
+    const perKey = async (h: string): Promise<KeyAccess> => {
+      if (!(await take(obj(h), [{ key: `fg-k:${h}`, max: FLEET_GUARD.keyPerMinute, resetAt: minuteEnd() }], false))) return { deny: rateLimited() };
+      // Sliding expiry: a key in continuous use stays "recently valid" in this isolate, so a lockout tripped on its
+      // network later never catches it.
+      validKeys.set(h, now() + 600_000);
+      return { ip, kh: h, known: true };
+    };
     if (kh && isolateValid(kh)) return perKey(kh);
     const until = failBlocked.get(ip);
     if (until !== undefined) { if (until > now()) return { deny: failLimited() }; failBlocked.delete(ip); }
@@ -595,6 +600,16 @@ export function createFleetGuard(d: FleetGuardDeps) {
     const t = now();
     const hs = await Promise.all(subjects.map(subjHmacs));
     const ov = await d.store.overrides([...new Set(hs.flat())]);
+    // An override found only under the previous secret's hash is re-keyed under the current hash (h[0], computed from the
+    // subject in hand), so it survives removing FLEET_GUARD_HMAC_SECRET_PREV.
+    for (const h of hs) {
+      const cur = ov.get(h[0]);
+      const prev = h[1] ? ov.get(h[1]) : undefined;
+      if (!cur && prev) {
+        ov.set(h[0], prev);
+        await d.store.setOverride(h[0], prev, t).catch((e) => log({ event: "fleet_guard_override_rekey_error", error: String(e).slice(0, 120) }));
+      }
+    }
     const out: (Answer | null)[] = hs.map((h, i) => {
       const o = h.map((x) => ov.get(x)).find(Boolean);
       return o ? { subject_kind: subjects[i].kind, status: o === LABEL_NO_MATCH ? "no_match" : "insufficient_data", role: null, cluster_id: null, observed_on: null } : null;
@@ -943,6 +958,8 @@ export function createFleetGuard(d: FleetGuardDeps) {
       if (!path.startsWith("/v1/fleet")) return null;
       // Owner admin works while the feature is off (deploy step 4 loads members before launch). Everything else: off = absent.
       if (path.startsWith("/v1/fleet/admin/")) {
+        // Owner check first: a non-owner learns nothing about configuration.
+        if (!(await d.isOwner(request))) return json(401, { error: "owner_only" }, NO_STORE);
         if (!secret() || secret().length < 32) return json(503, { error: "fleet_guard_not_configured" }, NO_STORE);
         return admin(request, path);
       }
