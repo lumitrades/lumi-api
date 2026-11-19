@@ -33,6 +33,8 @@ class SqliteD1 implements D1Like {
   constructor(migrations: string[]) { for (const m of migrations) this.db.exec(readFileSync(new URL(`../migrations/${m}`, import.meta.url), "utf8")); }
   prepare(sql: string): D1Statement { return this.stmt(sql, []); }
   private stmt(sql: string, args: unknown[]): D1Statement {
+    // Same limit as Cloudflare D1: at most 100 bound parameters per statement.
+    if (args.length > 100) throw new Error(`D1_ERROR: too many SQL variables (${args.length} > 100)`);
     const db = this.db;
     const a = args.map((v) => (v === undefined ? null : v)) as any[];
     return {
@@ -237,6 +239,23 @@ describe("deletions are never served stale from another isolate", () => {
     await B.admin("DELETE", "/v1/fleet/admin/members", { subjects: [FLEET_SELLER] });
     A.reset();
     expect((await A.check(FLEET_SELLER)).b.results[0].match).not.toBe(true);
+  });
+});
+
+describe("D1 parameter limit (live member load of 104 failed with 500 on 2026-11-19)", () => {
+  it("loads, looks up and deletes 150 members through the real-SQL store with D1's 100-parameter limit", async () => {
+    const store = new D1FleetGuardStore(new SqliteD1(["0034_fleet_guard.sql"]));
+    const s = setup({ store });
+    const subjects = Array.from({ length: 150 }, (_, i) => ({ value: `m${i}.fleet-test.example`, role: "payer" }));
+    const r = await s.load(subjects);
+    expect(r.status).toBe(200);
+    expect(((await r.json()) as any).members).toBe(150);
+    // a reload checks overrides for all 150 again (chunked)
+    expect(((await (await s.load(subjects)).json()) as any).members).toBe(150);
+    const { b } = await s.check(subjects.slice(0, 20).map((x) => x.value).join(","));
+    expect(b.results.every((x: any) => x.match === true)).toBe(true);
+    const d: any = await (await s.admin("DELETE", "/v1/fleet/admin/members", { subjects: subjects.map((x) => x.value) })).json();
+    expect(d.removed).toBe(150);
   });
 });
 

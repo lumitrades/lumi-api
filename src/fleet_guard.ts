@@ -285,22 +285,32 @@ export class MemoryFleetGuardStore implements FleetGuardStore {
 
 const changes = (r: unknown) => Number((r as { meta?: { changes?: number }; changes?: number })?.meta?.changes ?? (r as { changes?: number })?.changes ?? 0);
 
+/** D1: max 100 bound parameters per statement; IN (...) lists are chunked to this size. */
+const D1_IN_CHUNK = 50;
+
 export class D1FleetGuardStore implements FleetGuardStore {
   constructor(private db: D1Like) {}
   private ins = (n: number) => Array(n).fill("?").join(",");
   async members(hmacs: string[]) {
     const out = new Map<string, MemberHit>();
     if (!hmacs.length) return out;
-    const q = `SELECT m.subject_hmac, m.role, m.cluster_id, m.added_at FROM fleet_guard_members m JOIN fleet_guard_clusters c ON c.id = m.cluster_id WHERE m.subject_hmac IN (${this.ins(hmacs.length)})`;
-    const r = await this.db.prepare(q).bind(...hmacs).all<any>();
-    for (const x of r.results) out.set(x.subject_hmac, { role: x.role, cluster_id: x.cluster_id, observed_on: dayOf(Number(x.added_at)) });
+    // D1 allows at most 100 bound parameters per statement: query in chunks of D1_IN_CHUNK.
+    for (let i = 0; i < hmacs.length; i += D1_IN_CHUNK) {
+      const part = hmacs.slice(i, i + D1_IN_CHUNK);
+      const q = `SELECT m.subject_hmac, m.role, m.cluster_id, m.added_at FROM fleet_guard_members m JOIN fleet_guard_clusters c ON c.id = m.cluster_id WHERE m.subject_hmac IN (${this.ins(part.length)})`;
+      const r = await this.db.prepare(q).bind(...part).all<any>();
+      for (const x of r.results) out.set(x.subject_hmac, { role: x.role, cluster_id: x.cluster_id, observed_on: dayOf(Number(x.added_at)) });
+    }
     return out;
   }
   async overrides(hmacs: string[]) {
     const out = new Map<string, OverrideLabel>();
     if (!hmacs.length) return out;
-    const r = await this.db.prepare(`SELECT subject_hmac, label FROM fleet_guard_overrides WHERE subject_hmac IN (${this.ins(hmacs.length)})`).bind(...hmacs).all<any>();
-    for (const x of r.results) out.set(x.subject_hmac, x.label);
+    for (let i = 0; i < hmacs.length; i += D1_IN_CHUNK) {
+      const part = hmacs.slice(i, i + D1_IN_CHUNK);
+      const r = await this.db.prepare(`SELECT subject_hmac, label FROM fleet_guard_overrides WHERE subject_hmac IN (${this.ins(part.length)})`).bind(...part).all<any>();
+      for (const x of r.results) out.set(x.subject_hmac, x.label);
+    }
     return out;
   }
   async coveredKinds() {
@@ -322,8 +332,8 @@ export class D1FleetGuardStore implements FleetGuardStore {
   }
   async deleteMembers(hmacs: string[]) {
     let n = 0;
-    for (let i = 0; i < hmacs.length; i += 50) {
-      const part = hmacs.slice(i, i + 50);
+    for (let i = 0; i < hmacs.length; i += D1_IN_CHUNK) {
+      const part = hmacs.slice(i, i + D1_IN_CHUNK);
       n += changes(await this.db.prepare(`DELETE FROM fleet_guard_members WHERE subject_hmac IN (${this.ins(part.length)})`).bind(...part).run());
     }
     return n;

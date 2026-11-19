@@ -29,6 +29,8 @@ class SqliteD1 implements D1Like {
   constructor(migrations: string[]) { for (const m of migrations) this.db.exec(readFileSync(new URL(`../migrations/${m}`, import.meta.url), "utf8")); }
   prepare(sql: string): D1Statement { return this.stmt(sql, []); }
   private stmt(sql: string, args: unknown[]): D1Statement {
+    // Same limit as Cloudflare D1: at most 100 bound parameters per statement.
+    if (args.length > 100) throw new Error(`D1_ERROR: too many SQL variables (${args.length} > 100)`);
     const db = this.db;
     const a = args.map((v) => (v === undefined ? null : v)) as any[];
     return {
